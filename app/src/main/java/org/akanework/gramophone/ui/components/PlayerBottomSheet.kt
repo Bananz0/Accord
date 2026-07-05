@@ -439,6 +439,7 @@ class PlayerBottomSheet private constructor(
             myInsets.right,
             myInsets.bottom + bottomNavigationHeight
         )
+
         bottomSheetPreviewCoverFrame.setPadding(
             myInsets.left,
             bottomSheetPreviewCoverFrame.paddingTop,

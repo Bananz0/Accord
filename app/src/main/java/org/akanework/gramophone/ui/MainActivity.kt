@@ -53,6 +53,12 @@ import org.akanework.gramophone.logic.utils.MediaStoreUtils.updateLibraryWithInC
 import org.akanework.gramophone.ui.components.PlayerBottomSheet
 import org.akanework.gramophone.ui.fragments.BaseFragment
 
+// @author v3ndable: Personal Change immersive Mode
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+// ---
+
 /**
  * MainActivity:
  *   Core of gramophone, one and the only activity
@@ -107,6 +113,16 @@ class MainActivity : AppCompatActivity() {
         installSplashScreen().setKeepOnScreenCondition { !ready }
         enableEdgeToEdgeProperly()
         super.onCreate(savedInstanceState)
+
+        // @author v3ndable: Personal Change immersive Mode
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            hide(WindowInsetsCompat.Type.systemBars())
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+        // ---
+
+
         autoPlay = intent?.extras?.getBoolean(PLAYBACK_AUTO_START_FOR_FGS, false) == true
         intentSender =
             registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) {
@@ -148,6 +164,20 @@ class MainActivity : AppCompatActivity() {
         playerBottomSheet = findViewById(R.id.player_layout)
         bottomNavigationView = findViewById(R.id.bottom_nav)
         container = findViewById(R.id.container)
+
+        // @author v3ndable: Pushes navbar to bottom to prevent overlapping with player
+        ViewCompat.setOnApplyWindowInsetsListener(bottomNavigationView) { view, insets ->
+            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            view.setPadding(0, 0, 0, systemBars.bottom)
+            insets
+        }
+
+        ViewCompat.setOnApplyWindowInsetsListener(playerBottomSheet) { view, insets ->
+            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            view.setPadding(0, 0, 0, systemBars.bottom)
+            insets
+        }
+        // ---
 
         // Modifies FragmentContainerView's insets to account for bottom sheet size.
         ViewCompat.setOnApplyWindowInsetsListener(container) { _, insets ->
