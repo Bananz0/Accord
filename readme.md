@@ -1,18 +1,16 @@
 # Accord
 
-> **This fork is no longer maintained.**
->
-> Originally I assumed [AccordLegacy](https://github.com/FoedusProgramme/AccordLegacy) was a dead project, which is why I started this fork. That turned out to be wrong — FoedusProgramme is actively working on the next major version, **Accord 2.0**, with builds distributed through the Telegram chat **[@FoedusDiscussion](https://t.me/FoedusDiscussion)** rather than GitHub Releases.
->
-> Meanwhile, [Gramophone](https://github.com/AkaneTan/Gramophone) has moved on substantially during the period when Accord appeared dormant — its internals (player, lyrics, theming, build setup) have diverged enough that backporting changes between the two no longer makes practical sense. The right path forward is to wait for the next Accord release rather than patch this fork.
->
-> For the latest official Accord, join that chat. This repository is left up only for historical reference and will not receive further updates.
+> **Personal development fork**
+> 
+> This repository is a modified fork of [Accord](https://github.com/emylfy/Accord) (no longer maintained) that I use for my own daily use with small personal tweaks and adjustments.
+> I use this fork to make minor changes to the app so it better fits my daily usage.
+> For testing, I mainly run the app on a Google Pixel 5 (running an emulator setup on my PC) and a Samsung Galaxy A05s with Evolution X 14.0 v9.9.3 (GSI). This helps me make sure everything works properly across both setups.
 
 ---
 
 A local music player for Android with an Apple-inspired design. Supports synced lyrics (LRC/SRT), gapless playback, and third-party equalizers.
 
-Fork of [Gramophone](https://github.com/AkaneTan/Gramophone) / [AccordLegacy](https://github.com/FoedusProgramme/AccordLegacy) with bug fixes, updated dependencies, and new features.
+Fork of [Accord](https://github.com/emylfy/Accord), which itself is based on [Gramophone](https://github.com/AkaneTan/Gramophone) and [AccordLegacy](https://github.com/FoedusProgramme/AccordLegacy), with small personal adjustments for daily use, bug fixes, and updated dependencies.
 
 ## Screenshots
 
@@ -29,7 +27,23 @@ Fork of [Gramophone](https://github.com/AkaneTan/Gramophone) / [AccordLegacy](ht
 
 ## Installation
 
-Download the latest APK from [GitHub Releases](https://github.com/emylfy/Accord/releases/latest).
+Download the original Accord-APK (no longer maintained) from [GitHub Releases](https://github.com/emylfy/Accord/releases/latest).
+
+## Required Setup
+
+Before building the project, you must create a `package.properties` file in the root directory:
+
+```bash
+$ touch package.properties
+````
+
+Then add the following content:
+
+```properties
+releaseType=SelfBuilt
+```
+
+This is required for Gradle to correctly recognize the build type and allow compilation.
 
 ## Building
 
@@ -43,12 +57,13 @@ APK will be in `app/build/outputs/apk/release/`.
 
 ## Credits
 
-Based on [Gramophone](https://github.com/AkaneTan/Gramophone) by AkaneTan and [AccordLegacy](https://github.com/FoedusProgramme/AccordLegacy) by FoedusProgramme.
+Based on [Accord](https://github.com/emylfy/Accord) by [@emylfy](https://github.com/emylfy), which is itself a fork of [Gramophone](https://github.com/AkaneTan/Gramophone) and [AccordLegacy](https://github.com/FoedusProgramme/AccordLegacy).
 
 Original developers: [@AkaneTan](https://github.com/AkaneTan), [@lightsummer233](https://github.com/lightsummer233), [@123Duo3](https://github.com/123Duo3)
 
-Fork maintained by [@emylfy](https://github.com/emylfy)
+Fork maintained by [@v3ndable](https://github.com/v3ndable)
 
 ## License
+This project remains under the GNU General Public License v3.0.
 
 GPL-3.0 — see [LICENSE](LICENSE) for details.
