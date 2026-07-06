@@ -57,6 +57,10 @@ import org.akanework.gramophone.ui.fragments.BaseFragment
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import org.akanework.gramophone.logic.applyImmersiveMode
+import androidx.preference.PreferenceManager
+import android.content.SharedPreferences
+
 // ---
 
 /**
@@ -122,7 +126,6 @@ class MainActivity : AppCompatActivity() {
         }
         // ---
 
-
         autoPlay = intent?.extras?.getBoolean(PLAYBACK_AUTO_START_FOR_FGS, false) == true
         intentSender =
             registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) {
@@ -164,6 +167,10 @@ class MainActivity : AppCompatActivity() {
         playerBottomSheet = findViewById(R.id.player_layout)
         bottomNavigationView = findViewById(R.id.bottom_nav)
         container = findViewById(R.id.container)
+
+        val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(this)
+        val immersiveEnabled = prefs.getBoolean("immersive_mode", true)
+        applyImmersiveMode(immersiveEnabled)
 
         // @author v3ndable: Pushes navbar to bottom to prevent overlapping with player
         ViewCompat.setOnApplyWindowInsetsListener(bottomNavigationView) { view, insets ->
@@ -321,5 +328,31 @@ class MainActivity : AppCompatActivity() {
 
     fun consumeAutoPlay(): Boolean {
         return autoPlay.also { autoPlay = false }
+    }
+
+    /**
+     * Activate immersive Mode immediately
+     */
+    private val listener =
+        SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == "immersive_mode") {
+                val enabled = PreferenceManager
+                    .getDefaultSharedPreferences(this)
+                    .getBoolean(key, true)
+
+                applyImmersiveMode(enabled)
+            }
+        }
+
+    override fun onStart() {
+        super.onStart()
+        PreferenceManager.getDefaultSharedPreferences(this)
+            .registerOnSharedPreferenceChangeListener(listener)
+    }
+
+    override fun onStop() {
+        PreferenceManager.getDefaultSharedPreferences(this)
+            .unregisterOnSharedPreferenceChangeListener(listener)
+        super.onStop()
     }
 }

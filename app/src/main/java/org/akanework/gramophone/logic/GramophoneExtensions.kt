@@ -14,6 +14,7 @@
  *     You should have received a copy of the GNU General Public License
  *     along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+@file:OptIn(androidx.media3.common.util.UnstableApi::class)
 
 package org.akanework.gramophone.logic
 
@@ -90,6 +91,7 @@ import org.akanework.gramophone.ui.fragments.BaseWrapperFragment
 import org.akanework.gramophone.ui.fragments.settings.MainSettingsFragment
 import java.io.File
 import kotlin.reflect.KClass
+import androidx.core.view.WindowCompat
 
 fun Player.playOrPause() {
     if (isPlaying) {
@@ -121,6 +123,22 @@ fun Activity.showKeyboard(view: View) {
             ?.isVisible(WindowInsetsCompat.Type.ime()) == false
     ) {
         WindowInsetsControllerCompat(window, view).show(WindowInsetsCompat.Type.ime())
+    }
+}
+
+fun Activity.applyImmersiveMode(enabled: Boolean) {
+    if (enabled) {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            hide(WindowInsetsCompat.Type.systemBars())
+            systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+    } else {
+        WindowCompat.setDecorFitsSystemWindows(window, true)
+        WindowInsetsControllerCompat(window, window.decorView).show(
+            WindowInsetsCompat.Type.systemBars()
+        )
     }
 }
 

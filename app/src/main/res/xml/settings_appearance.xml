@@ -32,6 +32,15 @@
             app:iconSpaceReserved="false"
             app:useSimpleSummaryProvider="true" />
 
+        <SwitchPreferenceCompat
+            android:defaultValue="true"
+            android:key="immersive_mode"
+            android:layout="@layout/preference_switch"
+            android:summary="Hide system bars for a fullscreen experience"
+            android:title="Immersive Mode"
+            android:widgetLayout="@layout/preference_switch_widget"
+            app:iconSpaceReserved="false" />
+
     </PreferenceCategory>
 
 </PreferenceScreen>

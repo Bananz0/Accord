@@ -195,6 +195,7 @@ dependencies {
     implementation("io.coil-kt.coil3:coil:3.1.0")
     implementation(files("../libs/lib-decoder-ffmpeg-release.aar"))
     implementation(projects.recyclerview)
+    implementation("androidx.core:core-ktx:1.13.1")
     // --- below does not apply to release builds ---
     debugImplementation("com.squareup.leakcanary:leakcanary-android:3.0-alpha-8")
     testImplementation("junit:junit:4.13.2")
