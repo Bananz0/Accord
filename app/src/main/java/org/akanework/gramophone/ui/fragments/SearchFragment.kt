@@ -103,13 +103,18 @@ class SearchFragment : BaseFragment(null) {
                 viewLifecycleOwner.lifecycleScope.launch(Dispatchers.Default) {
                     // Clear the list from the last search.
                     filteredList.clear()
+
+                    // Replace special characters
+                    val normalizedSearch = text.normalizeSearch()
+
                     // Filter the library.
                     libraryViewModel.mediaItemList.value?.filter {
-                        val isMatchingTitle = it.mediaMetadata.title?.contains(text, true) == true
+                        val isMatchingTitle =
+                            it.mediaMetadata.title?.toString()?.normalizeSearch()?.contains(normalizedSearch) == true
                         val isMatchingAlbum =
-                            it.mediaMetadata.albumTitle?.contains(text, true) == true
+                            it.mediaMetadata.albumTitle?.toString()?.normalizeSearch()?.contains(normalizedSearch) == true
                         val isMatchingArtist =
-                            it.mediaMetadata.artist?.contains(text, true) == true
+                            it.mediaMetadata.artist?.toString()?.normalizeSearch()?.contains(normalizedSearch) == true
                         isMatchingTitle || isMatchingAlbum || isMatchingArtist
                     }?.let {
                         filteredList.addAll(
@@ -133,4 +138,6 @@ class SearchFragment : BaseFragment(null) {
         viewLifecycleOwner.lifecycleScope.cancel()
     }
 
+    private fun String.normalizeSearch(): String =
+        lowercase().replace(Regex("[^\\p{L}\\p{N}]"), "")
 }
