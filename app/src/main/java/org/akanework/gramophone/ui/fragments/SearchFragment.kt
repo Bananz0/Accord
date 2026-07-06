@@ -29,7 +29,6 @@ import androidx.appcompat.content.res.AppCompatResources
 import androidx.core.widget.addTextChangedListener
 import androidx.fragment.app.activityViewModels
 import androidx.lifecycle.lifecycleScope
-import androidx.media3.common.MediaItem
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.google.android.material.appbar.AppBarLayout
 import com.google.android.material.appbar.MaterialToolbar
@@ -42,6 +41,7 @@ import org.akanework.gramophone.logic.enableEdgeToEdgePaddingListener
 import org.akanework.gramophone.logic.ui.MyRecyclerView
 import org.akanework.gramophone.ui.LibraryViewModel
 import org.akanework.gramophone.ui.adapters.SongAdapter
+import kotlinx.coroutines.Job
 
 /**
  * SearchFragment:
@@ -53,7 +53,8 @@ import org.akanework.gramophone.ui.adapters.SongAdapter
 class SearchFragment : BaseFragment(null) {
     private val handler = Handler(Looper.getMainLooper())
     private val libraryViewModel: LibraryViewModel by activityViewModels()
-    private val filteredList: MutableList<MediaItem> = mutableListOf()
+
+    private var searchJob: Job? = null
     private lateinit var editText: EditText
 
     @SuppressLint("StringFormatInvalid", "StringFormatMatches")
@@ -100,15 +101,15 @@ class SearchFragment : BaseFragment(null) {
                 // make sure the user doesn't edit away our text while we are filtering
                 val text = rawText.toString()
                 // Launch a coroutine for searching in the library.
-                viewLifecycleOwner.lifecycleScope.launch(Dispatchers.Default) {
-                    // Clear the list from the last search.
-                    filteredList.clear()
+                searchJob?.cancel()
 
+                searchJob = viewLifecycleOwner.lifecycleScope.launch(Dispatchers.Default) {
+                    // Clear the list from the last search.
                     // Replace special characters
                     val normalizedSearch = text.normalizeSearch()
 
                     // Filter the library.
-                    libraryViewModel.mediaItemList.value?.filter {
+                    val results = libraryViewModel.mediaItemList.value?.filter {
                         val isMatchingTitle =
                             it.mediaMetadata.title?.toString()?.normalizeSearch()?.contains(normalizedSearch) == true
                         val isMatchingAlbum =
@@ -116,13 +117,9 @@ class SearchFragment : BaseFragment(null) {
                         val isMatchingArtist =
                             it.mediaMetadata.artist?.toString()?.normalizeSearch()?.contains(normalizedSearch) == true
                         isMatchingTitle || isMatchingAlbum || isMatchingArtist
-                    }?.let {
-                        filteredList.addAll(
-                            it
-                        )
                     }
                     handler.post {
-                        songAdapter.updateList(filteredList, now = true, true)
+                        songAdapter.updateList(results ?: listOf(), now = true, true)
                     }
                 }
             }
