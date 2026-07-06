@@ -4,7 +4,7 @@
 > 
 > This repository is a modified fork of [Accord](https://github.com/emylfy/Accord) (no longer maintained) that I use for my own daily use with small personal tweaks and adjustments.
 > I use this fork to make minor changes to the app so it better fits my daily usage.
-> For testing, I mainly run the app on a Google Pixel 5 (running an emulator setup on my PC) and a Samsung Galaxy A05s with Evolution X v9.9.3 (GSI). This helps me make sure everything works properly across both setups.
+> For testing, I run the app on a Google Pixel 5 emulator on my PC, a Samsung Galaxy A56 running the stock ROM, and a Samsung Galaxy A05s running Evolution X v9.9.3 (GSI). This helps me ensure that everything works properly across different environments.
 
 ---
 
