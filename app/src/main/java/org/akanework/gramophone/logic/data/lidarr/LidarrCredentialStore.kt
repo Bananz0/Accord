@@ -50,6 +50,18 @@ class LidarrCredentialStore(context: Context) {
         get() = prefs.getInt(KEY_METADATA_PROFILE, 0)
         set(value) = prefs.edit().putInt(KEY_METADATA_PROFILE, value).apply()
 
+    /**
+     * The chosen profiles' names, kept only so settings can say "Standard" rather than "3". Lidarr
+     * identifies profiles by id, and an id on its own tells the user nothing about what they picked.
+     */
+    var qualityProfileName: String?
+        get() = prefs.getString(KEY_QUALITY_PROFILE_NAME, null)
+        set(value) = prefs.edit().putString(KEY_QUALITY_PROFILE_NAME, value).apply()
+
+    var metadataProfileName: String?
+        get() = prefs.getString(KEY_METADATA_PROFILE_NAME, null)
+        set(value) = prefs.edit().putString(KEY_METADATA_PROFILE_NAME, value).apply()
+
     fun isConfigured(): Boolean =
         !serverUrl.isNullOrBlank() && !apiKey.isNullOrBlank() &&
                 !rootFolderPath.isNullOrBlank() && qualityProfileId > 0 && metadataProfileId > 0
@@ -101,6 +113,8 @@ class LidarrCredentialStore(context: Context) {
         private const val KEY_ROOT_FOLDER = "root_folder"
         private const val KEY_QUALITY_PROFILE = "quality_profile"
         private const val KEY_METADATA_PROFILE = "metadata_profile"
+        private const val KEY_QUALITY_PROFILE_NAME = "quality_profile_name"
+        private const val KEY_METADATA_PROFILE_NAME = "metadata_profile_name"
 
         private const val KEY_IS_CONFIGURED = "lidarr_is_configured"
 
