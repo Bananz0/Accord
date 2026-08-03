@@ -9,6 +9,7 @@ import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.HttpClientOptions
 import org.jellyfin.sdk.api.okhttp.OkHttpFactory
 import org.jellyfin.sdk.createJellyfin
+import org.jellyfin.sdk.discovery.DiscoveryService
 import org.jellyfin.sdk.model.ClientInfo
 import org.jellyfin.sdk.model.DeviceInfo
 import java.util.concurrent.TimeUnit
@@ -86,6 +87,16 @@ object JellyfinClientHolder {
      */
     fun createUnauthenticatedApi(serverUrl: String): ApiClient =
         jellyfin.createApi(baseUrl = serverUrl)
+
+    /**
+     * Server discovery and address resolution.
+     *
+     * The SDK knows how to turn what someone actually types - "192.168.1.192", "jellyfin.example.com
+     * /jf", a bare hostname - into the candidate URLs worth probing, and how to find servers
+     * broadcasting on the local network. Guessing at the scheme and port in the app instead is the
+     * single biggest reason a correct address gets rejected as wrong.
+     */
+    fun discovery(): DiscoveryService = jellyfin.discovery
 
     /** Call after login or logout so [api] stops handing out a stale session. */
     fun invalidate() {
