@@ -50,8 +50,11 @@ class LibrarySongSubFragment : BaseFragment(), Observer<List<PlaylistWithMediaIt
             libraryViewModel.mediaItemList.value!!.find { it.mediaId.toLong() == id.mediaItemId }
         }
 
-        // Show title text.
-        collapsingToolbarLayout.title = ContextCompat.getString(requireContext(), R.string.category_songs)
+        // This screen is the favourites playlist, reached from the Favourite tile. It used to be
+        // titled "Songs", which made the Library's own Songs entry - which opens the whole library -
+        // look like it was showing a fraction of it.
+        collapsingToolbarLayout.title =
+            ContextCompat.getString(requireContext(), R.string.playlist_favourite)
 
         songAdapter =
             SongAdapter(
