@@ -11,7 +11,7 @@ import androidx.recyclerview.widget.RecyclerView
 import org.akanework.gramophone.R
 import org.akanework.gramophone.logic.findBaseWrapperFragment
 import org.akanework.gramophone.ui.fragments.BaseFragment
-import org.akanework.gramophone.ui.fragments.LibrarySongSubFragment
+import org.akanework.gramophone.ui.fragments.LibraryCategorySubFragment
 
 class LibraryCategoryAdapter(
     context: Context,
@@ -67,20 +67,16 @@ class LibraryCategoryAdapter(
         holder.textView.text = libraryEntryList[position].entryVal
         holder.imageView.setImageResource(libraryEntryList[position].entryIcon)
         holder.itemView.setOnClickListener {
-            when (libraryEntryList[position].entryType) {
-                EntryType.SONG -> {
-                    fragment.findBaseWrapperFragment()!!
-                        .replaceFragment(LibrarySongSubFragment())
-                }
-                EntryType.PLAYLIST -> {
-
-                }
-                EntryType.ARTIST -> {
-
-                }
-                EntryType.ALBUM -> {
-
-                }
+            val category = when (libraryEntryList[position].entryType) {
+                EntryType.SONG -> R.id.songs
+                EntryType.ALBUM -> R.id.albums
+                EntryType.ARTIST -> R.id.artists
+                // Playlists have no screen yet; leaving the tap inert beats pushing an empty one.
+                EntryType.PLAYLIST -> null
+            }
+            category?.let {
+                fragment.findBaseWrapperFragment()!!
+                    .replaceFragment(LibraryCategorySubFragment.of(it))
             }
         }
     }
