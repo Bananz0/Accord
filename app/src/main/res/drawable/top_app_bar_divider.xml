@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:gravity="bottom"
+        android:height="@dimen/divider_height_top_app_bar">
+        <shape>
+            <solid android:color="@color/bottomNavigationDividerColor"/>
+        </shape>
+    </item>
+</layer-list>
