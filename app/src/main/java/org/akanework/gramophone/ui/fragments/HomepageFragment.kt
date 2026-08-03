@@ -16,6 +16,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.appbar.AppBarLayout
 import com.google.android.material.appbar.MaterialToolbar
+import com.google.android.material.progressindicator.CircularProgressIndicator
 import org.akanework.gramophone.R
 import org.akanework.gramophone.logic.applyGeneralMenuItem
 import org.akanework.gramophone.logic.enableEdgeToEdgePaddingListener
@@ -71,6 +72,11 @@ class HomepageFragment : BaseFragment(null), Observer<RecommendationFactory.Reco
         moreButton.setOnClickListener { topAppBar.showOverflowMenu() }
         rootView.findViewById<ImageButton>(R.id.nav_action_account).setOnClickListener {
             showAccountSheet()
+        }
+
+        val syncIndicator = rootView.findViewById<CircularProgressIndicator>(R.id.sync_indicator)
+        libraryViewModel.isSyncing.observe(viewLifecycleOwner) { syncing ->
+            syncIndicator.visibility = if (syncing == true) View.VISIBLE else View.GONE
         }
 
         nestedScrollView.enableEdgeToEdgePaddingListener()

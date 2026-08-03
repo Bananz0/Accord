@@ -45,7 +45,7 @@
         android:title="@string/settings_category_misc">
 
         <SwitchPreferenceCompat
-            android:defaultValue="true"
+            android:defaultValue="false"
             android:key="sync_on_startup"
             android:layout="@layout/preference_switch"
             android:summary="@string/settings_sync_on_startup_summary"
