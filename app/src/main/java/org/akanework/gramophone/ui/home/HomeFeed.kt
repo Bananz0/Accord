@@ -240,7 +240,8 @@ object HomeFeed {
         val seedName = seed.title ?: return null
 
         val similar = try {
-            LastFmClient(store.apiKey, store.apiSecret).getSimilarArtists(seedName)
+            LastFmClient(store.apiKey, store.apiSecret, store.brokerUrl)
+                .getSimilarArtists(seedName)
         } catch (e: Exception) {
             return null
         }

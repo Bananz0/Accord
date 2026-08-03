@@ -1,9 +1,9 @@
 package org.akanework.gramophone.ui.fragments.settings
 
+import android.content.Intent
 import android.os.Bundle
-import android.view.View
-import android.widget.TextView
 import android.widget.Toast
+import androidx.core.net.toUri
 import androidx.lifecycle.lifecycleScope
 import androidx.preference.Preference
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
@@ -38,6 +38,9 @@ class ScrobblingSettingsTopFragment : BasePreferenceFragment() {
 
     override fun onResume() {
         super.onResume()
+        // Also the moment we get back from the browser, which is where completePendingAuth picks
+        // up an approved token.
+        completePendingAuth()
         refreshSummaries()
     }
 
@@ -45,6 +48,7 @@ class ScrobblingSettingsTopFragment : BasePreferenceFragment() {
         when (preference.key) {
             "lastfm_account" -> onAccountClicked()
             "lastfm_api_keys" -> showApiKeyDialog()
+            "lastfm_broker" -> showBrokerDialog()
             "lastfm_pending" -> submitPendingNow()
         }
         return super.onPreferenceTreeClick(preference)
@@ -81,74 +85,84 @@ class ScrobblingSettingsTopFragment : BasePreferenceFragment() {
             val hasKeys = withContext(Dispatchers.IO) { store.hasApplicationCredentials() }
             if (!isAdded) return@launch
             when {
-                // Signing in is impossible without an application key pair, so send the user
-                // straight to where they can add one instead of failing at the password step.
+                // Signing in is impossible without credentials, so send the user straight to where
+                // they can add them instead of failing at the approval step.
                 !hasKeys -> showApiKeyDialog()
                 linked -> showDisconnectDialog()
-                else -> showLoginDialog()
+                else -> startWebAuth(store)
             }
         }
     }
 
-    private fun showLoginDialog() {
-        val view = layoutInflater.inflate(R.layout.dialog_lastfm_login, null)
-        val usernameField = view.findViewById<TextInputEditText>(R.id.username)
-        val passwordField = view.findViewById<TextInputEditText>(R.id.password)
-        val status = view.findViewById<TextView>(R.id.status)
-
-        val dialog = MaterialAlertDialogBuilder(requireContext())
-            .setTitle(R.string.lastfm_connect_title)
-            .setView(view)
-            .setNegativeButton(android.R.string.cancel, null)
-            // Set with a null listener and rebound below, so a failed attempt keeps the dialog open
-            // with the typed username still in place instead of dismissing on every tap.
-            .setPositiveButton(R.string.lastfm_connect, null)
-            .create()
-
-        dialog.setOnShowListener {
-            dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE)
-                .setOnClickListener {
-                    val username = usernameField.text?.toString()?.trim().orEmpty()
-                    val password = passwordField.text?.toString().orEmpty()
-                    if (username.isEmpty() || password.isEmpty()) {
-                        status.visibility = View.VISIBLE
-                        status.setText(R.string.lastfm_error_empty)
-                        return@setOnClickListener
-                    }
-                    status.visibility = View.VISIBLE
-                    status.setText(R.string.lastfm_connecting)
-                    viewLifecycleOwner.lifecycleScope.launch {
-                        val result = withContext(Dispatchers.IO) { link(username, password) }
-                        if (!isAdded) return@launch
-                        if (result == null) {
-                            dialog.dismiss()
-                            refreshSummaries()
-                            Toast.makeText(
-                                requireContext(), R.string.lastfm_connected, Toast.LENGTH_SHORT
-                            ).show()
-                        } else {
-                            status.text = result
-                        }
-                    }
+    /**
+     * Sends the user to Last.fm to approve access.
+     *
+     * The alternative - asking for their Last.fm password here - is a flow nobody should agree to in
+     * a third-party app, and Last.fm only kept it for legacy desktop clients. This way the password
+     * is only ever typed on last.fm itself.
+     */
+    private fun startWebAuth(store: LastFmCredentialStore) {
+        viewLifecycleOwner.lifecycleScope.launch {
+            val url = withContext(Dispatchers.IO) {
+                try {
+                    val client = LastFmClient(store.apiKey, store.apiSecret, store.brokerUrl)
+                    val token = client.getToken()
+                    store.pendingAuthToken = token
+                    client.authorizationUrl(token)
+                } catch (e: Exception) {
+                    null
                 }
+            }
+            if (!isAdded) return@launch
+            if (url == null) {
+                Toast.makeText(
+                    requireContext(), R.string.lastfm_error_generic, Toast.LENGTH_LONG
+                ).show()
+                return@launch
+            }
+            try {
+                startActivity(Intent(Intent.ACTION_VIEW, url.toUri()))
+                Toast.makeText(
+                    requireContext(), R.string.lastfm_approve_in_browser, Toast.LENGTH_LONG
+                ).show()
+            } catch (e: Exception) {
+                Toast.makeText(
+                    requireContext(), R.string.spotify_error_no_browser, Toast.LENGTH_LONG
+                ).show()
+            }
         }
-        dialog.show()
     }
 
-    /** Returns null on success, or a message to show in the dialog. */
-    private suspend fun link(username: String, password: String): String? = try {
-        val store = LastFmCredentialStore(requireContext())
-        val client = LastFmClient(store.apiKey, store.apiSecret)
-        val session = client.getMobileSession(username, password)
-        store.saveSession(requireContext(), session.name, session.key)
-        // A queue left behind by a previous session - or by an outage before the account was
-        // unlinked - can be submitted now that there is a session key again.
-        LastFmScrobbler(requireContext()).flushAsync()
-        null
-    } catch (e: LastFmClient.LastFmException) {
-        e.message ?: getString(R.string.lastfm_error_generic)
-    } catch (e: Exception) {
-        getString(R.string.lastfm_error_generic)
+    /**
+     * Turns an approved request token into a session key.
+     *
+     * Runs on every resume rather than waiting for a redirect. Last.fm's callback URL is optional
+     * and only fires for API accounts that have one configured, so polling on return covers both -
+     * and the failure case is simply that the token is not approved yet.
+     */
+    private fun completePendingAuth() {
+        viewLifecycleOwner.lifecycleScope.launch {
+            val linked = withContext(Dispatchers.IO) {
+                val store = LastFmCredentialStore(requireContext())
+                val token = store.pendingAuthToken?.takeIf { it.isNotBlank() }
+                    ?: return@withContext false
+                try {
+                    val session = LastFmClient(store.apiKey, store.apiSecret, store.brokerUrl)
+                        .getSession(token)
+                    store.saveSession(requireContext(), session.name, session.key)
+                    store.pendingAuthToken = null
+                    LastFmScrobbler(requireContext()).flushAsync()
+                    true
+                } catch (e: Exception) {
+                    // Not approved yet, or approval was abandoned. Either way, leave the token in
+                    // place so returning to this screen tries again.
+                    false
+                }
+            }
+            if (!isAdded || !linked) return@launch
+            Toast.makeText(requireContext(), R.string.lastfm_connected, Toast.LENGTH_SHORT).show()
+            refreshSummaries()
+        }
     }
 
     private fun showDisconnectDialog() {
@@ -202,6 +216,38 @@ class ScrobblingSettingsTopFragment : BasePreferenceFragment() {
                             // The "linked" flag depends on the keys being usable, so it has to be
                             // recomputed whenever they change.
                             store.publishLinkFlag(requireContext())
+                        }
+                        if (isAdded) refreshSummaries()
+                    }
+                }
+                .show()
+        }
+    }
+
+    private fun showBrokerDialog() {
+        val view = layoutInflater.inflate(R.layout.dialog_lastfm_broker, null)
+        val field = view.findViewById<TextInputEditText>(R.id.broker_url)
+
+        viewLifecycleOwner.lifecycleScope.launch {
+            val existing = withContext(Dispatchers.IO) {
+                LastFmCredentialStore(requireContext()).brokerUrl
+            }
+            if (!isAdded) return@launch
+            field.setText(existing.orEmpty())
+            MaterialAlertDialogBuilder(requireContext())
+                .setTitle(R.string.lastfm_broker)
+                .setView(view)
+                .setNegativeButton(android.R.string.cancel, null)
+                .setPositiveButton(android.R.string.ok) { _, _ ->
+                    val value = field.text?.toString()?.trim().orEmpty()
+                    viewLifecycleOwner.lifecycleScope.launch {
+                        withContext(Dispatchers.IO) {
+                            LastFmCredentialStore(requireContext()).apply {
+                                brokerUrl = value.ifBlank { null }
+                                // Whether the app can make signed calls at all depends on this, so
+                                // the linked flag has to be recomputed.
+                                publishLinkFlag(requireContext())
+                            }
                         }
                         if (isAdded) refreshSummaries()
                     }

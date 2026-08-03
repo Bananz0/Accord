@@ -36,9 +36,37 @@ class LastFmCredentialStore(context: Context) {
             ?: BuildConfig.LASTFM_API_SECRET
         set(value) = prefs.edit().putString(KEY_API_SECRET, value.trim()).apply()
 
+    /**
+     * A signing proxy that holds the shared secret server-side.
+     *
+     * When set, the app never sees the API key or secret: it posts the parameters and the proxy
+     * signs and forwards them. That keeps the one genuinely secret credential off every device the
+     * app is installed on, and lets it be rotated without shipping an update.
+     *
+     * Optional. With no proxy configured the app signs locally with [apiSecret], which is what every
+     * open-source scrobbler does and works fine for a personal build.
+     */
+    var brokerUrl: String?
+        get() = prefs.getString(KEY_BROKER_URL, null)?.takeIf { it.isNotBlank() }
+            ?: BuildConfig.LASTFM_BROKER_URL.takeIf { it.isNotBlank() }
+        set(value) = prefs.edit().putString(KEY_BROKER_URL, value?.trim()).apply()
+
     var sessionKey: String?
         get() = prefs.getString(KEY_SESSION_KEY, null)
         private set(value) = prefs.edit().putString(KEY_SESSION_KEY, value).apply()
+
+    /**
+     * The request token for a web authorisation in flight.
+     *
+     * Survives process death for the same reason Spotify's PKCE verifier does: the user leaves for a
+     * browser to approve, and the app may be killed while they are gone.
+     */
+    var pendingAuthToken: String?
+        get() = prefs.getString(KEY_PENDING_TOKEN, null)
+        set(value) {
+            @Suppress("ApplySharedPref")
+            prefs.edit().putString(KEY_PENDING_TOKEN, value).commit()
+        }
 
     var username: String?
         get() = prefs.getString(KEY_USERNAME, null)
@@ -47,11 +75,15 @@ class LastFmCredentialStore(context: Context) {
     /** True once the app can act on the user's behalf. */
     fun isLinked(): Boolean = !sessionKey.isNullOrBlank() && hasApplicationCredentials()
 
-    /** True once an API key/secret pair exists, whether from the build or the settings screen. */
-    fun hasApplicationCredentials(): Boolean = apiKey.isNotBlank() && apiSecret.isNotBlank()
+    /**
+     * True once the app can make signed calls - either it holds a key and secret, or a proxy holds
+     * them on its behalf.
+     */
+    fun hasApplicationCredentials(): Boolean =
+        !brokerUrl.isNullOrBlank() || (apiKey.isNotBlank() && apiSecret.isNotBlank())
 
     /**
-     * Persists a session obtained from `auth.getMobileSession`.
+     * Persists a session obtained from `auth.getSession`.
      *
      * Uses commit() for the same reason the Jellyfin store does: apply() flushes asynchronously, and
      * this app's crash handler calls exitProcess(), which would silently discard the write and leave
@@ -117,6 +149,8 @@ class LastFmCredentialStore(context: Context) {
         private const val KEY_API_SECRET = "api_secret"
         private const val KEY_SESSION_KEY = "session_key"
         private const val KEY_USERNAME = "username"
+        private const val KEY_BROKER_URL = "broker_url"
+        private const val KEY_PENDING_TOKEN = "pending_auth_token"
 
         /** Lives in the default (unencrypted) preferences - it is only a boolean. */
         private const val KEY_IS_LINKED = "lastfm_is_linked"

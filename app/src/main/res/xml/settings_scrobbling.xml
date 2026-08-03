@@ -19,6 +19,13 @@
             android:title="@string/lastfm_api_keys"
             app:iconSpaceReserved="false" />
 
+        <Preference
+            android:key="lastfm_broker"
+            android:layout="@layout/preference_basic"
+            android:summary="@string/lastfm_broker_summary"
+            android:title="@string/lastfm_broker"
+            app:iconSpaceReserved="false" />
+
     </PreferenceCategory>
 
     <PreferenceCategory

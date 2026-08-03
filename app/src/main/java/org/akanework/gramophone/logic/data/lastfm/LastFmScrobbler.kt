@@ -188,7 +188,7 @@ class LastFmScrobbler(private val context: Context) {
         val store = LastFmCredentialStore(context)
         val sessionKey = store.sessionKey?.takeIf { it.isNotBlank() } ?: return null
         if (!store.hasApplicationCredentials()) return null
-        return LastFmClient(store.apiKey, store.apiSecret) to sessionKey
+        return LastFmClient(store.apiKey, store.apiSecret, store.brokerUrl) to sessionKey
     }
 
     private fun PendingScrobble.toTimedTrack() = LastFmClient.TimedTrack(
