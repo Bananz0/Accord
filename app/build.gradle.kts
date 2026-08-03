@@ -84,6 +84,13 @@ android {
             "LASTFM_API_SECRET",
             "\"${readProperties(file("../package.properties")).getProperty("lastfmApiSecret", "")}\""
         )
+        // Spotify client id, same story: shared id means shared quota, and one abusive user gets it
+        // revoked for everybody. PKCE means no client secret is needed at all.
+        buildConfigField(
+            "String",
+            "SPOTIFY_CLIENT_ID",
+            "\"${readProperties(file("../package.properties")).getProperty("spotifyClientId", "")}\""
+        )
         setProperty("archivesBaseName", "Accord-$versionName")
     }
 

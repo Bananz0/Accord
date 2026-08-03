@@ -70,6 +70,27 @@
             android:exported="false"
             android:permission="android.permission.BIND_JOB_SERVICE" />
 
+        <!--
+            Catches Spotify's OAuth redirect. exported=true is required - the browser is what
+            delivers the intent - but it only ever carries an authorisation code that is useless
+            without the PKCE verifier held inside the app.
+        -->
+        <activity
+            android:name=".ui.SpotifyAuthActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:host="spotify-callback"
+                    android:scheme="accord" />
+            </intent-filter>
+        </activity>
+
         <activity
             android:name=".ui.JellyfinLoginActivity"
             android:exported="false"
