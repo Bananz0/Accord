@@ -50,19 +50,17 @@ object SpotifyPlaylistImporter {
             val mediaItemDao = database.mediaItemDao()
             // Named for where it came from, so it is obvious later which playlists are imports.
             val name = "$playlistName (Spotify)"
-            playlistDao.addPlaylist(Playlist(0, name, null))
-            val playlistId = playlistDao.getAllPlaylists()
-                .lastOrNull { it.playlist.name == name }
-                ?.playlist?.playlistId
-            if (playlistId == null) {
-                Log.e(TAG, "Playlist $name vanished immediately after being created")
-            } else {
-                matched.forEach { localId ->
-                    mediaItemDao.addMediaItem(
-                        org.akanework.gramophone.logic.data.db.entity.MediaItem(localId)
-                    )
-                    mediaItemDao.addMediaItemToPlaylist(playlistId, localId)
-                }
+            // Playlist ids are not auto-generated, so one has to be allocated here. Inserting with
+            // id 0 collides with the "favourite" playlist, and addPlaylist ignores conflicts, so
+            // the row would be dropped without a word and the tracks attached to nothing.
+            val playlistId = (playlistDao.getAllPlaylists()
+                .maxOfOrNull { it.playlist.playlistId } ?: 0L) + 1L
+            playlistDao.addPlaylist(Playlist(playlistId, name, null))
+            matched.forEach { localId ->
+                mediaItemDao.addMediaItem(
+                    org.akanework.gramophone.logic.data.db.entity.MediaItem(localId)
+                )
+                mediaItemDao.addMediaItemToPlaylist(playlistId, localId)
             }
         }
 

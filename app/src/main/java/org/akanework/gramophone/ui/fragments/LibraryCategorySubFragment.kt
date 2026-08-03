@@ -14,6 +14,7 @@ import org.akanework.gramophone.logic.ui.MyRecyclerView
 import org.akanework.gramophone.ui.LibraryViewModel
 import org.akanework.gramophone.ui.adapters.AlbumAdapter
 import org.akanework.gramophone.ui.adapters.ArtistAdapter
+import org.akanework.gramophone.ui.adapters.PlaylistAdapter
 import org.akanework.gramophone.ui.adapters.SongAdapter
 
 /**
@@ -57,6 +58,8 @@ class LibraryCategorySubFragment : BaseFragment() {
                 this, libraryViewModel.artistItemList, libraryViewModel.albumArtistItemList
             )
 
+            R.id.playlists -> PlaylistAdapter(this, libraryViewModel.privatePlaylistsAsLibrary)
+
             else -> throw IllegalArgumentException("unsupported category $categoryId")
         }
 
@@ -76,6 +79,7 @@ class LibraryCategorySubFragment : BaseFragment() {
         R.id.songs -> R.string.category_songs
         R.id.albums -> R.string.category_albums
         R.id.artists -> R.string.category_artists
+        R.id.playlists -> R.string.category_playlists
         else -> throw IllegalArgumentException("unsupported category $categoryId")
     }
 

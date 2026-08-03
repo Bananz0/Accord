@@ -38,8 +38,29 @@ object DatabaseUtils {
                 } else {
                     favouritePlaylistId = favouritePlaylist.playlist.playlistId
                 }
+                // Resolve the stored track ids into library items so the playlist screen has
+                // something to show. Done here rather than in the fragment because every path that
+                // changes a playlist already comes through this function.
+                val library = withContext(Dispatchers.Main) {
+                    libraryViewModel.mediaItemList.value
+                }
+                val byId = library?.associateBy { it.mediaId.toLongOrNull() }
+                val resolved = internalList
+                    // "favourite" has its own tile on the library screen; listing it again here
+                    // would just be the same playlist twice.
+                    .filter { it.playlist.name != "favourite" }
+                    .map { entry ->
+                        MediaStoreUtils.Playlist(
+                            id = entry.playlist.playlistId,
+                            title = entry.playlist.name,
+                            songList = entry.mediaItems
+                                .mapNotNull { byId?.get(it.mediaItemId) }
+                                .toMutableList()
+                        )
+                    }
                 withContext(Dispatchers.Main) {
                     libraryViewModel.privatePlaylistList.value = internalList
+                    libraryViewModel.privatePlaylistsAsLibrary.value = resolved
                     libraryViewModel.privatePlaylistId = favouritePlaylistId
                 }
             }
