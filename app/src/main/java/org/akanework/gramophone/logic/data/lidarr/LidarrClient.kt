@@ -122,7 +122,11 @@ class LidarrClient(
                 // asked for one album.
                 put("monitorNewItems", "none")
                 put("addOptions", JSONObject().apply {
-                    put("monitor", "specificAlbum")
+                    // "none" rather than anything more specific: Lidarr's MonitorTypes has no
+                    // per-album value (that is Sonarr's vocabulary, and sending it fails
+                    // validation), and it ignores this field entirely when albumsToMonitor is
+                    // populated - which is what actually limits the request to one album.
+                    put("monitor", "none")
                     put("albumsToMonitor", JSONArray().put(album.foreignAlbumId))
                     put("searchForMissingAlbums", false)
                 })
@@ -209,7 +213,16 @@ class LidarrClient(
         val fromObject = runCatching {
             JSONObject(body).optString("message").takeIf { it.isNotBlank() }
         }.getOrNull()
-        return fromArray ?: fromObject ?: "Lidarr returned HTTP $code"
+        // Schema failures come back in a third shape - {"errors": {"$.field": ["why"]}} - which the
+        // two above miss entirely, leaving a bare "HTTP 400" that says nothing about what was wrong.
+        val fromValidation = runCatching {
+            val errors = JSONObject(body).optJSONObject("errors") ?: return@runCatching null
+            errors.keys().asSequence().firstNotNullOfOrNull { field ->
+                errors.optJSONArray(field)?.optString(0)?.takeIf { it.isNotBlank() }
+                    ?.let { "$field: $it" }
+            }
+        }.getOrNull()
+        return fromArray ?: fromObject ?: fromValidation ?: "Lidarr returned HTTP $code"
     }
 
     companion object {

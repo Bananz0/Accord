@@ -55,8 +55,8 @@ class LidarrSettingsTopFragment : BasePreferenceFragment() {
         viewLifecycleOwner.lifecycleScope.launch {
             val store = withContext(Dispatchers.IO) { LidarrCredentialStore(requireContext()) }
             val state = withContext(Dispatchers.IO) {
-                listOf(store.serverUrl, store.rootFolderPath, store.qualityProfileId.toString(),
-                    store.metadataProfileId.toString())
+                listOf(store.serverUrl, store.rootFolderPath, store.qualityProfileName,
+                    store.metadataProfileName)
             }
             if (!isAdded) return@launch
             findPreference<Preference>("lidarr_server")?.summary =
@@ -64,9 +64,9 @@ class LidarrSettingsTopFragment : BasePreferenceFragment() {
             findPreference<Preference>("lidarr_root_folder")?.summary =
                 state[1]?.takeIf { it.isNotBlank() } ?: getString(R.string.lidarr_not_set)
             findPreference<Preference>("lidarr_quality_profile")?.summary =
-                state[2].takeIf { it != "0" } ?: getString(R.string.lidarr_not_set)
+                state[2]?.takeIf { it.isNotBlank() } ?: getString(R.string.lidarr_not_set)
             findPreference<Preference>("lidarr_metadata_profile")?.summary =
-                state[3].takeIf { it != "0" } ?: getString(R.string.lidarr_not_set)
+                state[3]?.takeIf { it.isNotBlank() } ?: getString(R.string.lidarr_not_set)
         }
     }
 
@@ -196,8 +196,13 @@ class LidarrSettingsTopFragment : BasePreferenceFragment() {
                     viewLifecycleOwner.lifecycleScope.launch {
                         withContext(Dispatchers.IO) {
                             LidarrCredentialStore(requireContext()).apply {
-                                if (quality) qualityProfileId = profiles[which].id
-                                else metadataProfileId = profiles[which].id
+                                if (quality) {
+                                    qualityProfileId = profiles[which].id
+                                    qualityProfileName = profiles[which].name
+                                } else {
+                                    metadataProfileId = profiles[which].id
+                                    metadataProfileName = profiles[which].name
+                                }
                                 publishConfiguredFlag(requireContext())
                             }
                         }
