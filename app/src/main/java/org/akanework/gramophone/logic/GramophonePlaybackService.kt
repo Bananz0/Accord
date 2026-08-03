@@ -86,6 +86,7 @@ import org.akanework.gramophone.logic.utils.MediaStoreUtils
 import org.akanework.gramophone.logic.utils.exoplayer.EndedWorkaroundPlayer
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinMediaCache
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinReporter
+import org.akanework.gramophone.logic.data.lastfm.LastFmScrobbler
 import org.akanework.gramophone.logic.utils.exoplayer.GramophoneExtractorsFactory
 import org.akanework.gramophone.logic.utils.exoplayer.GramophoneMediaSourceFactory
 import org.akanework.gramophone.logic.utils.exoplayer.GramophoneRenderFactory
@@ -138,6 +139,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
     private val lyricsLock = Semaphore(1)
     private lateinit var prefs: SharedPreferences
     private lateinit var reporter: JellyfinReporter
+    private lateinit var scrobbler: LastFmScrobbler
 
     /** The track currently reported to Jellyfin as playing, by media3 media id. */
     private var reportedMediaId: String? = null
@@ -188,6 +190,10 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         instanceForWidgetAndLyricsOnly = this
         handler = Handler(Looper.getMainLooper())
         reporter = JellyfinReporter(this)
+        scrobbler = LastFmScrobbler(this)
+        // A session that ended offline leaves plays queued; submit them as soon as the service is
+        // alive again rather than waiting for the next track to finish.
+        scrobbler.flushAsync()
         super.onCreate()
         nm = NotificationManagerCompat.from(this)
         prefs = PreferenceManager.getDefaultSharedPreferences(this)
@@ -396,6 +402,10 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
             reporter.reportStopped(it, controller?.currentPosition ?: lastReportedPositionMs)
             reportedMediaId = null
         }
+        scrobbler.onTrackFinished(
+            controller?.currentPosition ?: lastReportedPositionMs,
+            playedToEnd = false
+        )
         // Important: this must happen before sending stop() as that changes state ENDED -> IDLE
         lastPlayedManager.save()
         mediaSession!!.player.stop()
@@ -602,11 +612,19 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         reportedMediaId?.let { previous ->
             reporter.reportStopped(previous, lastReportedPositionMs)
         }
+        // AUTO means the player reached the end of the previous track by itself, so it was heard in
+        // full. Any other reason - a skip, a seek to another item, a new queue - means the last
+        // heartbeat's position is the best estimate of how much was actually listened to.
+        scrobbler.onTrackFinished(
+            lastReportedPositionMs,
+            playedToEnd = reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO
+        )
         reportedMediaId = mediaItem?.mediaId
         lastReportedPositionMs = 0L
         reportedMediaId?.let {
             reporter.reportStart(it, 0L, controller?.isPlaying != true)
         }
+        scrobbler.onTrackStarted(mediaItem, System.currentTimeMillis() / 1000)
     }
 
     override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -617,6 +635,9 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
             lastReportedPositionMs = controller?.currentPosition ?: 0L
             reporter.reportProgress(it, lastReportedPositionMs, !isPlaying)
         }
+        // Pausing is the last chance to catch a track that crossed the scrobble threshold since the
+        // previous heartbeat and is about to sit paused indefinitely.
+        if (!isPlaying) scrobbler.onProgress(controller?.currentPosition ?: lastReportedPositionMs)
         if (isPlaying) startProgressReporting() else stopProgressReporting()
     }
 
@@ -643,6 +664,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
             if (id != null && player != null) {
                 lastReportedPositionMs = player.currentPosition
                 reporter.reportProgress(id, lastReportedPositionMs, !player.isPlaying)
+                scrobbler.onProgress(lastReportedPositionMs)
             }
             handler.postDelayed(this, PROGRESS_REPORT_INTERVAL_MS)
         }

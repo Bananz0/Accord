@@ -56,6 +56,13 @@
         android:title="@string/settings_player_options" />
 
     <Preference
+        android:icon="@drawable/ic_scrobbling"
+        android:key="scrobbling"
+        android:layout="@layout/preference_basic"
+        android:summary="@string/settings_scrobbling_summary"
+        android:title="@string/settings_category_scrobbling" />
+
+    <Preference
         android:icon="@drawable/ic_experiment"
         android:key="experimental"
         android:layout="@layout/preference_basic"
