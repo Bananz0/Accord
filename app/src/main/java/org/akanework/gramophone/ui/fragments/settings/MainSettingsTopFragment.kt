@@ -74,6 +74,16 @@ class MainSettingsTopFragment : BasePreferenceFragment() {
                     .commit()
             }
 
+            "downloads" -> {
+                val supportFragmentManager = requireActivity().supportFragmentManager
+                supportFragmentManager
+                    .beginTransaction()
+                    .addToBackStack(System.currentTimeMillis().toString())
+                    .hide(supportFragmentManager.fragments.let { it[it.size - 1] })
+                    .add(R.id.container, DownloadsSettingsFragment())
+                    .commit()
+            }
+
             "scrobbling" -> {
                 val supportFragmentManager = requireActivity().supportFragmentManager
                 supportFragmentManager

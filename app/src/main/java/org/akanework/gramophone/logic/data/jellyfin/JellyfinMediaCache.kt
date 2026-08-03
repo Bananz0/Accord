@@ -24,6 +24,13 @@ object JellyfinMediaCache {
     private const val CACHE_DIR_NAME = "jellyfin_media"
 
     /**
+     * Where the cache used to live. Android clears cacheDir under storage pressure without warning,
+     * which would silently delete tracks the user downloaded for offline use, so the cache moved to
+     * filesDir. The old directory is removed once so it does not sit there occupying space.
+     */
+    private const val LEGACY_CACHE_DIR_NAME = "jellyfin_media"
+
+    /**
      * Downloads and the streaming cache live in one directory. Evicting by LRU would happily
      * delete a track the user explicitly downloaded for offline use, so eviction is disabled and
      * cache size is managed explicitly from settings instead.
@@ -34,22 +41,45 @@ object JellyfinMediaCache {
     @Volatile
     private var cache: SimpleCache? = null
 
+    @Volatile
+    private var databaseProvider: StandaloneDatabaseProvider? = null
+
+    /**
+     * The index database behind the cache.
+     *
+     * The download manager has to be handed this same instance: media3 keeps its cache index and its
+     * download index in one database, and opening a second provider over the same file gives the two
+     * halves inconsistent views of what is on disk.
+     */
+    fun databaseProvider(context: Context): StandaloneDatabaseProvider {
+        databaseProvider?.let { return it }
+        return synchronized(this) {
+            databaseProvider ?: StandaloneDatabaseProvider(context.applicationContext)
+                .also { databaseProvider = it }
+        }
+    }
+
     fun get(context: Context): SimpleCache {
         cache?.let { return it }
         return synchronized(this) {
             cache ?: run {
-                val dir = File(context.applicationContext.cacheDir, CACHE_DIR_NAME)
+                val appContext = context.applicationContext
+                deleteLegacyCache(appContext)
+                val dir = File(appContext.filesDir, CACHE_DIR_NAME)
                 val evictor = if (USE_LRU_EVICTION) {
                     LeastRecentlyUsedCacheEvictor(LRU_CACHE_SIZE_BYTES)
                 } else {
                     NoOpCacheEvictor()
                 }
-                SimpleCache(
-                    dir,
-                    evictor,
-                    StandaloneDatabaseProvider(context.applicationContext)
-                ).also { cache = it }
+                SimpleCache(dir, evictor, databaseProvider(appContext)).also { cache = it }
             }
+        }
+    }
+
+    private fun deleteLegacyCache(context: Context) {
+        val legacy = File(context.cacheDir, LEGACY_CACHE_DIR_NAME)
+        if (legacy.isDirectory) {
+            legacy.deleteRecursively()
         }
     }
 

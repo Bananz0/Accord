@@ -18,11 +18,17 @@
 package org.akanework.gramophone.ui.adapters
 
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.viewModels
 import androidx.appcompat.widget.PopupMenu
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.MutableLiveData
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.akanework.gramophone.R
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinDownloadManager
 import org.akanework.gramophone.logic.findBaseWrapperFragment
 import org.akanework.gramophone.logic.utils.MediaStoreUtils
 import org.akanework.gramophone.ui.LibraryViewModel
@@ -104,6 +110,36 @@ class AlbumAdapter(
                         mediaController.currentMediaItemIndex + 1,
                         item.songList,
                     )
+                }
+
+                R.id.download -> {
+                    // Reading the download index to skip what is already stored is disk work, so
+                    // the whole queueing pass happens off the main thread.
+                    val songs = item.songList.toList()
+                    CoroutineScope(Dispatchers.IO).launch {
+                        JellyfinDownloadManager.download(mainActivity, songs)
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(
+                                mainActivity,
+                                mainActivity.resources.getQuantityString(
+                                    R.plurals.download_queued_count, songs.size, songs.size
+                                ),
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
+                }
+
+                R.id.download_remove -> {
+                    val songs = item.songList.toList()
+                    CoroutineScope(Dispatchers.IO).launch {
+                        JellyfinDownloadManager.remove(mainActivity, songs)
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(
+                                mainActivity, R.string.download_removed, Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
                 }
 
                 /*

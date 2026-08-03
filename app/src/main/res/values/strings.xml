@@ -290,6 +290,30 @@
         <item quantity="one">%1$d scrobble queued. Tap to send now.</item>
         <item quantity="other">%1$d scrobbles queued. Tap to send now.</item>
     </plurals>
+    <string name="download_channel_name">Downloads</string>
+    <string name="download_notification_title">Downloading music</string>
+    <string name="download">Download</string>
+    <string name="download_remove">Remove download</string>
+    <string name="download_queued">Downloading…</string>
+    <string name="download_removed">Download removed</string>
+    <string name="settings_category_downloads">Downloads</string>
+    <string name="settings_downloads_summary">Offline music and cache</string>
+    <string name="downloads_size">Downloaded music</string>
+    <string name="downloads_size_summary">%1$s stored offline</string>
+    <string name="downloads_cache_size">Streaming cache</string>
+    <string name="downloads_cache_size_summary">%1$s total on disk, including downloads</string>
+    <string name="downloads_clear">Remove all downloads</string>
+    <string name="downloads_clear_summary">Delete every offline track. Streaming is unaffected.</string>
+    <string name="downloads_clear_confirm">Remove all downloaded music from this device?</string>
+    <string name="downloads_cleared">Downloads removed</string>
+    <plurals name="download_notification_remaining">
+        <item quantity="one">%1$d track remaining</item>
+        <item quantity="other">%1$d tracks remaining</item>
+    </plurals>
+    <plurals name="download_queued_count">
+        <item quantity="one">Downloading %1$d track</item>
+        <item quantity="other">Downloading %1$d tracks</item>
+    </plurals>
     <plurals name="lastfm_submitted_count">
         <item quantity="one">Sent %1$d scrobble</item>
         <item quantity="other">Sent %1$d scrobbles</item>
