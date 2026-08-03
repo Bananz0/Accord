@@ -4,6 +4,11 @@
 <resources>
     <!-- Circular header action buttons, sized to match the upstream navigation bar. -->
     <dimen name="navigation_bar_button_size">32dp</dimen>
+    <!-- Album artwork on the album detail header. -->
+    <dimen name="sub_cover_size">208dp</dimen>
+    <dimen name="sub_cover_margin_top">72dp</dimen>
+    <dimen name="sub_cover_corner_radius">10dp</dimen>
+    <dimen name="sub_app_bar_height_with_cover">400dp</dimen>
     <dimen name="appcompat_dialog_background_inset">16dp</dimen>
     <dimen name="bottom_nav_height">100dp</dimen>
     <dimen name="bottom_nav_height_raw">67dp</dimen>

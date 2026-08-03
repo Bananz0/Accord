@@ -28,6 +28,10 @@ import androidx.media3.common.util.UnstableApi
 import com.google.android.material.appbar.AppBarLayout
 import com.google.android.material.appbar.CollapsingToolbarLayout
 import com.google.android.material.appbar.MaterialToolbar
+import android.widget.ImageView
+import androidx.core.view.updateLayoutParams
+import coil3.load
+import com.google.android.material.card.MaterialCardView
 import org.akanework.gramophone.R
 import org.akanework.gramophone.logic.enableEdgeToEdgePaddingListener
 import org.akanework.gramophone.logic.ui.MyRecyclerView
@@ -152,6 +156,26 @@ class GeneralSubFragment : BaseFragment(true) {
 
         // Show title text.
         collapsingToolbarLayout.title = title
+
+        // Album artwork. Only albums have a cover worth showing here, and the header is grown to
+        // make room for it only in that case so artists and genres keep their compact header.
+        val coverUri = when (itemType) {
+            R.id.album -> libraryViewModel.albumItemList.value?.getOrNull(position)?.cover
+            R.id.special_album -> libraryViewModel.privateAlbumList.getOrNull(position)?.cover
+            else -> null
+        }
+        if (coverUri != null) {
+            val coverFrame = rootView.findViewById<MaterialCardView>(R.id.sub_cover_frame)
+            val cover = rootView.findViewById<ImageView>(R.id.sub_cover)
+            coverFrame.visibility = View.VISIBLE
+            collapsingToolbarLayout.updateLayoutParams {
+                height = resources.getDimensionPixelSize(R.dimen.sub_app_bar_height_with_cover)
+            }
+            // No error()/placeholder() here: Coil3 has no Int overloads for them, so passing a
+            // drawable id silently binds to kotlin.error() and throws IllegalStateException at
+            // runtime. The ImageView's android:src provides the fallback instead.
+            cover.load(coverUri)
+        }
 
         val songAdapter =
             SongAdapter(
