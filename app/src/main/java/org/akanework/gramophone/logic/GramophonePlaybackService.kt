@@ -84,6 +84,7 @@ import org.akanework.gramophone.logic.utils.LrcUtils.extractAndParseLyrics
 import org.akanework.gramophone.logic.utils.LrcUtils.loadAndParseLyricsFile
 import org.akanework.gramophone.logic.utils.MediaStoreUtils
 import org.akanework.gramophone.logic.utils.exoplayer.EndedWorkaroundPlayer
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinLyricsSource
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinMediaCache
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinReporter
 import org.akanework.gramophone.logic.data.lastfm.LastFmScrobbler
@@ -591,6 +592,13 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
             } else {
                 // add empty element at the beginning
                 lrc.add(0, MediaStoreUtils.Lyric())
+            }
+            if (lrc == null) {
+                // Last resort: ask the server. This catches .lrc files sitting beside the track on
+                // the server, which the client never sees because it only receives the audio
+                // stream. Tried last because it is the only branch that costs a network round trip.
+                lrc = JellyfinLyricsSource.load(this@GramophonePlaybackService, mediaItem?.mediaId, trim)
+                lrc?.add(0, MediaStoreUtils.Lyric())
             }
             CoroutineScope(Dispatchers.Main).launch {
                 mediaSession?.let {

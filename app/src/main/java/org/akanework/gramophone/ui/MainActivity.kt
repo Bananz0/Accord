@@ -59,7 +59,6 @@ import org.akanework.gramophone.logic.data.jellyfin.JellyfinIdMap
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinLibraryLoader
 import org.akanework.gramophone.logic.utils.DatabaseUtils
 import org.akanework.gramophone.logic.utils.MediaStoreUtils
-import org.akanework.gramophone.logic.utils.RecommendationFactory
 import org.akanework.gramophone.ui.components.PlayerBottomSheet
 import org.akanework.gramophone.ui.fragments.BaseFragment
 
@@ -224,12 +223,6 @@ class MainActivity : AppCompatActivity() {
         libraryViewModel.folderStructure.value = store.folderStructure
         libraryViewModel.shallowFolderStructure.value = store.shallowFolder
         libraryViewModel.allFolderSet.value = store.folders
-        if (libraryViewModel.recommendList.value == null) {
-            libraryViewModel.recommendList.value = RecommendationFactory(
-                context = this,
-                libraryViewModel = libraryViewModel
-            ).fetchRecommendList()
-        }
     }
 
     /**
