@@ -71,8 +71,7 @@ class LibraryCategoryAdapter(
                 EntryType.SONG -> R.id.songs
                 EntryType.ALBUM -> R.id.albums
                 EntryType.ARTIST -> R.id.artists
-                // Playlists have no screen yet; leaving the tap inert beats pushing an empty one.
-                EntryType.PLAYLIST -> null
+                EntryType.PLAYLIST -> R.id.playlists
             }
             category?.let {
                 fragment.findBaseWrapperFragment()!!

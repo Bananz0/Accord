@@ -102,8 +102,8 @@ Extended Quota Mode. Needs a privacy policy and a UI following Spotify's brandin
 reviewed and not guaranteed. Playlist reading — all Accord uses — is unaffected by the 2025
 endpoint restrictions.
 
-- [ ] Register the app, set `accord://spotify-callback` as a redirect URI.
-- [ ] Put the client ID in `package.properties` as `spotifyClientId` so users do not paste their own.
+- [x] Register the app, set `accord://spotify-callback` as a redirect URI.
+- [x] Put the client ID in `package.properties` as `spotifyClientId` so users do not paste their own.
 - [ ] Apply for Extended Quota Mode.
 
 ### YouTube Music — OAuth verification
@@ -122,8 +122,5 @@ at **100 users**.
 
 ## Smaller things
 
-- [ ] `preference_basic` does not visibly grey out a disabled entry, so "Import playlists" looks
-      tappable before a Spotify account is linked.
-- [ ] Playlists still has no screen from the Library category list; the tap is deliberately inert.
 - [ ] Floating mini-player: needs `PlayerBottomSheet` restructured onto upstream Accord's
       `FloatingPanelLayout` + `PreviewPlayer`.

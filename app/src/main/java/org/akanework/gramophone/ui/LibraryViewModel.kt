@@ -46,6 +46,17 @@ class LibraryViewModel : ViewModel() {
     var privatePlaylistId: Long = 0
 
     /**
+     * The app's own playlists, resolved into library items so the ordinary playlist UI can show
+     * them.
+     *
+     * [privatePlaylistList] holds only track ids, and [playlistList] used to come from MediaStore,
+     * which is gone. Without this, a playlist imported from Spotify exists in the database and is
+     * visible nowhere.
+     */
+    val privatePlaylistsAsLibrary: MutableLiveData<List<MediaStoreUtils.Playlist>> =
+        MutableLiveData(emptyList())
+
+    /**
      * Whether a library sync is running.
      *
      * Lives here rather than in MainActivity so the header can show a quiet indicator instead of a
