@@ -1,12 +1,13 @@
 package org.akanework.gramophone.ui.fragments
 
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ImageButton
 import android.widget.TextView
-import androidx.appcompat.content.res.AppCompatResources
 import androidx.core.view.ViewCompat
 import androidx.core.widget.NestedScrollView
 import androidx.fragment.app.activityViewModels
@@ -19,6 +20,15 @@ import org.akanework.gramophone.R
 import org.akanework.gramophone.logic.applyGeneralMenuItem
 import org.akanework.gramophone.logic.enableEdgeToEdgePaddingListener
 import org.akanework.gramophone.logic.utils.RecommendationFactory
+import androidx.lifecycle.lifecycleScope
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.akanework.gramophone.logic.data.db.AppDatabase
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinClientHolder
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinItemResolver
+import org.akanework.gramophone.ui.JellyfinLoginActivity
 import org.akanework.gramophone.ui.LibraryViewModel
 import org.akanework.gramophone.ui.MainActivity
 import org.akanework.gramophone.ui.adapters.HomepageCarouselAdapter
@@ -53,12 +63,14 @@ class HomepageFragment : BaseFragment(null), Observer<RecommendationFactory.Reco
 
         appBarLayout = rootView.findViewById(R.id.appbarlayout)
         appBarLayout.enableEdgeToEdgePaddingListener()
-        topAppBar.overflowIcon = AppCompatResources.getDrawable(
-            requireContext(), R.drawable.ic_more_vert_bold
-        )!!.apply {
-            setTint(
-                resources.getColor(R.color.contrast_themeColor, null)
-            )
+
+        // The header uses the upstream Accord circular actions instead of the stock overflow
+        // affordance. The menu itself is unchanged - the ellipsis button just opens it - so
+        // applyGeneralMenuItem() below still wires up refresh/equalizer/settings as before.
+        val moreButton = rootView.findViewById<ImageButton>(R.id.nav_action_more)
+        moreButton.setOnClickListener { topAppBar.showOverflowMenu() }
+        rootView.findViewById<ImageButton>(R.id.nav_action_account).setOnClickListener {
+            showAccountSheet()
         }
 
         nestedScrollView.enableEdgeToEdgePaddingListener()
@@ -78,6 +90,47 @@ class HomepageFragment : BaseFragment(null), Observer<RecommendationFactory.Reco
         topAppBar.applyGeneralMenuItem(this, libraryViewModel)
 
         return rootView
+    }
+
+    /**
+     * Shows which server this device is signed in to, and offers to sign out.
+     *
+     * Sending an already-signed-in user to the login screen would be a dead end, so the account
+     * button leads here instead. Reading the credential store opens keystore-backed preferences,
+     * which is disk work, so the lookup happens off the main thread.
+     */
+    private fun showAccountSheet() {
+        viewLifecycleOwner.lifecycleScope.launch {
+            val server = withContext(Dispatchers.IO) {
+                JellyfinClientHolder.credentials.let { it.serverUrl to it.userId }
+            }
+            if (!isAdded) return@launch
+            MaterialAlertDialogBuilder(requireContext())
+                .setTitle(R.string.jellyfin_account_title)
+                .setMessage(getString(R.string.jellyfin_account_message, server.first ?: "-"))
+                .setNegativeButton(android.R.string.cancel, null)
+                .setPositiveButton(R.string.jellyfin_sign_out) { _, _ -> signOut() }
+                .show()
+        }
+    }
+
+    private fun signOut() {
+        viewLifecycleOwner.lifecycleScope.launch {
+            withContext(Dispatchers.IO) {
+                JellyfinClientHolder.credentials.apply {
+                    clearSession()
+                    publishSessionFlag(requireContext().applicationContext)
+                }
+                JellyfinClientHolder.invalidate()
+                // The cached library belongs to the account being signed out of; leaving it would
+                // show another user's collection after the next sign in.
+                AppDatabase.getInstance(requireContext()).cachedSongDao().deleteAll()
+                JellyfinItemResolver.clear()
+            }
+            if (!isAdded) return@launch
+            startActivity(Intent(requireContext(), JellyfinLoginActivity::class.java))
+            requireActivity().finish()
+        }
     }
 
     override fun onDestroy() {

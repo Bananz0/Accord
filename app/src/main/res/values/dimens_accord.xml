@@ -2,6 +2,8 @@
 <!-- Dimension tokens from the upstream Accord UI. Names already present in dimens.xml are
      left alone so existing layouts keep their current metrics. -->
 <resources>
+    <!-- Circular header action buttons, sized to match the upstream navigation bar. -->
+    <dimen name="navigation_bar_button_size">32dp</dimen>
     <dimen name="appcompat_dialog_background_inset">16dp</dimen>
     <dimen name="bottom_nav_height">100dp</dimen>
     <dimen name="bottom_nav_height_raw">67dp</dimen>
