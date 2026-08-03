@@ -12,6 +12,18 @@
         <item name="textAppearanceSmallPopupMenu">@style/TextAppearance.App.BodyLarge</item>
         <item name="popupMenuBackground">@drawable/popup_background</item>
 
+        <!--
+            Typography and accent from the upstream Accord UI.
+
+            Applied onto this Material3 theme rather than adopting upstream's Theme.Accord
+            wholesale: that one descends from MaterialComponents (M2), and this app uses M3
+            widgets throughout (bottom sheets, alert dialogs, the M3 colour attributes below),
+            which would fail to inflate against an M2 parent.
+        -->
+        <item name="android:fontFamily">@font/sf_pro_regular</item>
+        <item name="fontFamily">@font/sf_pro_regular</item>
+        <item name="colorAccent">@color/accentColor</item>
+
         <!-- Fallback -->
         <item name="colorPrimary">@color/md_theme_primary</item>
         <item name="colorOnPrimary">@color/md_theme_onPrimary</item>
