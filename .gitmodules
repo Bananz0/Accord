@@ -1,0 +1,3 @@
+[submodule "Cupertino"]
+	path = Cupertino
+	url = https://github.com/FoedusProgramme/Cupertino.git

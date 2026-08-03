@@ -105,8 +105,16 @@ fun MediaItem.getUri(): Uri? {
     return localConfiguration?.uri
 }
 
+/**
+ * The local file backing this item, or null when there is none.
+ *
+ * Uri.toFile() throws for anything that is not a file:// Uri, so this must stay guarded now that
+ * items can be http(s):// streams - the lyrics loader calls it for every track that starts.
+ */
 fun MediaItem.getFile(): File? {
-    return getUri()?.toFile()
+    val uri = getUri() ?: return null
+    if (uri.scheme != ContentResolver.SCHEME_FILE) return null
+    return uri.toFile()
 }
 
 fun Activity.closeKeyboard(view: View) {

@@ -172,6 +172,8 @@ configurations.configureEach {
 dependencies {
     val media3Version = "1.6.0-rc01"
     val roomVersion = "2.7.0-rc02"
+    val jellyfinSdkVersion = "1.8.12"
+    val slf4jVersion = "2.0.18"
 
     ksp("androidx.room:room-compiler:$roomVersion")
     implementation("androidx.room:room-runtime:$roomVersion")
@@ -193,8 +195,22 @@ dependencies {
     implementation("com.google.android.flexbox:flexbox:3.0.0")
     implementation("me.zhanghai.android.fastscroll:library:1.3.0")
     implementation("io.coil-kt.coil3:coil:3.1.0")
+    implementation("io.coil-kt.coil3:coil-network-okhttp:3.1.0")
+    // Jellyfin: official Kotlin SDK (LGPL-3.0), shares one OkHttp client with media3
+    implementation("org.jellyfin.sdk:jellyfin-core:$jellyfinSdkVersion")
+    implementation("androidx.media3:media3-datasource-okhttp:$media3Version")
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    // The SDK logs through kotlin-logging, which needs an slf4j binding on the classpath or every
+    // API call dies with NoClassDefFoundError. Visible while developing, silent in release.
+    debugImplementation("org.slf4j:slf4j-simple:$slf4jVersion")
+    releaseImplementation("org.slf4j:slf4j-nop:$slf4jVersion")
     implementation(files("../libs/lib-decoder-ffmpeg-release.aar"))
     implementation(projects.recyclerview)
+    // Apple-style widget library the upstream Accord UI is built on.
+    implementation(projects.cupertino)
+    implementation(libs.hiddenapibypass)
+    // Spring physics for the iOS-style rubber-band overscroll.
+    implementation("androidx.dynamicanimation:dynamicanimation:1.0.0")
     implementation("androidx.core:core-ktx:1.13.1")
     // --- below does not apply to release builds ---
     debugImplementation("com.squareup.leakcanary:leakcanary-android:3.0-alpha-8")

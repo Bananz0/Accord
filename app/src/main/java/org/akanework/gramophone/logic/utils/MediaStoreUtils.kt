@@ -86,7 +86,7 @@ object MediaStoreUtils {
         override val songList: MutableList<MediaItem>
     }
 
-    private data class AlbumImpl(
+    internal data class AlbumImpl(
         override val id: Long?,
         override val title: String?,
         override val artist: String?,
@@ -228,7 +228,7 @@ object MediaStoreUtils {
         }
     }
 
-    private fun handleMediaFolder(path: String, rootNode: FileNode): FileNode {
+    internal fun handleMediaFolder(path: String, rootNode: FileNode): FileNode {
         val newPath = if (path.endsWith('/')) path.substring(1, path.length - 1)
         else path.substring(1)
         val splitPath = newPath.split('/')
@@ -244,7 +244,7 @@ object MediaStoreUtils {
         return node
     }
 
-    private fun handleShallowMediaItem(
+    internal fun handleShallowMediaItem(
         mediaItem: MediaItem,
         albumId: Long?,
         path: String,

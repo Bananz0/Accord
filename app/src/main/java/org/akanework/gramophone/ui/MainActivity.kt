@@ -18,11 +18,13 @@
 package org.akanework.gramophone.ui
 
 import android.app.NotificationManager
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.Choreographer
 import android.widget.Toast
 import androidx.activity.result.ActivityResultLauncher
@@ -43,13 +45,22 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.DefaultMediaNotificationProvider
 import coil3.imageLoader
 import com.google.android.material.bottomnavigation.BottomNavigationView
+import com.google.android.material.snackbar.Snackbar
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import org.akanework.gramophone.R
 import org.akanework.gramophone.logic.enableEdgeToEdgeProperly
 import org.akanework.gramophone.logic.postAtFrontOfQueueAsync
-import org.akanework.gramophone.logic.utils.MediaStoreUtils.updateLibraryWithInCoroutine
+import org.akanework.gramophone.logic.data.db.AppDatabase
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinClientHolder
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinCredentialStore
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinIdMap
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinLibraryLoader
+import org.akanework.gramophone.logic.utils.DatabaseUtils
+import org.akanework.gramophone.logic.utils.MediaStoreUtils
+import org.akanework.gramophone.logic.utils.RecommendationFactory
 import org.akanework.gramophone.ui.components.PlayerBottomSheet
 import org.akanework.gramophone.ui.fragments.BaseFragment
 
@@ -97,16 +108,152 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * updateLibrary:
-     *   Calls [updateLibraryWithInCoroutine] in MediaStoreUtils and updates library.
+     *   Syncs the library from the Jellyfin server into [libraryViewModel].
      */
     fun updateLibrary(then: (() -> Unit)? = null) {
         // If library load takes more than 3s, exit splash to avoid ANR
         if (!ready) handler.postDelayed(reportFullyDrawnRunnable, 3000)
-        CoroutineScope(Dispatchers.Default).launch {
-            updateLibraryWithInCoroutine(libraryViewModel, this@MainActivity) {
+        CoroutineScope(Dispatchers.IO).launch {
+            val api = JellyfinClientHolder.api()
+            if (api == null) {
+                // Signed out; the login screen is responsible for getting us back here.
+                withContext(Dispatchers.Main) {
+                    if (!ready) reportFullyDrawn()
+                    then?.let { it() }
+                }
+                return@launch
+            }
+            val db = AppDatabase.getInstance(this@MainActivity)
+            val cacheDao = db.cachedSongDao()
+            val idMap = JellyfinIdMap(db.jellyfinIdDao())
+            val loader = JellyfinLibraryLoader(api, idMap)
+
+            // Show whatever was cached first. A full sync of a large library takes the better part
+            // of a minute, and there is no reason to stare at an empty screen while it runs.
+            val cached = try {
+                loader.loadFromCache(cacheDao)
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Reading library cache failed", e)
+                null
+            }
+            if (cached != null) {
+                val cachedFavourites = loader.favouriteLocalIds.toSet()
+                withContext(Dispatchers.Main) {
+                    publishLibrary(cached)
+                    if (!ready) reportFullyDrawn()
+                    then?.let { it() }
+                }
+                DatabaseUtils.getPrivatePlaylist(libraryViewModel, this@MainActivity)
+                DatabaseUtils.syncFavouritesFromServer(
+                    cachedFavourites, libraryViewModel, this@MainActivity
+                )
+            }
+
+            withContext(Dispatchers.Main) { showSyncBar() }
+            var favouriteIds: Set<Long> = emptySet()
+            val store = try {
+                loader.load(cacheDao) { loaded, total ->
+                    // Fired once per 500-item page, so posting straight to the main thread is
+                    // cheap enough without extra throttling.
+                    handler.post { updateSyncBar(loaded, total) }
+                }.also { favouriteIds = loader.favouriteLocalIds.toSet() }
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Jellyfin library sync failed", e)
+                null
+            }
+            if (store != null) {
+                // Favourites are owned by the server, so adopt its view before the UI reads them.
+                DatabaseUtils.getPrivatePlaylist(libraryViewModel, this@MainActivity)
+                DatabaseUtils.syncFavouritesFromServer(
+                    favouriteIds, libraryViewModel, this@MainActivity
+                )
+            }
+            // With a cache already on screen, a failed refresh is not worth a toast - the user has
+            // a working library and the next launch will try again.
+            val hadCache = cached != null
+            withContext(Dispatchers.Main) {
+                if (store != null) {
+                    publishLibrary(store)
+                } else if (!hadCache) {
+                    Toast.makeText(
+                        this@MainActivity,
+                        getString(R.string.jellyfin_error_unreachable),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+                hideSyncBar()
                 if (!ready) reportFullyDrawn()
                 then?.let { it() }
             }
+        }
+    }
+
+    /** Pushes a built library into the view model. Main thread only. */
+    private fun publishLibrary(store: MediaStoreUtils.LibraryStoreClass) {
+        libraryViewModel.mediaItemList.value = store.songList
+        libraryViewModel.albumItemList.value = store.albumList
+        libraryViewModel.artistItemList.value = store.artistList
+        libraryViewModel.albumArtistItemList.value = store.albumArtistList
+        libraryViewModel.genreItemList.value = store.genreList
+        libraryViewModel.dateItemList.value = store.dateList
+        libraryViewModel.playlistList.value = store.playlistList
+        libraryViewModel.folderStructure.value = store.folderStructure
+        libraryViewModel.shallowFolderStructure.value = store.shallowFolder
+        libraryViewModel.allFolderSet.value = store.folders
+        if (libraryViewModel.recommendList.value == null) {
+            libraryViewModel.recommendList.value = RecommendationFactory(
+                context = this,
+                libraryViewModel = libraryViewModel
+            ).fetchRecommendList()
+        }
+    }
+
+    /**
+     * Progress for the library sync.
+     *
+     * The splash screen gives up after 3s but a full sync of a large library takes far longer, so
+     * without this the user stares at an empty library with no indication anything is happening.
+     */
+    private var syncBar: Snackbar? = null
+
+    private fun showSyncBar() {
+        if (syncBar != null) return
+        syncBar = Snackbar.make(
+            container,
+            getString(R.string.jellyfin_syncing_library),
+            Snackbar.LENGTH_INDEFINITE
+        ).apply {
+            anchorView = bottomNavigationView
+            show()
+        }
+    }
+
+    private fun updateSyncBar(loaded: Int, total: Int) {
+        syncBar?.setText(
+            if (total > 0) getString(R.string.jellyfin_syncing_progress, loaded, total)
+            else getString(R.string.jellyfin_syncing_library)
+        )
+    }
+
+    private fun hideSyncBar() {
+        syncBar?.dismiss()
+        syncBar = null
+    }
+
+    /**
+     * Sends the user to sign in when there is no stored session, otherwise runs [onStaying].
+     *
+     * This must decide synchronously. Deferring the decision to a coroutine and starting the login
+     * activity afterwards counts as a background activity launch, which StrictMode's penaltyDeath
+     * kills the process for on a cold start. The flag it reads is a plain boolean mirrored out of
+     * the encrypted store, so no keystore work happens here.
+     */
+    private fun routeToLoginIfSignedOut(onStaying: () -> Unit) {
+        if (JellyfinCredentialStore.hasStoredSession(this)) {
+            onStaying()
+        } else {
+            startActivity(Intent(this, JellyfinLoginActivity::class.java))
+            finish()
         }
     }
 
@@ -196,39 +343,9 @@ class MainActivity : AppCompatActivity() {
             bottomNavigationView.translationY = translationY
         }
 
-        // Check all permissions.
-        if ((Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
-                    && ContextCompat.checkSelfPermission(
-                this,
-                android.Manifest.permission.READ_MEDIA_AUDIO,
-            ) != PackageManager.PERMISSION_GRANTED)
-            || (Build.VERSION.SDK_INT <= Build.VERSION_CODES.Q
-                    && ContextCompat.checkSelfPermission(
-                this,
-                android.Manifest.permission.WRITE_EXTERNAL_STORAGE,
-            ) != PackageManager.PERMISSION_GRANTED)
-            || (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
-                    && ContextCompat.checkSelfPermission(
-                this,
-                android.Manifest.permission.READ_EXTERNAL_STORAGE,
-            ) != PackageManager.PERMISSION_GRANTED)
-        ) {
-            // Ask if was denied.
-            ActivityCompat.requestPermissions(
-                this,
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
-                    arrayOf(android.Manifest.permission.READ_MEDIA_AUDIO)
-                else if (Build.VERSION.SDK_INT > Build.VERSION_CODES.Q)
-                    arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE)
-                else
-                    arrayOf(
-                        android.Manifest.permission.READ_EXTERNAL_STORAGE,
-                        android.Manifest.permission.WRITE_EXTERNAL_STORAGE
-                    ),
-                PERMISSION_READ_MEDIA_AUDIO,
-            )
-        } else {
-            // If all permissions are granted, we can update library now.
+        // The library lives on a Jellyfin server now, so there are no storage permissions to ask
+        // for - the gate is whether we have a session.
+        routeToLoginIfSignedOut {
             if (libraryViewModel.mediaItemList.value == null) {
                 updateLibrary {
                     playerBottomSheet.fullPlayer.updateFavStatus()
@@ -251,31 +368,6 @@ class MainActivity : AppCompatActivity() {
 
     fun retractNavigationViewWithProgress(progressHeight: Float) {
         bottomNavigationView.translationY = progressHeight
-    }
-
-    /**
-     * onRequestPermissionResult:
-     *   Update library after permission is granted.
-     */
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<String>,
-        grantResults: IntArray,
-    ) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-
-        if (requestCode == PERMISSION_READ_MEDIA_AUDIO) {
-            if (grantResults.isNotEmpty() &&
-                grantResults[0] == PackageManager.PERMISSION_GRANTED
-            ) {
-                updateLibrary {
-                    playerBottomSheet.fullPlayer.updateFavStatus()
-                }
-            } else {
-                reportFullyDrawn()
-                // TODO: Show a prompt here
-            }
-        }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {

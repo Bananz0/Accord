@@ -1,10 +1,8 @@
 package org.akanework.gramophone.ui.components
 
 import android.animation.ValueAnimator
-import android.content.ContentResolver
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
@@ -25,6 +23,12 @@ import androidx.core.content.ContextCompat
 import androidx.core.graphics.createBitmap
 import androidx.core.graphics.drawable.toDrawable
 import androidx.core.view.doOnLayout
+import coil3.imageLoader
+import coil3.request.ImageRequest
+import coil3.request.SuccessResult
+import coil3.request.allowHardware
+import coil3.size.Size
+import coil3.toBitmap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -128,7 +132,7 @@ class BlendView @JvmOverloads constructor(
 
     fun setImageUri(uri: Uri) {
         CoroutineScope(Dispatchers.IO).launch {
-            val originalBitmap = getBitmapFromUri(context.contentResolver, uri)
+            val originalBitmap = getBitmapFromUri(context, uri)
             if (originalBitmap != null && !areBitmapsSame(originalBitmap, previousBitmap)) {
                 enhanceBitmap(originalBitmap).let { enhancedBitmap ->
                     withContext(Dispatchers.Main) {
@@ -196,37 +200,28 @@ class BlendView @JvmOverloads constructor(
         }
     }
 
-    private fun getBitmapFromUri(contentResolver: ContentResolver, uri: Uri): Bitmap? {
-        var inputStream: InputStream? = null
-        return try {
-            inputStream = contentResolver.openInputStream(uri)
-            val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeStream(inputStream, null, options)
-            inputStream?.close()
-
-            options.inSampleSize = calculateInSampleSize(options)
-            options.inJustDecodeBounds = false
-            inputStream = contentResolver.openInputStream(uri)
-            BitmapFactory.decodeStream(inputStream, null, options)
-        } catch (e: FileNotFoundException) {
-            e.printStackTrace()
-            null
-        } finally {
-            inputStream?.close()
+    /**
+     * Loads the artwork through Coil rather than ContentResolver.
+     *
+     * ContentResolver.openInputStream() only understands content:// and file://, so once artwork
+     * started coming from Jellyfin over http:// every load here threw FileNotFoundException and the
+     * blurred backdrop stayed blank. Coil handles the scheme, and its disk cache means the backdrop
+     * reuses the bitmap the rest of the UI already fetched instead of hitting the server again.
+     *
+     * The old two-pass BitmapFactory decode existed purely to downsample to [PICTURE_SIZE]; Coil
+     * does that directly via size().
+     */
+    private suspend fun getBitmapFromUri(context: Context, uri: Uri): Bitmap? {
+        val request = ImageRequest.Builder(context)
+            .data(uri)
+            .size(PICTURE_SIZE, PICTURE_SIZE)
+            // enhanceBitmap() reads pixels back, which a hardware bitmap does not allow.
+            .allowHardware(false)
+            .build()
+        return when (val result = context.imageLoader.execute(request)) {
+            is SuccessResult -> result.image.toBitmap()
+            else -> null
         }
-    }
-
-    private fun calculateInSampleSize(options: BitmapFactory.Options): Int {
-        val (height, width) = options.run { outHeight to outWidth }
-        var inSampleSize = 1
-        if (height > PICTURE_SIZE || width > PICTURE_SIZE) {
-            val halfHeight = height / 2
-            val halfWidth = width / 2
-            while ((halfHeight / inSampleSize) >= PICTURE_SIZE && (halfWidth / inSampleSize) >= PICTURE_SIZE) {
-                inSampleSize *= 2
-            }
-        }
-        return inSampleSize
     }
 
     private fun enhanceBitmap(bitmap: Bitmap): Bitmap {

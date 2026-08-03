@@ -8,6 +8,7 @@ import org.akanework.gramophone.logic.data.db.AppDatabase
 import org.akanework.gramophone.logic.data.db.entity.MediaItem
 import org.akanework.gramophone.logic.data.db.entity.Playlist
 import org.akanework.gramophone.logic.data.db.entity.PlaylistWithMediaItem
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinReporter
 import org.akanework.gramophone.ui.LibraryViewModel
 
 object DatabaseUtils {
@@ -108,6 +109,8 @@ object DatabaseUtils {
         context: Context
     ) {
         addSongToPlaylist(mediaItemId, libraryViewModel.privatePlaylistId, libraryViewModel, context)
+        // Mirror to the server so the star shows up in the web client and every other device.
+        JellyfinReporter(context).setFavourite(mediaItemId.toString(), true)
     }
 
     suspend fun removeFavouriteSong(
@@ -116,6 +119,43 @@ object DatabaseUtils {
         context: Context
     ) {
         removeFromPlaylist(mediaItemId, libraryViewModel.privatePlaylistId, libraryViewModel, context)
+        JellyfinReporter(context).setFavourite(mediaItemId.toString(), false)
+    }
+
+    /**
+     * Replaces the local favourites playlist with what the server says.
+     *
+     * Favourites are owned by Jellyfin, so a sync is authoritative: a track starred on the web
+     * client should appear here, and one unstarred elsewhere should disappear. Only the difference
+     * is written, so an unchanged library costs nothing.
+     */
+    suspend fun syncFavouritesFromServer(
+        favouriteIds: Set<Long>,
+        libraryViewModel: LibraryViewModel,
+        context: Context,
+    ) {
+        try {
+            val playlistId = libraryViewModel.privatePlaylistId
+            withContext(Dispatchers.IO) {
+                val database = AppDatabase.getInstance(context)
+                val mediaItemDao = database.mediaItemDao()
+                val existing = database.playlistDao().getAllPlaylists()
+                    .find { it.playlist.playlistId == playlistId }
+                    ?.mediaItems?.map { it.mediaItemId }?.toSet() ?: emptySet()
+
+                for (id in favouriteIds - existing) {
+                    mediaItemDao.addMediaItem(MediaItem(id))
+                    mediaItemDao.addMediaItemToPlaylist(playlistId, id)
+                }
+                for (id in existing - favouriteIds) {
+                    mediaItemDao.removeMediaItemFromPlaylist(playlistId, id)
+                }
+            }
+            getPrivatePlaylist(libraryViewModel, context)
+            Log.d("DatabaseUtils", "Synced ${favouriteIds.size} favourites from Jellyfin")
+        } catch (e: Exception) {
+            Log.e("DatabaseUtils", "Error syncing favourites from server", e)
+        }
     }
 
     fun checkIfFavourite(

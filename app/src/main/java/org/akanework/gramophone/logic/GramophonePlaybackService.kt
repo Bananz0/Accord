@@ -84,6 +84,9 @@ import org.akanework.gramophone.logic.utils.LrcUtils.extractAndParseLyrics
 import org.akanework.gramophone.logic.utils.LrcUtils.loadAndParseLyricsFile
 import org.akanework.gramophone.logic.utils.MediaStoreUtils
 import org.akanework.gramophone.logic.utils.exoplayer.EndedWorkaroundPlayer
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinMediaCache
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinReporter
+import org.akanework.gramophone.logic.utils.exoplayer.GramophoneExtractorsFactory
 import org.akanework.gramophone.logic.utils.exoplayer.GramophoneMediaSourceFactory
 import org.akanework.gramophone.logic.utils.exoplayer.GramophoneRenderFactory
 import org.akanework.gramophone.ui.MainActivity
@@ -100,6 +103,8 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
 
     companion object {
         private const val TAG = "GramoPlaybackService"
+        /** Heartbeat for Jellyfin progress reporting, matching what the official clients send. */
+        private const val PROGRESS_REPORT_INTERVAL_MS = 10_000L
         private const val NOTIFY_CHANNEL_ID = "serviceFgsError"
         private const val NOTIFY_ID = 1
         private const val PENDING_INTENT_SESSION_ID = 0
@@ -132,6 +137,11 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
     private lateinit var lastPlayedManager: LastPlayedManager
     private val lyricsLock = Semaphore(1)
     private lateinit var prefs: SharedPreferences
+    private lateinit var reporter: JellyfinReporter
+
+    /** The track currently reported to Jellyfin as playing, by media3 media id. */
+    private var reportedMediaId: String? = null
+    private var lastReportedPositionMs: Long = 0L
 
     private fun getRepeatCommand() =
         when (controller!!.repeatMode) {
@@ -177,6 +187,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
     override fun onCreate() {
         instanceForWidgetAndLyricsOnly = this
         handler = Handler(Looper.getMainLooper())
+        reporter = JellyfinReporter(this)
         super.onCreate()
         nm = NotificationManagerCompat.from(this)
         prefs = PreferenceManager.getDefaultSharedPreferences(this)
@@ -255,11 +266,16 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
                         prefs.getBooleanStrict("ps_hardware_acc", true)
                     )
                     .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER),
-                GramophoneMediaSourceFactory(this)
+                GramophoneMediaSourceFactory(
+                    JellyfinMediaCache.dataSourceFactory(this),
+                    GramophoneExtractorsFactory()
+                )
                 /* .setMp3ExtractorFlags(Mp3Extractor.FLAG_ENABLE_INDEX_SEEKING))
             TODO flag breaks playback of AcousticGuitar.mp3, report exo bug + add UI toggle*/
             )
-                .setWakeMode(C.WAKE_MODE_LOCAL)
+                // Tracks stream over the network now, so the wake lock has to keep the radio up
+                // as well as the CPU.
+                .setWakeMode(C.WAKE_MODE_NETWORK)
                 .setSkipSilenceEnabled(prefs.getBooleanStrict("skip_silence", false))
                 .setAudioAttributes(
                     AudioAttributes
@@ -373,6 +389,13 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
     // alongside with the mediaSession.
     override fun onDestroy() {
         instanceForWidgetAndLyricsOnly = null
+        // Tell the server we stopped before tearing anything down, otherwise the session is left
+        // open and other clients keep showing this track as playing.
+        stopProgressReporting()
+        reportedMediaId?.let {
+            reporter.reportStopped(it, controller?.currentPosition ?: lastReportedPositionMs)
+            reportedMediaId = null
+        }
         // Important: this must happen before sending stop() as that changes state ENDED -> IDLE
         lastPlayedManager.save()
         mediaSession!!.player.stop()
@@ -574,10 +597,55 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
     override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
         lyrics = null
         lastPlayedManager.save()
+        // Close out the previous track before opening the new one, so the server sees a clean
+        // start/stop pair rather than two overlapping sessions.
+        reportedMediaId?.let { previous ->
+            reporter.reportStopped(previous, lastReportedPositionMs)
+        }
+        reportedMediaId = mediaItem?.mediaId
+        lastReportedPositionMs = 0L
+        reportedMediaId?.let {
+            reporter.reportStart(it, 0L, controller?.isPlaying != true)
+        }
     }
 
     override fun onIsPlayingChanged(isPlaying: Boolean) {
         lastPlayedManager.save()
+        // Pausing and resuming both need to reach the server promptly, otherwise other clients keep
+        // showing the track as still playing.
+        reportedMediaId?.let {
+            lastReportedPositionMs = controller?.currentPosition ?: 0L
+            reporter.reportProgress(it, lastReportedPositionMs, !isPlaying)
+        }
+        if (isPlaying) startProgressReporting() else stopProgressReporting()
+    }
+
+    /**
+     * Periodic progress reporting.
+     *
+     * Jellyfin expects a heartbeat while a track plays; without it the server's idea of the
+     * position drifts and the session eventually looks stale. Ten seconds matches what the official
+     * clients use - frequent enough to be useful, rare enough to be invisible on battery.
+     */
+    private fun startProgressReporting() {
+        stopProgressReporting()
+        handler.postDelayed(progressReportRunnable, PROGRESS_REPORT_INTERVAL_MS)
+    }
+
+    private fun stopProgressReporting() {
+        handler.removeCallbacks(progressReportRunnable)
+    }
+
+    private val progressReportRunnable = object : Runnable {
+        override fun run() {
+            val id = reportedMediaId
+            val player = controller
+            if (id != null && player != null) {
+                lastReportedPositionMs = player.currentPosition
+                reporter.reportProgress(id, lastReportedPositionMs, !player.isPlaying)
+            }
+            handler.postDelayed(this, PROGRESS_REPORT_INTERVAL_MS)
+        }
     }
 
     override fun onEvents(player: Player, events: Player.Events) {
