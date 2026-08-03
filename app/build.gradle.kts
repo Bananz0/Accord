@@ -70,6 +70,20 @@ android {
             "RELEASE_TYPE",
             "\"$releaseType\""
         )
+        // Last.fm application credentials. Deliberately empty by default: a key committed to an
+        // open-source client is a key anyone can extract, and Last.fm rate-limits and bans per key,
+        // so one leaked pair would break scrobbling for every user at once. Supply your own in
+        // package.properties, or paste them into the scrobbling settings screen at runtime.
+        buildConfigField(
+            "String",
+            "LASTFM_API_KEY",
+            "\"${readProperties(file("../package.properties")).getProperty("lastfmApiKey", "")}\""
+        )
+        buildConfigField(
+            "String",
+            "LASTFM_API_SECRET",
+            "\"${readProperties(file("../package.properties")).getProperty("lastfmApiSecret", "")}\""
+        )
         setProperty("archivesBaseName", "Accord-$versionName")
     }
 
@@ -199,6 +213,9 @@ dependencies {
     // Jellyfin: official Kotlin SDK (LGPL-3.0), shares one OkHttp client with media3
     implementation("org.jellyfin.sdk:jellyfin-core:$jellyfinSdkVersion")
     implementation("androidx.media3:media3-datasource-okhttp:$media3Version")
+    // Declared explicitly rather than leaned on transitively: LastFmClient talks to OkHttp
+    // directly, and a transitive dependency can vanish under a Coil or Jellyfin SDK bump.
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     // The SDK logs through kotlin-logging, which needs an slf4j binding on the classpath or every
     // API call dies with NoClassDefFoundError. Visible while developing, silent in release.

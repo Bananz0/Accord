@@ -7,6 +7,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageButton
+import android.widget.PopupMenu
 import android.widget.TextView
 import androidx.core.view.ViewCompat
 import androidx.core.widget.NestedScrollView
@@ -18,8 +19,8 @@ import com.google.android.material.appbar.AppBarLayout
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.progressindicator.CircularProgressIndicator
 import org.akanework.gramophone.R
-import org.akanework.gramophone.logic.applyGeneralMenuItem
 import org.akanework.gramophone.logic.enableEdgeToEdgePaddingListener
+import org.akanework.gramophone.logic.handleGeneralMenuItem
 import org.akanework.gramophone.logic.utils.RecommendationFactory
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
@@ -66,10 +67,18 @@ class HomepageFragment : BaseFragment(null), Observer<RecommendationFactory.Reco
         appBarLayout.enableEdgeToEdgePaddingListener()
 
         // The header uses the upstream Accord circular actions instead of the stock overflow
-        // affordance. The menu itself is unchanged - the ellipsis button just opens it - so
-        // applyGeneralMenuItem() below still wires up refresh/equalizer/settings as before.
+        // affordance, so the menu is presented from the ellipsis button rather than by the toolbar.
+        // The entries and their behaviour are unchanged - handleGeneralMenuItem is the same handler
+        // applyGeneralMenuItem installs on every other screen's toolbar.
         val moreButton = rootView.findViewById<ImageButton>(R.id.nav_action_more)
-        moreButton.setOnClickListener { topAppBar.showOverflowMenu() }
+        moreButton.setOnClickListener { anchor ->
+            PopupMenu(requireContext(), anchor).apply {
+                menuInflater.inflate(R.menu.home_menu, menu)
+                setOnMenuItemClickListener {
+                    handleGeneralMenuItem(it, this@HomepageFragment, libraryViewModel)
+                }
+            }.show()
+        }
         rootView.findViewById<ImageButton>(R.id.nav_action_account).setOnClickListener {
             showAccountSheet()
         }
@@ -92,8 +101,6 @@ class HomepageFragment : BaseFragment(null), Observer<RecommendationFactory.Reco
 
         ViewCompat.setNestedScrollingEnabled(recyclerView, false)
         ViewCompat.setNestedScrollingEnabled(recommendRecyclerView, false)
-
-        topAppBar.applyGeneralMenuItem(this, libraryViewModel)
 
         return rootView
     }

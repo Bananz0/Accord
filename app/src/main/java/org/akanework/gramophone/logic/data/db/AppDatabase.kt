@@ -9,12 +9,15 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import org.akanework.gramophone.logic.data.db.dao.CachedSongDao
 import org.akanework.gramophone.logic.data.db.dao.JellyfinIdDao
 import org.akanework.gramophone.logic.data.db.dao.MediaItemDao
+import org.akanework.gramophone.logic.data.db.dao.PendingScrobbleDao
 import org.akanework.gramophone.logic.data.db.dao.PlaylistDao
 import org.akanework.gramophone.logic.data.db.entity.CACHED_SONG_TABLE_NAME
 import org.akanework.gramophone.logic.data.db.entity.CachedSong
 import org.akanework.gramophone.logic.data.db.entity.JELLYFIN_ID_TABLE_NAME
 import org.akanework.gramophone.logic.data.db.entity.JellyfinId
 import org.akanework.gramophone.logic.data.db.entity.MediaItem
+import org.akanework.gramophone.logic.data.db.entity.PENDING_SCROBBLE_TABLE_NAME
+import org.akanework.gramophone.logic.data.db.entity.PendingScrobble
 import org.akanework.gramophone.logic.data.db.entity.Playlist
 import org.akanework.gramophone.logic.data.db.entity.PlaylistMediaItemCrossRef
 
@@ -27,8 +30,9 @@ const val APP_DATABASE_FILE_NAME = "app.db"
         PlaylistMediaItemCrossRef::class,
         JellyfinId::class,
         CachedSong::class,
+        PendingScrobble::class,
     ],
-    version = 3,
+    version = 4,
 )
 abstract class AppDatabase : RoomDatabase() {
 
@@ -36,6 +40,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun mediaItemDao(): MediaItemDao
     abstract fun jellyfinIdDao(): JellyfinIdDao
     abstract fun cachedSongDao(): CachedSongDao
+    abstract fun pendingScrobbleDao(): PendingScrobbleDao
 
     companion object {
         @Volatile
@@ -85,6 +90,22 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Adds the offline scrobble queue. Additive; it starts empty.
+         */
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `$PENDING_SCROBBLE_TABLE_NAME` (" +
+                            "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                            "`artist` TEXT NOT NULL, `title` TEXT NOT NULL, " +
+                            "`album` TEXT, `albumArtist` TEXT, " +
+                            "`durationSeconds` INTEGER, `trackNumber` INTEGER, " +
+                            "`timestampSeconds` INTEGER NOT NULL)"
+                )
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -92,7 +113,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     APP_DATABASE_FILE_NAME
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .build()
                     .apply { instance = this }
             }

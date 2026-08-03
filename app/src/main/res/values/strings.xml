@@ -259,4 +259,39 @@
     <string name="jellyfin_error_detail">Could not connect: %1$s</string>
     <string name="jellyfin_syncing_library">Syncing library…</string>
     <string name="jellyfin_syncing_progress">Syncing library… %1$d of %2$d</string>
+
+    <string name="settings_category_scrobbling">Scrobbling</string>
+    <string name="settings_scrobbling_summary">Send what you play to Last.fm</string>
+    <string name="lastfm_category_account">Account</string>
+    <string name="lastfm_category_scrobbling">Scrobbling</string>
+    <string name="lastfm_account">Last.fm account</string>
+    <string name="lastfm_account_linked">Connected as %1$s</string>
+    <string name="lastfm_account_not_linked">Not connected</string>
+    <string name="lastfm_account_needs_keys">Add an API key first</string>
+    <string name="lastfm_api_keys">API key</string>
+    <string name="lastfm_api_keys_summary">The application credentials Accord uses to talk to Last.fm</string>
+    <string name="lastfm_api_keys_explainer">Accord does not ship with a Last.fm API key. Create one for free at last.fm/api/account/create, then paste the key and shared secret here.</string>
+    <string name="lastfm_api_key">API key</string>
+    <string name="lastfm_api_secret">Shared secret</string>
+    <string name="lastfm_connect_title">Connect to Last.fm</string>
+    <string name="lastfm_connect">Connect</string>
+    <string name="lastfm_connecting">Connecting…</string>
+    <string name="lastfm_connected">Connected to Last.fm</string>
+    <string name="lastfm_disconnect">Disconnect</string>
+    <string name="lastfm_disconnect_message">Disconnect %1$s? Queued scrobbles will stay until you reconnect.</string>
+    <string name="lastfm_username">Username</string>
+    <string name="lastfm_password">Password</string>
+    <string name="lastfm_scrobble">Scrobble to Last.fm</string>
+    <string name="lastfm_scrobble_summary">Submit a play once you have heard half a track, or four minutes of it</string>
+    <string name="lastfm_pending">Waiting to be sent</string>
+    <string name="lastfm_error_empty">Enter your username and password</string>
+    <string name="lastfm_error_generic">Could not connect to Last.fm. Check your details and try again.</string>
+    <plurals name="lastfm_pending_count">
+        <item quantity="one">%1$d scrobble queued. Tap to send now.</item>
+        <item quantity="other">%1$d scrobbles queued. Tap to send now.</item>
+    </plurals>
+    <plurals name="lastfm_submitted_count">
+        <item quantity="one">Sent %1$d scrobble</item>
+        <item quantity="other">Sent %1$d scrobbles</item>
+    </plurals>
 </resources>

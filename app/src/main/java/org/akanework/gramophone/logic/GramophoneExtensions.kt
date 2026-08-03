@@ -41,6 +41,7 @@ import android.os.Looper
 import android.os.Message
 import android.os.StrictMode
 import android.util.TypedValue
+import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup.MarginLayoutParams
 import android.view.WindowInsets
@@ -597,13 +598,28 @@ fun View.scaleText(scale: Float) {
     scaleY = scale
 }
 
-@SuppressLint("StringFormatInvalid", "StringFormatMatches")
 fun MaterialToolbar.applyGeneralMenuItem(
     fragment: Fragment,
     libraryViewModel: LibraryViewModel
 ) {
-    this.setOnMenuItemClickListener {
-        when (it.itemId) {
+    this.setOnMenuItemClickListener { handleGeneralMenuItem(it, fragment, libraryViewModel) }
+}
+
+/**
+ * The shared handler behind the equalizer / refresh / settings menu.
+ *
+ * Split out of [applyGeneralMenuItem] so a screen that presents the menu from its own button - the
+ * home header, whose circular actions replace the toolbar's overflow affordance - can reuse the
+ * exact same behaviour instead of duplicating it.
+ */
+@SuppressLint("StringFormatInvalid", "StringFormatMatches")
+fun handleGeneralMenuItem(
+    item: MenuItem,
+    fragment: Fragment,
+    libraryViewModel: LibraryViewModel
+): Boolean {
+    run {
+        when (item.itemId) {
             R.id.equalizer -> {
                 val intent = Intent(android.media.audiofx.AudioEffect.ACTION_DISPLAY_AUDIO_EFFECT_CONTROL_PANEL).apply {
                     putExtra(android.media.audiofx.AudioEffect.EXTRA_PACKAGE_NAME, fragment.requireContext().packageName)
@@ -678,8 +694,8 @@ fun MaterialToolbar.applyGeneralMenuItem(
 
             else -> throw IllegalStateException()
         }
-        true
     }
+    return true
 }
 
 @RequiresApi(Build.VERSION_CODES.TIRAMISU)
