@@ -234,6 +234,9 @@
     <string name="lib4_desc" translatable="false">https://github.com/zhanghai/AndroidFastScroll</string>
     <string name="blur_lyrics">Blur lyrics</string>
     <string name="blur_lyrics_summary">Enable blur with lyrics (May impact performance)</string>
+    <string name="jellyfin_account_title">Jellyfin account</string>
+    <string name="jellyfin_account_message">Signed in to %1$s</string>
+    <string name="jellyfin_sign_out">Sign out</string>
     <string name="jellyfin_login_title">Connect to Jellyfin</string>
     <string name="jellyfin_login_subtitle">Sign in to your Jellyfin server to browse and play your music library.</string>
     <string name="jellyfin_server_url">Server address</string>
