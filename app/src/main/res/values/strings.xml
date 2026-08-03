@@ -291,6 +291,37 @@
         <item quantity="one">%1$d scrobble queued. Tap to send now.</item>
         <item quantity="other">%1$d scrobbles queued. Tap to send now.</item>
     </plurals>
+    <string name="settings_category_lidarr">Lidarr</string>
+    <string name="settings_lidarr_summary">Request music you do not own yet</string>
+    <string name="lidarr_category_server">Server</string>
+    <string name="lidarr_category_defaults">Defaults for new requests</string>
+    <string name="lidarr_server">Lidarr server</string>
+    <string name="lidarr_server_summary">Not set</string>
+    <string name="lidarr_server_explainer">Your own Lidarr instance. Requested albums are grabbed from your indexers and imported into the folder Jellyfin already watches, so they turn up in your library on the next scan. Find the API key under Settings → General in Lidarr.</string>
+    <string name="lidarr_server_url_hint">Address, e.g. http://192.168.1.10:8686</string>
+    <string name="lidarr_api_key">API key</string>
+    <string name="lidarr_save_and_test">Save and test</string>
+    <string name="lidarr_testing">Connecting…</string>
+    <string name="lidarr_connected">Connected to Lidarr %1$s</string>
+    <string name="lidarr_not_set">Not set</string>
+    <string name="lidarr_root_folder">Music folder</string>
+    <string name="lidarr_quality_profile">Quality profile</string>
+    <string name="lidarr_metadata_profile">Metadata profile</string>
+    <string name="lidarr_error_empty">Enter the address and API key</string>
+    <string name="lidarr_error_generic">Could not reach Lidarr. Check the address and API key.</string>
+    <string name="lidarr_not_configured">Set up Lidarr in settings first</string>
+    <string name="lidarr_request_missing">Request missing from Lidarr</string>
+    <string name="lidarr_requesting">Requesting…</string>
+    <string name="lidarr_no_matches">Lidarr found nothing for those tracks</string>
+    <plurals name="lidarr_requested">
+        <item quantity="one">Requested %1$d album from Lidarr</item>
+        <item quantity="other">Requested %1$d albums from Lidarr</item>
+    </plurals>
+    <plurals name="spotify_missing_prompt">
+        <item quantity="one">%1$d track is not in your library. Request it from Lidarr?</item>
+        <item quantity="other">%1$d tracks are not in your library. Request them from Lidarr?</item>
+    </plurals>
+
     <string name="settings_category_spotify">Spotify</string>
     <string name="settings_spotify_summary">Import your playlists</string>
     <string name="spotify_category_import">Playlists</string>

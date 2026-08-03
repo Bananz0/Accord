@@ -63,6 +63,13 @@
         android:title="@string/settings_category_downloads" />
 
     <Preference
+        android:icon="@drawable/ic_lidarr"
+        android:key="lidarr"
+        android:layout="@layout/preference_basic"
+        android:summary="@string/settings_lidarr_summary"
+        android:title="@string/settings_category_lidarr" />
+
+    <Preference
         android:icon="@drawable/ic_playlist_import"
         android:key="spotify"
         android:layout="@layout/preference_basic"

@@ -1,0 +1,219 @@
+package org.akanework.gramophone.logic.data.lidarr
+
+import android.util.Log
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinClientHolder
+import org.json.JSONArray
+import org.json.JSONObject
+
+/**
+ * Talks to the user's Lidarr instance.
+ *
+ * This is the bridge between "a playlist mentions a song I do not own" and "that song is in my
+ * Jellyfin library": Lidarr looks the album up, grabs it from the user's own indexers, and imports
+ * it into the music folder Jellyfin already watches.
+ *
+ * Only lookup and add are implemented. Deleting or re-downloading is destructive and belongs in
+ * Lidarr's own interface, not behind a menu item in a music player.
+ */
+class LidarrClient(
+    private val store: LidarrCredentialStore,
+    private val http: OkHttpClient = JellyfinClientHolder.apiHttpClient(),
+) {
+
+    class LidarrException(message: String, cause: Throwable? = null) : Exception(message, cause)
+
+    /** An album as Lidarr's metadata source describes it, before it exists locally. */
+    data class AlbumResult(
+        val foreignAlbumId: String,
+        val title: String,
+        val artistName: String,
+        val foreignArtistId: String,
+        val year: Int?,
+        val coverUrl: String?,
+        /** True when Lidarr already tracks this album, so requesting it again is pointless. */
+        val alreadyAdded: Boolean,
+    )
+
+    data class RootFolder(val path: String, val freeSpaceBytes: Long?)
+    data class Profile(val id: Int, val name: String)
+
+    /** Verifies the address and key, returning the instance version. */
+    suspend fun testConnection(): String {
+        val json = get("/api/v1/system/status")
+        return json.optString("version").ifBlank { "unknown" }
+    }
+
+    suspend fun rootFolders(): List<RootFolder> =
+        getArray("/api/v1/rootfolder").map { item ->
+            RootFolder(
+                path = item.optString("path"),
+                freeSpaceBytes = item.optLong("freeSpace").takeIf { it > 0 },
+            )
+        }
+
+    suspend fun qualityProfiles(): List<Profile> =
+        getArray("/api/v1/qualityprofile").map {
+            Profile(it.optInt("id"), it.optString("name"))
+        }
+
+    suspend fun metadataProfiles(): List<Profile> =
+        getArray("/api/v1/metadataprofile").map {
+            Profile(it.optInt("id"), it.optString("name"))
+        }
+
+    /**
+     * Searches Lidarr's metadata source for an album.
+     *
+     * [term] is matched loosely by Lidarr itself, so "artist - album" works about as well as a bare
+     * title and gives it more to disambiguate with.
+     */
+    suspend fun searchAlbums(term: String): List<AlbumResult> {
+        if (term.isBlank()) return emptyList()
+        val results = getArray("/api/v1/album/lookup", mapOf("term" to term))
+        return results.mapNotNull { item ->
+            val foreignAlbumId = item.optString("foreignAlbumId").takeIf { it.isNotBlank() }
+                ?: return@mapNotNull null
+            val artist = item.optJSONObject("artist")
+            AlbumResult(
+                foreignAlbumId = foreignAlbumId,
+                title = item.optString("title").ifBlank { "Untitled" },
+                artistName = artist?.optString("artistName").orEmpty(),
+                foreignArtistId = artist?.optString("foreignArtistId").orEmpty(),
+                year = item.optString("releaseDate").take(4).toIntOrNull(),
+                coverUrl = item.optJSONArray("images")?.let { images ->
+                    (0 until images.length())
+                        .mapNotNull { images.optJSONObject(it)?.optString("remoteUrl") }
+                        .firstOrNull { it.isNotBlank() }
+                },
+                // Lidarr gives an album an internal id once it is tracked; zero means it is not.
+                alreadyAdded = item.optInt("id", 0) > 0,
+            )
+        }
+    }
+
+    /**
+     * Adds an album and asks Lidarr to start searching for it.
+     *
+     * The artist has to be included even when adding a single album: Lidarr's model hangs albums off
+     * artists, and an artist it does not track yet has to be created in the same call. `monitor:
+     * specificAlbum` keeps it to the one album rather than pulling in the whole discography, which
+     * is what a request from a playlist means.
+     */
+    suspend fun addAlbum(album: AlbumResult): Boolean {
+        val rootFolder = store.rootFolderPath
+            ?: throw LidarrException("No root folder chosen")
+        val payload = JSONObject().apply {
+            put("foreignAlbumId", album.foreignAlbumId)
+            put("monitored", true)
+            put("addOptions", JSONObject().put("searchForNewAlbum", true))
+            put("artist", JSONObject().apply {
+                put("foreignArtistId", album.foreignArtistId)
+                put("qualityProfileId", store.qualityProfileId)
+                put("metadataProfileId", store.metadataProfileId)
+                put("rootFolderPath", rootFolder)
+                put("monitored", true)
+                // Do not start monitoring everything this artist releases from now on; the user
+                // asked for one album.
+                put("monitorNewItems", "none")
+                put("addOptions", JSONObject().apply {
+                    put("monitor", "specificAlbum")
+                    put("albumsToMonitor", JSONArray().put(album.foreignAlbumId))
+                    put("searchForMissingAlbums", false)
+                })
+            })
+        }
+        return try {
+            post("/api/v1/album", payload)
+            true
+        } catch (e: LidarrException) {
+            // Lidarr answers 400 with a validation message when the album is already tracked. That
+            // is the desired end state, not a failure worth showing the user.
+            if (e.message?.contains("already", ignoreCase = true) == true) {
+                Log.d(TAG, "Album ${album.title} already tracked by Lidarr")
+                true
+            } else {
+                throw e
+            }
+        }
+    }
+
+    private suspend fun get(path: String, query: Map<String, String> = emptyMap()): JSONObject =
+        withContext(Dispatchers.IO) {
+            JSONObject(executeRaw(buildRequest(path, query)))
+        }
+
+    private suspend fun getArray(
+        path: String,
+        query: Map<String, String> = emptyMap(),
+    ): List<JSONObject> = withContext(Dispatchers.IO) {
+        val array = JSONArray(executeRaw(buildRequest(path, query)))
+        (0 until array.length()).mapNotNull { array.optJSONObject(it) }
+    }
+
+    private suspend fun post(path: String, body: JSONObject): String = withContext(Dispatchers.IO) {
+        val request = buildRequest(path).newBuilder()
+            .post(body.toString().toRequestBody(JSON))
+            .build()
+        executeRaw(request)
+    }
+
+    private fun buildRequest(path: String, query: Map<String, String> = emptyMap()): Request {
+        val base = store.serverUrl?.takeIf { it.isNotBlank() }
+            ?: throw LidarrException("Lidarr address is not set")
+        val key = store.apiKey?.takeIf { it.isNotBlank() }
+            ?: throw LidarrException("Lidarr API key is not set")
+        val url = StringBuilder(base).append(path)
+        query.entries.forEachIndexed { index, (name, value) ->
+            url.append(if (index == 0) '?' else '&')
+                .append(name).append('=')
+                .append(java.net.URLEncoder.encode(value, "UTF-8"))
+        }
+        return Request.Builder()
+            .url(url.toString())
+            // Lidarr accepts the key as a header or a query parameter; the header keeps it out of
+            // its own request log.
+            .header("X-Api-Key", key)
+            .build()
+    }
+
+    private fun executeRaw(request: Request): String {
+        val (code, text) = try {
+            http.newCall(request).execute().use { it.code to it.body?.string().orEmpty() }
+        } catch (e: Exception) {
+            throw LidarrException("Could not reach Lidarr", e)
+        }
+        if (code !in 200..299) {
+            throw LidarrException(describeError(code, text))
+        }
+        return text
+    }
+
+    /**
+     * Lidarr reports validation failures as an array of {errorMessage} objects and auth failures as
+     * a bare status, so the useful part has to be dug out rather than shown raw.
+     */
+    private fun describeError(code: Int, body: String): String {
+        if (code == 401) return "Lidarr rejected the API key"
+        val fromArray = runCatching {
+            val array = JSONArray(body)
+            (0 until array.length())
+                .mapNotNull { array.optJSONObject(it)?.optString("errorMessage") }
+                .firstOrNull { it.isNotBlank() }
+        }.getOrNull()
+        val fromObject = runCatching {
+            JSONObject(body).optString("message").takeIf { it.isNotBlank() }
+        }.getOrNull()
+        return fromArray ?: fromObject ?: "Lidarr returned HTTP $code"
+    }
+
+    companion object {
+        private const val TAG = "LidarrClient"
+        private val JSON = "application/json; charset=utf-8".toMediaType()
+    }
+}

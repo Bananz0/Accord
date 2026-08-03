@@ -13,6 +13,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.akanework.gramophone.R
+import org.akanework.gramophone.logic.data.lidarr.LidarrCredentialStore
+import org.akanework.gramophone.logic.data.lidarr.LidarrRequester
 import org.akanework.gramophone.logic.data.spotify.SpotifyClient
 import org.akanework.gramophone.logic.data.spotify.SpotifyCredentialStore
 import org.akanework.gramophone.logic.data.spotify.SpotifyPlaylistImporter
@@ -222,6 +224,50 @@ class SpotifySettingsTopFragment : BasePreferenceFragment() {
                 getString(R.string.spotify_import_result, matched, missing),
                 Toast.LENGTH_LONG
             ).show()
+            offerToRequestMissing(results.flatMap { it.missingTracks })
         }
+    }
+
+    /**
+     * Offers to fetch the tracks the library did not have.
+     *
+     * This is the point of counting them: a playlist you can only half play is not much use, and
+     * Lidarr can go and get the rest so the next import matches everything.
+     */
+    private fun offerToRequestMissing(missing: List<SpotifyClient.Track>) {
+        if (missing.isEmpty()) return
+        if (!LidarrCredentialStore.isConfigured(requireContext())) return
+        MaterialAlertDialogBuilder(requireContext())
+            .setTitle(R.string.lidarr_request_missing)
+            .setMessage(
+                resources.getQuantityString(
+                    R.plurals.spotify_missing_prompt, missing.size, missing.size
+                )
+            )
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(R.string.spotify_import_action) { _, _ ->
+                Toast.makeText(requireContext(), R.string.lidarr_requesting, Toast.LENGTH_SHORT)
+                    .show()
+                viewLifecycleOwner.lifecycleScope.launch {
+                    val outcome = withContext(Dispatchers.IO) {
+                        LidarrRequester.request(
+                            requireContext(),
+                            missing.map {
+                                LidarrRequester.Wanted(it.artist, it.album, it.title)
+                            }
+                        )
+                    }
+                    if (!isAdded) return@launch
+                    Toast.makeText(
+                        requireContext(),
+                        if (outcome.requested == 0) getString(R.string.lidarr_no_matches)
+                        else resources.getQuantityString(
+                            R.plurals.lidarr_requested, outcome.requested, outcome.requested
+                        ),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+            .show()
     }
 }

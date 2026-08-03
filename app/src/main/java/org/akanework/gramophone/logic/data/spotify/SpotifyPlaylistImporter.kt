@@ -17,7 +17,16 @@ object SpotifyPlaylistImporter {
 
     private const val TAG = "SpotifyPlaylistImporter"
 
-    data class Result(val playlistName: String, val matched: Int, val missing: Int)
+    /**
+     * [missingTracks] carries the tracks that found no local match, so the caller can offer to
+     * request them from Lidarr - the whole point of noticing they are missing.
+     */
+    data class Result(
+        val playlistName: String,
+        val matched: Int,
+        val missing: Int,
+        val missingTracks: List<SpotifyClient.Track> = emptyList(),
+    )
 
     /**
      * Matches [tracks] against [library] and stores the result as a private playlist.
@@ -32,12 +41,12 @@ object SpotifyPlaylistImporter {
     ): Result {
         val index = buildIndex(library)
         val matched = LinkedHashSet<Long>()
-        var missing = 0
+        val missingTracks = mutableListOf<SpotifyClient.Track>()
 
         tracks.forEach { track ->
             val localId = index.find(track)
             if (localId == null) {
-                missing++
+                missingTracks += track
             } else {
                 // A Spotify playlist can list the same track twice; a local playlist should not.
                 matched.add(localId)
@@ -64,8 +73,8 @@ object SpotifyPlaylistImporter {
             }
         }
 
-        Log.d(TAG, "Imported $playlistName: ${matched.size} matched, $missing missing")
-        return Result(playlistName, matched.size, missing)
+        Log.d(TAG, "Imported $playlistName: ${matched.size} matched, ${missingTracks.size} missing")
+        return Result(playlistName, matched.size, missingTracks.size, missingTracks)
     }
 
     private fun buildIndex(library: List<MediaItem>) = LibraryIndex(library)
