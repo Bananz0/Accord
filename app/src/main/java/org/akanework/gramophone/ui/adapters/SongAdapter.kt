@@ -18,6 +18,7 @@
 package org.akanework.gramophone.ui.adapters
 
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.viewModels
 import androidx.appcompat.widget.PopupMenu
 import androidx.fragment.app.Fragment
@@ -29,6 +30,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.akanework.gramophone.R
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinDownloadManager
 import org.akanework.gramophone.logic.findBaseWrapperFragment
 import org.akanework.gramophone.ui.LibraryViewModel
 import org.akanework.gramophone.ui.fragments.ArtistSubFragment
@@ -212,6 +214,22 @@ class SongAdapter(
                     fragment!!.findBaseWrapperFragment()!!.replaceFragment(DetailDialogFragment()) {
                         putInt("Position", position!!)
                     }
+                    true
+                }
+
+                R.id.download -> {
+                    // download() consults the media3 download index to skip what is already
+                    // stored, which is disk I/O and must not happen on the main thread.
+                    CoroutineScope(Dispatchers.IO).launch {
+                        JellyfinDownloadManager.download(context, listOf(item))
+                    }
+                    Toast.makeText(context, R.string.download_queued, Toast.LENGTH_SHORT).show()
+                    true
+                }
+
+                R.id.download_remove -> {
+                    JellyfinDownloadManager.remove(context, listOf(item))
+                    Toast.makeText(context, R.string.download_removed, Toast.LENGTH_SHORT).show()
                     true
                 }
 
