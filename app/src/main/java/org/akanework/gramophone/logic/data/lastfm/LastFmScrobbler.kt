@@ -34,11 +34,25 @@ class LastFmScrobbler(private val context: Context) {
     private var current: NowPlaying? = null
 
     private data class NowPlaying(
+        val mediaId: String?,
         val track: LastFmClient.Track,
         val startedAtSeconds: Long,
         val durationMs: Long,
         var scrobbled: Boolean = false,
     )
+
+    /**
+     * Begins tracking [mediaItem] unless it is already being tracked.
+     *
+     * Playback does not always begin with a track change: pressing play on a queue restored after
+     * the app was killed resumes an item that is already loaded, and [onTrackStarted] never fires
+     * for it. Without this the track playing when the service came up could never scrobble.
+     */
+    fun ensureTracking(mediaItem: MediaItem?, startedAtSeconds: Long) {
+        if (mediaItem == null) return
+        if (current?.mediaId == mediaItem.mediaId) return
+        onTrackStarted(mediaItem, startedAtSeconds)
+    }
 
     /**
      * Call when a new track begins. Announces it as now playing and arms the scrobble.
@@ -53,7 +67,7 @@ class LastFmScrobbler(private val context: Context) {
             return
         }
         val durationMs = mediaItem.mediaMetadata.extras?.getLong("Duration") ?: 0L
-        current = NowPlaying(track, startedAtSeconds, durationMs)
+        current = NowPlaying(mediaItem.mediaId, track, startedAtSeconds, durationMs)
         if (!LastFmCredentialStore.isScrobblingEnabled(context)) return
         scope.launch(NonCancellable) {
             try {

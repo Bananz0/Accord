@@ -26,7 +26,7 @@ import java.security.SecureRandom
  */
 class SpotifyClient(
     private val store: SpotifyCredentialStore,
-    private val http: OkHttpClient = JellyfinClientHolder.mediaHttpClient(),
+    private val http: OkHttpClient = JellyfinClientHolder.apiHttpClient(),
 ) {
 
     class SpotifyException(message: String, cause: Throwable? = null) : Exception(message, cause)
