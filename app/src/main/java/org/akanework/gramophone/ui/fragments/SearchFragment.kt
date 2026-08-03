@@ -19,6 +19,7 @@ package org.akanework.gramophone.ui.fragments
 
 import android.annotation.SuppressLint
 import android.os.Bundle
+import android.util.Log
 import android.os.Handler
 import android.os.Looper
 import android.view.LayoutInflater
@@ -34,6 +35,7 @@ import com.google.android.material.appbar.AppBarLayout
 import com.google.android.material.appbar.MaterialToolbar
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import org.akanework.gramophone.R
 import org.akanework.gramophone.logic.applyGeneralMenuItem
@@ -55,6 +57,9 @@ class SearchFragment : BaseFragment(null) {
     private val libraryViewModel: LibraryViewModel by activityViewModels()
 
     private var searchJob: Job? = null
+
+    /** Identifies the newest query, so slower older ones cannot overwrite its results. */
+    private var searchSeq = 0
     private lateinit var editText: EditText
 
     @SuppressLint("StringFormatInvalid", "StringFormatMatches")
@@ -93,41 +98,64 @@ class SearchFragment : BaseFragment(null) {
         // Build FastScroller.
         recyclerView.fastScroll(songAdapter, songAdapter.itemHeightHelper)
 
+        // The library used to come from MediaStore and was ready before this screen could be
+        // opened. Coming from Jellyfin it can take the better part of a minute on a cold start, so
+        // a query typed during the sync would filter an empty list and report "no results" for a
+        // library that simply had not arrived yet. Re-running the active query whenever the
+        // library changes makes results appear as soon as they exist.
+        libraryViewModel.mediaItemList.observe(viewLifecycleOwner) {
+            if (!editText.text.isNullOrBlank()) runSearch(editText.text.toString(), songAdapter)
+        }
+
         editText.addTextChangedListener { rawText ->
             // TODO sort results by match quality? (using NaturalOrderHelper)
             if (rawText.isNullOrBlank()) {
                 songAdapter.updateList(listOf(), now = true, true)
             } else {
                 // make sure the user doesn't edit away our text while we are filtering
-                val text = rawText.toString()
-                // Launch a coroutine for searching in the library.
-                searchJob?.cancel()
-
-                searchJob = viewLifecycleOwner.lifecycleScope.launch(Dispatchers.Default) {
-                    // Clear the list from the last search.
-                    // Replace special characters
-                    val normalizedSearch = text.normalizeSearch()
-
-                    // Filter the library.
-                    val results = libraryViewModel.mediaItemList.value?.filter {
-                        val isMatchingTitle =
-                            it.mediaMetadata.title?.toString()?.normalizeSearch()?.contains(normalizedSearch) == true
-                        val isMatchingAlbum =
-                            it.mediaMetadata.albumTitle?.toString()?.normalizeSearch()?.contains(normalizedSearch) == true
-                        val isMatchingArtist =
-                            it.mediaMetadata.artist?.toString()?.normalizeSearch()?.contains(normalizedSearch) == true
-                        isMatchingTitle || isMatchingAlbum || isMatchingArtist
-                    }
-                    handler.post {
-                        songAdapter.updateList(results ?: listOf(), now = true, true)
-                    }
-                }
+                runSearch(rawText.toString(), songAdapter)
             }
         }
 
         topAppBar.applyGeneralMenuItem(this, libraryViewModel)
 
         return rootView
+    }
+
+    /**
+     * Filters the library for [text] off the main thread and hands the results to the adapter.
+     *
+     * Results are stamped with the query they belong to and dropped if a newer query has started.
+     * Cancelling the previous job is not enough on its own: a broad query like "be" matches
+     * thousands of tracks and takes longer than the "becky" that supersedes it, so without this
+     * check it finishes last and overwrites the newer, correct results.
+     */
+    private fun runSearch(text: String, songAdapter: SongAdapter) {
+        searchJob?.cancel()
+        val seq = ++searchSeq
+        searchJob = viewLifecycleOwner.lifecycleScope.launch(Dispatchers.Default) {
+            val normalizedSearch = text.normalizeSearch()
+            val library = libraryViewModel.mediaItemList.value
+            val results = library?.filter {
+                // Makes cancellation actually take effect part-way through a large library.
+                ensureActive()
+                val isMatchingTitle =
+                    it.mediaMetadata.title?.toString()?.normalizeSearch()?.contains(normalizedSearch) == true
+                val isMatchingAlbum =
+                    it.mediaMetadata.albumTitle?.toString()?.normalizeSearch()?.contains(normalizedSearch) == true
+                val isMatchingArtist =
+                    it.mediaMetadata.artist?.toString()?.normalizeSearch()?.contains(normalizedSearch) == true
+                isMatchingTitle || isMatchingAlbum || isMatchingArtist
+            }
+            Log.d(
+                "SearchFragment",
+                "query='$normalizedSearch' library=${library?.size} results=${results?.size} seq=$seq"
+            )
+            handler.post {
+                if (seq != searchSeq) return@post
+                songAdapter.updateList(results ?: listOf(), now = true, true)
+            }
+        }
     }
 
     override fun onDestroyView() {

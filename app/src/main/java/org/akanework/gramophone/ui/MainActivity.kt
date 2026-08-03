@@ -161,7 +161,13 @@ class MainActivity : AppCompatActivity() {
                 Log.e("MainActivity", "Jellyfin library sync failed", e)
                 null
             }
+            // The library has to be published before the playlists are. LibraryFragment observes
+            // privatePlaylistList but resolves its contents against mediaItemList, so setting the
+            // playlists first makes it build its rows against a null library and show nothing -
+            // with no second event to recover from, until a restart happens to load the cache in
+            // the opposite order.
             if (store != null) {
+                withContext(Dispatchers.Main) { publishLibrary(store) }
                 // Favourites are owned by the server, so adopt its view before the UI reads them.
                 DatabaseUtils.getPrivatePlaylist(libraryViewModel, this@MainActivity)
                 DatabaseUtils.syncFavouritesFromServer(
@@ -172,9 +178,7 @@ class MainActivity : AppCompatActivity() {
             // a working library and the next launch will try again.
             val hadCache = cached != null
             withContext(Dispatchers.Main) {
-                if (store != null) {
-                    publishLibrary(store)
-                } else if (!hadCache) {
+                if (store == null && !hadCache) {
                     Toast.makeText(
                         this@MainActivity,
                         getString(R.string.jellyfin_error_unreachable),
@@ -190,6 +194,11 @@ class MainActivity : AppCompatActivity() {
 
     /** Pushes a built library into the view model. Main thread only. */
     private fun publishLibrary(store: MediaStoreUtils.LibraryStoreClass) {
+        Log.d(
+            "MainActivity",
+            "publishLibrary: songs=${store.songList.size} albums=${store.albumList.size} " +
+                    "artists=${store.artistList.size} genres=${store.genreList.size}"
+        )
         libraryViewModel.mediaItemList.value = store.songList
         libraryViewModel.albumItemList.value = store.albumList
         libraryViewModel.artistItemList.value = store.artistList
