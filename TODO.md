@@ -124,3 +124,24 @@ at **100 users**.
 
 - [ ] Floating mini-player: needs `PlayerBottomSheet` restructured onto upstream Accord's
       `FloatingPanelLayout` + `PreviewPlayer`.
+
+---
+
+## YouTube Music
+
+Playlist **reading** is the only part worth building. See the OAuth verification checklist above.
+
+Playing audio off YouTube is deliberately **not** implemented. Extracting streams violates the
+YouTube API Services Terms (no separating audio from video, no playback outside their player), and
+the practical consequences land on this project specifically: it gets the Google Cloud project
+terminated, which kills the playlist reading in the same app, and it makes the build
+undistributable. It is also the worse outcome — a stream gives no file, no offline copy, no library
+entry. Lidarr gets the actual music instead.
+
+## Apple Music
+
+Blocked by Apple, not by effort. The API needs a developer token signed with a MusicKit private key,
+which requires a paid Apple Developer Program membership. There is no official Android MusicKit SDK,
+so obtaining a *user* token — the thing needed to read someone's own library playlists — has no
+supported path on Android. Public playlists addressed by URL would work with a developer token
+alone, if the membership exists.
