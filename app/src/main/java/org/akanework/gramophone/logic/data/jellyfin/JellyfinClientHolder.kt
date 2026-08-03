@@ -11,6 +11,7 @@ import org.jellyfin.sdk.api.okhttp.OkHttpFactory
 import org.jellyfin.sdk.createJellyfin
 import org.jellyfin.sdk.model.ClientInfo
 import org.jellyfin.sdk.model.DeviceInfo
+import java.util.concurrent.TimeUnit
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -98,4 +99,28 @@ object JellyfinClientHolder {
      */
     fun mediaHttpClient(): OkHttpClient =
         okHttpFactory.createClient(HttpClientOptions(requestTimeout = kotlin.time.Duration.ZERO))
+
+    @Volatile
+    private var cachedApiHttpClient: OkHttpClient? = null
+
+    /**
+     * The client for small API calls - Last.fm, Spotify, anything that is a request rather than a
+     * stream.
+     *
+     * Shares [mediaHttpClient]'s connection pool but puts the timeouts back. Media deliberately has
+     * none, because a call timeout applied to a long track is a download that legitimately outlives
+     * it; borrowing that client for an API call means a half-open socket - a server restarted, a
+     * network moved under us - blocks the caller forever instead of failing.
+     */
+    fun apiHttpClient(): OkHttpClient {
+        cachedApiHttpClient?.let { return it }
+        return synchronized(this) {
+            cachedApiHttpClient ?: mediaHttpClient().newBuilder()
+                .connectTimeout(15, TimeUnit.SECONDS)
+                .readTimeout(30, TimeUnit.SECONDS)
+                .callTimeout(60, TimeUnit.SECONDS)
+                .build()
+                .also { cachedApiHttpClient = it }
+        }
+    }
 }

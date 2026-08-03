@@ -32,7 +32,7 @@ class LastFmClient(
      * the API key and signature. Lets the shared secret live on a server rather than on every phone.
      */
     private val brokerUrl: String? = null,
-    private val http: OkHttpClient = JellyfinClientHolder.mediaHttpClient(),
+    private val http: OkHttpClient = JellyfinClientHolder.apiHttpClient(),
 ) {
 
     /**
@@ -42,15 +42,27 @@ class LastFmClient(
      * [getSession] turns it into a permanent session key. This is the flow to use for anything other
      * people will install - it means an Accord user never types their Last.fm password into Accord.
      */
-    suspend fun getToken(): String {
+    suspend fun getToken(): AuthRequest {
         val response = post(mapOf("method" to "auth.getToken"))
-        return response.optString("token").takeIf { it.isNotBlank() }
+        val token = response.optString("token").takeIf { it.isNotBlank() }
             ?: throw LastFmException("Last.fm did not return a token")
+        // A proxy may return the API key alongside the token. It has to come from somewhere: the
+        // approval URL carries it in plain sight, so a device with no local key cannot build one.
+        // The key is public - only the shared secret is not - so handing it back here is safe.
+        return AuthRequest(token, response.optString("api_key").takeIf { it.isNotBlank() })
     }
 
-    /** Where to send the user to approve [token]. */
-    fun authorizationUrl(token: String): String =
-        "$AUTH_ROOT?api_key=$apiKey&token=$token"
+    /** Where to send the user to approve the request. */
+    fun authorizationUrl(request: AuthRequest): String {
+        val key = request.apiKey ?: apiKey.takeIf { it.isNotBlank() }
+            ?: throw LastFmException(
+                "No API key available. Set one here, or have the signing proxy return api_key."
+            )
+        return "$AUTH_ROOT?api_key=$key&token=${request.token}"
+    }
+
+    /** A request token, plus the API key to approve it with when a proxy supplied one. */
+    data class AuthRequest(val token: String, val apiKey: String?)
 
     /**
      * Turns an approved request token into a session key.

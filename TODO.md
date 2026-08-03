@@ -33,6 +33,11 @@ Last.fm expects, **minus** `api_key`, `api_sig` and `format`. It must:
 3. POST the result to `https://ws.audioscrobbler.com/2.0/`.
 4. Return Last.fm's response body and status untouched — the app parses it exactly as if it had
    called Last.fm directly, so anything else silently breaks error handling.
+5. **For `auth.getToken` only**, add `"api_key"` to the returned JSON. The approval URL the user is
+   sent to carries the key as a query parameter, so a device holding no credentials cannot build one
+   without it. The key is public — it is visible in that URL — so returning it gives nothing away;
+   only the shared secret must stay on the server. Without this the browser opens
+   `last.fm/api/auth?api_key=&token=…` and Last.fm rejects it.
 
 ### Sketch
 
@@ -58,6 +63,13 @@ export default {
       method: 'POST',
       body: new URLSearchParams(params),
     })
+
+    // auth.getToken has to carry the key back so the app can build the approval URL.
+    if (params.method === 'auth.getToken') {
+      const body = await upstream.json()
+      body.api_key = env.LASTFM_API_KEY
+      return Response.json(body, { status: upstream.status })
+    }
     return new Response(upstream.body, { status: upstream.status })
   },
 }

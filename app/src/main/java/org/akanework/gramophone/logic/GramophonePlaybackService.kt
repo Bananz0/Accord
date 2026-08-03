@@ -643,9 +643,15 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
             lastReportedPositionMs = controller?.currentPosition ?: 0L
             reporter.reportProgress(it, lastReportedPositionMs, !isPlaying)
         }
-        // Pausing is the last chance to catch a track that crossed the scrobble threshold since the
-        // previous heartbeat and is about to sit paused indefinitely.
-        if (!isPlaying) scrobbler.onProgress(controller?.currentPosition ?: lastReportedPositionMs)
+        if (isPlaying) {
+            // Resuming a queue restored after the app was killed loads no new item, so no
+            // transition fires and the scrobbler would never learn what is playing.
+            scrobbler.ensureTracking(controller?.currentMediaItem, System.currentTimeMillis() / 1000)
+        } else {
+            // Pausing is the last chance to catch a track that crossed the scrobble threshold since
+            // the previous heartbeat and is about to sit paused indefinitely.
+            scrobbler.onProgress(controller?.currentPosition ?: lastReportedPositionMs)
+        }
         if (isPlaying) startProgressReporting() else stopProgressReporting()
     }
 

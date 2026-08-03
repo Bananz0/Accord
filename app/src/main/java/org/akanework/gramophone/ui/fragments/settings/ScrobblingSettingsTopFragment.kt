@@ -106,9 +106,9 @@ class ScrobblingSettingsTopFragment : BasePreferenceFragment() {
             val url = withContext(Dispatchers.IO) {
                 try {
                     val client = LastFmClient(store.apiKey, store.apiSecret, store.brokerUrl)
-                    val token = client.getToken()
-                    store.pendingAuthToken = token
-                    client.authorizationUrl(token)
+                    val request = client.getToken()
+                    store.pendingAuthToken = request.token
+                    client.authorizationUrl(request)
                 } catch (e: Exception) {
                     null
                 }
