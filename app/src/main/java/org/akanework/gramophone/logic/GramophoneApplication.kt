@@ -37,13 +37,17 @@ import coil3.PlatformContext
 import coil3.SingletonImageLoader
 import coil3.asImage
 import coil3.decode.DataSource
+import coil3.disk.DiskCache
+import coil3.disk.directory
 import coil3.fetch.Fetcher
 import coil3.fetch.ImageFetchResult
+import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import coil3.request.NullRequestDataException
 import coil3.request.allowHardware
 import coil3.size.pxOrElse
 import coil3.util.Logger
 import org.akanework.gramophone.BuildConfig
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinClientHolder
 import org.akanework.gramophone.ui.BugHandlerActivity
 import java.io.File
 import java.io.IOException
@@ -67,15 +71,37 @@ class GramophoneApplication : Application(), SingletonImageLoader.Factory, Threa
     override fun onCreate() {
         super.onCreate()
 
+        // Cheap: only records the application context. The credential store and SDK behind it are
+        // built lazily, off the main thread.
+        JellyfinClientHolder.init(this)
+
         if (BuildConfig.DEBUG) {
             // Use StrictMode to find anti-pattern issues
+            // penaltyLog() without penaltyDialog(): One UI's own IdsController.openIdsWindow()
+            // calls deleteSharedPreferences() on the main thread during every single activity
+            // resume, so the dialog fired constantly with a stack containing no app frames at all.
+            // Violations are still detected and logged, they just no longer block the UI.
             StrictMode.setThreadPolicy(
                 ThreadPolicy.Builder()
                     .detectAll().permitDiskReads() // permit disk reads due to media3 setMetadata() TODO extra player thread
-                    .penaltyLog().penaltyDialog().build())
+                    .penaltyLog().build())
+            // Deliberately not detectAll(): it bundles detectCleartextNetwork() and
+            // detectUntaggedSockets(), which combined with penaltyDeath() killed the process on
+            // every single HTTP request once the library moved to Jellyfin. Plain HTTP to a
+            // self-hosted server on the LAN is the normal case here, and OkHttp does not tag its
+            // sockets. Everything else worth catching is kept, still fatal.
             StrictMode.setVmPolicy(
                 VmPolicy.Builder()
-                    .detectAll()
+                    .detectLeakedSqlLiteObjects()
+                    .detectLeakedClosableObjects()
+                    .detectActivityLeaks()
+                    .detectLeakedRegistrationObjects()
+                    .detectFileUriExposure()
+                    .detectContentUriWithoutPermission()
+                    .detectImplicitDirectBoot()
+                    .detectCredentialProtectedWhileLocked()
+                    .detectIncorrectContextUse()
+                    .detectUnsafeIntentLaunch()
                     .penaltyLog().penaltyDeath().build())
         }
 
@@ -107,9 +133,18 @@ class GramophoneApplication : Application(), SingletonImageLoader.Factory, Threa
 
     override fun newImageLoader(context: PlatformContext): ImageLoader {
         return ImageLoader.Builder(context)
-            .diskCache(null)
+            // Artwork now comes over the network, so it has to survive process death or every
+            // scroll re-downloads it. Jellyfin image URLs carry api_key in the query, so a plain
+            // client is enough - no auth interceptor needed.
+            .diskCache(
+                DiskCache.Builder()
+                    .directory(cacheDir.resolve("coil_artwork"))
+                    .maxSizeBytes(256L * 1024 * 1024)
+                    .build()
+            )
             .allowHardware(false)
             .components {
+                add(OkHttpNetworkFetcherFactory())
                 if (hasScopedStorageV1()) {
                     add(Fetcher.Factory { data, options, _ ->
                         if (data !is Pair<*, *>) return@Factory null
@@ -155,6 +190,10 @@ class GramophoneApplication : Application(), SingletonImageLoader.Factory, Threa
     override fun uncaughtException(t: Thread, e: Throwable) {
         val exceptionMessage = Log.getStackTraceString(e)
         val threadName = t.name
+        // Also emit to logcat. Handing the trace to BugHandlerActivity and calling exitProcess()
+        // means Android never writes it to the crash buffer, so without this a crash is invisible
+        // to adb and can only be read off the device screen.
+        Log.e("GramophoneApplication", "Uncaught exception on thread $threadName", e)
         val intent = Intent(this, BugHandlerActivity::class.java)
         intent.putExtra("exception_message", exceptionMessage)
         intent.putExtra("thread", threadName)

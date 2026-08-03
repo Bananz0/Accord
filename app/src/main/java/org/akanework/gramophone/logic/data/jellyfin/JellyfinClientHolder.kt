@@ -1,0 +1,101 @@
+package org.akanework.gramophone.logic.data.jellyfin
+
+import android.content.Context
+import android.os.Build
+import okhttp3.OkHttpClient
+import org.akanework.gramophone.BuildConfig
+import org.jellyfin.sdk.Jellyfin
+import org.jellyfin.sdk.api.client.ApiClient
+import org.jellyfin.sdk.api.client.HttpClientOptions
+import org.jellyfin.sdk.api.okhttp.OkHttpFactory
+import org.jellyfin.sdk.createJellyfin
+import org.jellyfin.sdk.model.ClientInfo
+import org.jellyfin.sdk.model.DeviceInfo
+import kotlin.time.Duration.Companion.seconds
+
+/**
+ * Owns the Jellyfin SDK objects for the whole process.
+ *
+ * Everything is built on a single [OkHttpFactory] so the SDK's metadata calls, artwork loading and
+ * ExoPlayer's media requests share one connection pool - reconnecting per stream is a noticeable
+ * cost on mobile networks.
+ */
+object JellyfinClientHolder {
+
+    private const val CLIENT_NAME = "Accord"
+
+    private lateinit var appContext: Context
+
+    /** Shared connection pool; [mediaHttpClient] hands the same one to media3. */
+    private val okHttpFactory = OkHttpFactory()
+
+    @Volatile
+    private var cachedApi: ApiClient? = null
+
+    /**
+     * Registers the application context. Kept deliberately cheap: opening the credential store
+     * touches the keystore and disk, and debug builds run StrictMode with penaltyDeath, so that
+     * work is deferred to [credentials] and must first be triggered off the main thread.
+     */
+    fun init(context: Context) {
+        appContext = context.applicationContext
+    }
+
+    /** Opens the credential store on first use. Must be touched off the main thread first. */
+    val credentials: JellyfinCredentialStore by lazy { JellyfinCredentialStore(appContext) }
+
+    private val jellyfin: Jellyfin by lazy {
+        createJellyfin {
+            this.context = appContext
+            clientInfo = ClientInfo(CLIENT_NAME, BuildConfig.MY_VERSION_NAME)
+            deviceInfo = DeviceInfo(
+                id = credentials.deviceId,
+                name = "${Build.MANUFACTURER} ${Build.MODEL}".trim()
+            )
+            apiClientFactory = okHttpFactory
+        }
+    }
+
+    /**
+     * An API client bound to the stored session, or null when signed out. Cached because the
+     * library loader, the playback service and the reporter all need one.
+     */
+    fun api(): ApiClient? {
+        cachedApi?.let { return it }
+        if (!credentials.isLoggedIn()) return null
+        return synchronized(this) {
+            cachedApi ?: jellyfin.createApi(
+                baseUrl = credentials.serverUrl,
+                accessToken = credentials.accessToken,
+                // The SDK defaults to a 6 second connect timeout, which a phone whose WiFi radio
+                // has just woken from doze regularly overshoots on a LAN server. A full library
+                // sync is also many sequential pages, so the request timeout has to allow for a
+                // slow server rather than the default.
+                httpClientOptions = HttpClientOptions(
+                    connectTimeout = 20.seconds,
+                    socketTimeout = 30.seconds,
+                    requestTimeout = 120.seconds,
+                )
+            ).also { cachedApi = it }
+        }
+    }
+
+    /**
+     * A client for a server we are not signed in to yet, used by the login screen.
+     */
+    fun createUnauthenticatedApi(serverUrl: String): ApiClient =
+        jellyfin.createApi(baseUrl = serverUrl)
+
+    /** Call after login or logout so [api] stops handing out a stale session. */
+    fun invalidate() {
+        synchronized(this) { cachedApi = null }
+    }
+
+    /**
+     * The OkHttp client media3 should use. Request timeouts are disabled: the default call timeout
+     * applies to the whole response body, which for a long track is a download that legitimately
+     * outlives it.
+     */
+    fun mediaHttpClient(): OkHttpClient =
+        okHttpFactory.createClient(HttpClientOptions(requestTimeout = kotlin.time.Duration.ZERO))
+}

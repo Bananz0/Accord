@@ -25,3 +25,9 @@ plugins {
 
 rootProject.name = "Accord"
 include(":app", ":recyclerview")
+
+// The Cupertino widget library the upstream Accord UI is built on, vendored as a submodule. Its
+// repository root is a full sample project, so point Gradle at the library module inside it rather
+// than including the whole thing.
+include(":Cupertino")
+project(":Cupertino").projectDir = file("Cupertino/Cupertino")
