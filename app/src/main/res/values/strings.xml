@@ -290,6 +290,19 @@
         <item quantity="one">%1$d scrobble queued. Tap to send now.</item>
         <item quantity="other">%1$d scrobbles queued. Tap to send now.</item>
     </plurals>
+    <string name="home_made_for_you">Made for you</string>
+    <string name="home_jump_back_in">Jump back in</string>
+    <string name="home_top_mixes">Your top mixes</string>
+    <string name="home_top_mixes_subtitle">Built from the artists you play most</string>
+    <string name="home_artist_mix">%1$s Mix</string>
+    <string name="home_daylist">Soundtrack your %1$s</string>
+    <string name="home_daylist_subtitle">A different corner of your library every few hours</string>
+    <string name="home_for_fans_of">For fans of %1$s</string>
+    <string name="time_of_day_morning">morning</string>
+    <string name="time_of_day_afternoon">afternoon</string>
+    <string name="time_of_day_evening">evening</string>
+    <string name="time_of_day_night">night</string>
+
     <string name="download_channel_name">Downloads</string>
     <string name="download_notification_title">Downloading music</string>
     <string name="download">Download</string>

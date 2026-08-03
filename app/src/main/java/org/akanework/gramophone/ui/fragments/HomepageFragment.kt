@@ -8,11 +8,9 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageButton
 import android.widget.PopupMenu
-import android.widget.TextView
 import androidx.core.view.ViewCompat
 import androidx.core.widget.NestedScrollView
 import androidx.fragment.app.activityViewModels
-import androidx.lifecycle.Observer
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.appbar.AppBarLayout
@@ -21,7 +19,6 @@ import com.google.android.material.progressindicator.CircularProgressIndicator
 import org.akanework.gramophone.R
 import org.akanework.gramophone.logic.enableEdgeToEdgePaddingListener
 import org.akanework.gramophone.logic.handleGeneralMenuItem
-import org.akanework.gramophone.logic.utils.RecommendationFactory
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.Dispatchers
@@ -34,17 +31,20 @@ import org.akanework.gramophone.ui.JellyfinLoginActivity
 import org.akanework.gramophone.ui.LibraryViewModel
 import org.akanework.gramophone.ui.MainActivity
 import org.akanework.gramophone.ui.adapters.HomepageCarouselAdapter
-import org.akanework.gramophone.ui.adapters.RecommendAdapter
 import org.akanework.gramophone.ui.components.ItemSnapHelper
+import org.akanework.gramophone.ui.home.HomeFeed
+import org.akanework.gramophone.ui.home.HomeSection
+import org.akanework.gramophone.ui.home.HomeSectionAdapter
 
 
-class HomepageFragment : BaseFragment(null), Observer<RecommendationFactory.RecommendList> {
+class HomepageFragment : BaseFragment(null) {
 
     private lateinit var appBarLayout: AppBarLayout
     private val libraryViewModel: LibraryViewModel by activityViewModels()
-    private lateinit var recommendTitle: TextView
-    private lateinit var recommendRecyclerView: RecyclerView
-    private lateinit var recommendAdapter: RecommendAdapter
+    private lateinit var sectionAdapter: HomeSectionAdapter
+
+    /** The network-backed row, kept separate so a rebuild does not discard it. */
+    private var similarSection: HomeSection? = null
 
     @SuppressLint("StringFormatInvalid", "StringFormatMatches")
     override fun onCreateView(
@@ -56,12 +56,9 @@ class HomepageFragment : BaseFragment(null), Observer<RecommendationFactory.Reco
         val topAppBar = rootView.findViewById<MaterialToolbar>(R.id.topAppBar)
         val recyclerView = rootView.findViewById<RecyclerView>(R.id.recyclerview_top)
         val nestedScrollView = rootView.findViewById<NestedScrollView>(R.id.nested)
+        val sectionsView = rootView.findViewById<RecyclerView>(R.id.home_sections)
 
-        recommendRecyclerView = rootView.findViewById(R.id.rv_r)
-        recommendTitle = rootView.findViewById(R.id.recommend)
-        recommendAdapter = RecommendAdapter(requireActivity() as MainActivity)
-
-        libraryViewModel.recommendList.observeForever(this)
+        sectionAdapter = HomeSectionAdapter(requireActivity() as MainActivity)
 
         appBarLayout = rootView.findViewById(R.id.appbarlayout)
         appBarLayout.enableEdgeToEdgePaddingListener()
@@ -93,16 +90,67 @@ class HomepageFragment : BaseFragment(null), Observer<RecommendationFactory.Reco
         recyclerView.layoutManager = LinearLayoutManager(context, LinearLayoutManager.HORIZONTAL, false)
         recyclerView.adapter = HomepageCarouselAdapter(requireActivity() as MainActivity)
 
-        recommendRecyclerView.layoutManager = LinearLayoutManager(context, LinearLayoutManager.HORIZONTAL, false)
-        recommendRecyclerView.adapter = recommendAdapter
+        sectionsView.layoutManager = LinearLayoutManager(context)
+        sectionsView.adapter = sectionAdapter
 
         ItemSnapHelper().attachToRecyclerView(recyclerView)
-        ItemSnapHelper().attachToRecyclerView(recommendRecyclerView)
 
+        // Both live inside the NestedScrollView, which does the scrolling; leaving them nested
+        // scrollable makes the vertical list fight the parent for the gesture.
         ViewCompat.setNestedScrollingEnabled(recyclerView, false)
-        ViewCompat.setNestedScrollingEnabled(recommendRecyclerView, false)
+        ViewCompat.setNestedScrollingEnabled(sectionsView, false)
+
+        // The feed is derived from the library, so it has to be rebuilt whenever a sync lands -
+        // otherwise a first run shows an empty home until the screen is revisited.
+        libraryViewModel.mediaItemList.observe(viewLifecycleOwner) {
+            rebuildFeed()
+            fetchSimilarArtists()
+        }
 
         return rootView
+    }
+
+    /**
+     * Rebuilds the rows off the main thread.
+     *
+     * Sorting and grouping thousands of tracks per row is too much work for a frame, and this runs
+     * on every sync.
+     */
+    private fun rebuildFeed() {
+        viewLifecycleOwner.lifecycleScope.launch {
+            val sections = withContext(Dispatchers.Default) {
+                HomeFeed.build(requireContext(), libraryViewModel)
+            }
+            if (!isAdded) return@launch
+            sectionAdapter.submit(withSimilar(sections))
+        }
+    }
+
+    /**
+     * Asks Last.fm for artists similar to the user's most-played one.
+     *
+     * Kept apart from [rebuildFeed] because it is the one row that needs the network: a slow or
+     * unreachable Last.fm must not hold up the rows that come straight from the library.
+     */
+    private fun fetchSimilarArtists() {
+        if (similarSection != null) return
+        viewLifecycleOwner.lifecycleScope.launch {
+            val section = withContext(Dispatchers.IO) {
+                HomeFeed.similarArtistSection(requireContext(), libraryViewModel)
+            } ?: return@launch
+            if (!isAdded) return@launch
+            similarSection = section
+            rebuildFeed()
+        }
+    }
+
+    /** Places the Last.fm row third, after the rows drawn from the user's own history. */
+    private fun withSimilar(sections: List<HomeSection>): List<HomeSection> {
+        val similar = similarSection ?: return sections
+        if (sections.isEmpty()) return listOf(similar)
+        return sections.toMutableList().apply {
+            add(minOf(2, size), similar)
+        }
     }
 
     /**
@@ -146,15 +194,4 @@ class HomepageFragment : BaseFragment(null), Observer<RecommendationFactory.Reco
         }
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        libraryViewModel.recommendList.removeObserver(this)
-    }
-
-    override fun onChanged(value: RecommendationFactory.RecommendList) {
-        value.getTitle(libraryViewModel).let {
-            recommendTitle.text = it
-        }
-        recommendAdapter.updateList(value.recommendationList.toMutableList())
-    }
 }
