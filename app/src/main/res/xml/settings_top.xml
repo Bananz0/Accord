@@ -63,6 +63,13 @@
         android:title="@string/settings_category_downloads" />
 
     <Preference
+        android:icon="@drawable/ic_playlist_import"
+        android:key="spotify"
+        android:layout="@layout/preference_basic"
+        android:summary="@string/settings_spotify_summary"
+        android:title="@string/settings_category_spotify" />
+
+    <Preference
         android:icon="@drawable/ic_scrobbling"
         android:key="scrobbling"
         android:layout="@layout/preference_basic"

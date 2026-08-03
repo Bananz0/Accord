@@ -290,6 +290,29 @@
         <item quantity="one">%1$d scrobble queued. Tap to send now.</item>
         <item quantity="other">%1$d scrobbles queued. Tap to send now.</item>
     </plurals>
+    <string name="settings_category_spotify">Spotify</string>
+    <string name="settings_spotify_summary">Import your playlists</string>
+    <string name="spotify_category_import">Playlists</string>
+    <string name="spotify_account">Spotify account</string>
+    <string name="spotify_account_linked">Connected as %1$s</string>
+    <string name="spotify_account_not_linked">Not connected</string>
+    <string name="spotify_account_needs_client_id">Add a client ID first</string>
+    <string name="spotify_client_id">Client ID</string>
+    <string name="spotify_client_id_summary">The application credential Accord uses to talk to Spotify</string>
+    <string name="spotify_client_id_explainer">Accord does not ship with a Spotify client ID. Create an app for free at developer.spotify.com/dashboard, add accord://spotify-callback as a redirect URI, then paste the client ID here. Only read access to your own playlists is requested, and it works on a free account.</string>
+    <string name="spotify_connected">Connected to Spotify</string>
+    <string name="spotify_disconnect_message">Disconnect Spotify? Playlists you have already imported stay where they are.</string>
+    <string name="spotify_import">Import playlists</string>
+    <string name="spotify_import_summary">Recreate a Spotify playlist from tracks in your own library</string>
+    <string name="spotify_import_action">Import</string>
+    <string name="spotify_importing">Importing…</string>
+    <string name="spotify_import_result">Imported %1$d tracks. %2$d were not in your library.</string>
+    <string name="spotify_playlist_label">%1$s (%2$d)</string>
+    <string name="spotify_no_playlists">No playlists found, or Spotify could not be reached.</string>
+    <string name="spotify_error_generic">Could not connect to Spotify.</string>
+    <string name="spotify_error_detail">Spotify: %1$s</string>
+    <string name="spotify_error_no_browser">No browser available to sign in with.</string>
+
     <string name="home_made_for_you">Made for you</string>
     <string name="home_jump_back_in">Jump back in</string>
     <string name="home_top_mixes">Your top mixes</string>

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <PreferenceCategory
+        android:layout="@layout/preference_category_md"
+        android:title="@string/lastfm_category_account">
+
+        <Preference
+            android:key="spotify_account"
+            android:layout="@layout/preference_basic"
+            android:title="@string/spotify_account"
+            app:iconSpaceReserved="false" />
+
+        <Preference
+            android:key="spotify_client_id"
+            android:layout="@layout/preference_basic"
+            android:summary="@string/spotify_client_id_summary"
+            android:title="@string/spotify_client_id"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:layout="@layout/preference_category_md"
+        android:title="@string/spotify_category_import">
+
+        <Preference
+            android:key="spotify_import"
+            android:layout="@layout/preference_basic"
+            android:summary="@string/spotify_import_summary"
+            android:title="@string/spotify_import"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+</PreferenceScreen>
