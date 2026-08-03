@@ -627,7 +627,7 @@ fun MaterialToolbar.applyGeneralMenuItem(
             R.id.refresh -> {
                 val activity = fragment.requireActivity() as MainActivity
                 val playerLayout = activity.playerBottomSheet
-                activity.updateLibrary {
+                activity.updateLibrary(force = true) {
                     val snackBar =
                         Snackbar.make(
                             fragment.requireView(),

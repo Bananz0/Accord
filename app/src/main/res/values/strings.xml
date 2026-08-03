@@ -234,6 +234,11 @@
     <string name="lib4_desc" translatable="false">https://github.com/zhanghai/AndroidFastScroll</string>
     <string name="blur_lyrics">Blur lyrics</string>
     <string name="blur_lyrics_summary">Enable blur with lyrics (May impact performance)</string>
+    <string name="mix_most_played">Most played</string>
+    <string name="mix_favourites">Your favourites</string>
+    <string name="mix_recently_added">Recently added</string>
+    <string name="settings_sync_on_startup">Sync library on startup</string>
+    <string name="settings_sync_on_startup_summary">Refresh from the Jellyfin server each launch. Turn off to start from the cached library and refresh manually.</string>
     <string name="jellyfin_account_title">Jellyfin account</string>
     <string name="jellyfin_account_message">Signed in to %1$s</string>
     <string name="jellyfin_sign_out">Sign out</string>
