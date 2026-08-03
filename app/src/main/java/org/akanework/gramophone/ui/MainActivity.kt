@@ -110,7 +110,11 @@ class MainActivity : AppCompatActivity() {
      * updateLibrary:
      *   Syncs the library from the Jellyfin server into [libraryViewModel].
      */
-    fun updateLibrary(then: (() -> Unit)? = null) {
+    /**
+     * @param force syncs from the server even when "sync on startup" is off. The Refresh menu item
+     *   passes this: an explicit request to refresh should always reach the server.
+     */
+    fun updateLibrary(force: Boolean = false, then: (() -> Unit)? = null) {
         // If library load takes more than 3s, exit splash to avoid ANR
         if (!ready) handler.postDelayed(reportFullyDrawnRunnable, 3000)
         CoroutineScope(Dispatchers.IO).launch {
@@ -147,6 +151,18 @@ class MainActivity : AppCompatActivity() {
                 DatabaseUtils.syncFavouritesFromServer(
                     cachedFavourites, libraryViewModel, this@MainActivity
                 )
+
+                // A full sync of a large library costs the better part of a minute and a lot of
+                // requests. With a usable cache already on screen, let the user decide whether
+                // that happens on every launch or only when they ask for it.
+                val syncOnStartup = PreferenceManager
+                    .getDefaultSharedPreferences(this@MainActivity)
+                    .getBoolean("sync_on_startup", true)
+                if (!force && !syncOnStartup) {
+                    Log.d("MainActivity", "Skipping startup sync (disabled in settings)")
+                    withContext(Dispatchers.Main) { then?.let { it() } }
+                    return@launch
+                }
             }
 
             withContext(Dispatchers.Main) { showSyncBar() }

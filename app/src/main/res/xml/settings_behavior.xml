@@ -45,6 +45,15 @@
         android:title="@string/settings_category_misc">
 
         <SwitchPreferenceCompat
+            android:defaultValue="true"
+            android:key="sync_on_startup"
+            android:layout="@layout/preference_switch"
+            android:summary="@string/settings_sync_on_startup_summary"
+            android:title="@string/settings_sync_on_startup"
+            android:widgetLayout="@layout/preference_switch_widget"
+            app:iconSpaceReserved="false" />
+
+        <SwitchPreferenceCompat
             android:defaultValue="false"
             android:key="autoplay"
             android:layout="@layout/preference_switch"
