@@ -84,6 +84,13 @@ android {
             "LASTFM_API_SECRET",
             "\"${readProperties(file("../package.properties")).getProperty("lastfmApiSecret", "")}\""
         )
+        // Optional signing proxy. When set, builds ship no Last.fm secret at all - the proxy holds
+        // it, so it can be rotated without an app update and never reaches a user's device.
+        buildConfigField(
+            "String",
+            "LASTFM_BROKER_URL",
+            "\"${readProperties(file("../package.properties")).getProperty("lastfmBrokerUrl", "")}\""
+        )
         // Spotify client id, same story: shared id means shared quota, and one abusive user gets it
         // revoked for everybody. PKCE means no client secret is needed at all.
         buildConfigField(

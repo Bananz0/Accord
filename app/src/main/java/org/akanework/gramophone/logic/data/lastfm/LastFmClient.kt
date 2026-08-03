@@ -27,28 +27,43 @@ import java.security.MessageDigest
 class LastFmClient(
     private val apiKey: String,
     private val apiSecret: String,
+    /**
+     * When set, signed calls are posted here instead of straight to Last.fm, and this endpoint adds
+     * the API key and signature. Lets the shared secret live on a server rather than on every phone.
+     */
+    private val brokerUrl: String? = null,
     private val http: OkHttpClient = JellyfinClientHolder.mediaHttpClient(),
 ) {
 
     /**
-     * Exchanges a username and password for a permanent session key.
+     * Starts the web authorisation flow: asks Last.fm for a request token.
      *
-     * This is the "mobile" auth flow, which exists precisely so an app can ask for credentials
-     * directly instead of bouncing the user through a browser. Last.fm requires it over HTTPS, and
-     * the password is never stored - only the returned session key is.
+     * The token then goes to [authorizationUrl], the user approves it on Last.fm's own site, and
+     * [getSession] turns it into a permanent session key. This is the flow to use for anything other
+     * people will install - it means an Accord user never types their Last.fm password into Accord.
      */
-    suspend fun getMobileSession(username: String, password: String): Session {
-        val response = post(
-            mapOf(
-                "method" to "auth.getMobileSession",
-                "username" to username,
-                "password" to password,
-            )
-        )
+    suspend fun getToken(): String {
+        val response = post(mapOf("method" to "auth.getToken"))
+        return response.optString("token").takeIf { it.isNotBlank() }
+            ?: throw LastFmException("Last.fm did not return a token")
+    }
+
+    /** Where to send the user to approve [token]. */
+    fun authorizationUrl(token: String): String =
+        "$AUTH_ROOT?api_key=$apiKey&token=$token"
+
+    /**
+     * Turns an approved request token into a session key.
+     *
+     * Throws while the token is still unapproved, which is expected: the caller retries after the
+     * user comes back from the browser.
+     */
+    suspend fun getSession(token: String): Session {
+        val response = post(mapOf("method" to "auth.getSession", "token" to token))
         val session = response.optJSONObject("session")
             ?: throw LastFmException("Last.fm did not return a session")
         return Session(
-            name = session.optString("name", username),
+            name = session.optString("name"),
             key = session.optString("key"),
         )
     }
@@ -127,7 +142,17 @@ class LastFmClient(
         }
     }
 
+    /**
+     * Sends an unsigned, read-only call. Routed through the proxy too when one is configured, so a
+     * device without an API key can still fetch recommendations.
+     */
     private suspend fun get(params: Map<String, String>): JSONObject = withContext(Dispatchers.IO) {
+        brokerUrl?.let { broker ->
+            val body = FormBody.Builder().apply {
+                params.forEach { (name, value) -> add(name, value) }
+            }.build()
+            return@withContext execute(Request.Builder().url(broker).post(body).build())
+        }
         val url = API_ROOT.toHttpUrl().newBuilder().apply {
             params.forEach { (name, value) -> addQueryParameter(name, value) }
             addQueryParameter("api_key", apiKey)
@@ -136,7 +161,20 @@ class LastFmClient(
         execute(Request.Builder().url(url).build())
     }
 
+    /**
+     * Sends a signed call, either through the proxy or directly.
+     *
+     * The proxy receives exactly the parameters Last.fm would, minus the credentials, and is
+     * responsible for adding `api_key` and `api_sig` before forwarding. It returns Last.fm's
+     * response untouched, so everything downstream is identical either way.
+     */
     private suspend fun post(params: Map<String, String>): JSONObject = withContext(Dispatchers.IO) {
+        brokerUrl?.let { broker ->
+            val body = FormBody.Builder().apply {
+                params.forEach { (name, value) -> add(name, value) }
+            }.build()
+            return@withContext execute(Request.Builder().url(broker).post(body).build())
+        }
         val signed = params + ("api_key" to apiKey)
         val body = FormBody.Builder().apply {
             signed.forEach { (name, value) -> add(name, value) }
@@ -229,6 +267,7 @@ class LastFmClient(
     companion object {
         private const val TAG = "LastFmClient"
         private const val API_ROOT = "https://ws.audioscrobbler.com/2.0/"
+        private const val AUTH_ROOT = "https://www.last.fm/api/auth/"
 
         /** Last.fm's documented per-request cap for track.scrobble. */
         const val MAX_BATCH = 50

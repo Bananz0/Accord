@@ -273,9 +273,11 @@
     <string name="lastfm_api_keys_explainer">Accord does not ship with a Last.fm API key. Create one for free at last.fm/api/account/create, then paste the key and shared secret here.</string>
     <string name="lastfm_api_key">API key</string>
     <string name="lastfm_api_secret">Shared secret</string>
-    <string name="lastfm_connect_title">Connect to Last.fm</string>
-    <string name="lastfm_connect">Connect</string>
-    <string name="lastfm_connecting">Connecting…</string>
+    <string name="lastfm_broker">Signing proxy</string>
+    <string name="lastfm_broker_summary">Keep the Last.fm secret on a server instead of on this device</string>
+    <string name="lastfm_broker_explainer">Optional. A small endpoint that adds the API key and signature to each request and forwards it to Last.fm. With one configured, this device never holds the shared secret and the key above can be left empty. Leave blank to sign locally.</string>
+    <string name="lastfm_broker_hint">Proxy URL</string>
+    <string name="lastfm_approve_in_browser">Approve Accord on Last.fm, then come back to this screen</string>
     <string name="lastfm_connected">Connected to Last.fm</string>
     <string name="lastfm_disconnect">Disconnect</string>
     <string name="lastfm_disconnect_message">Disconnect %1$s? Queued scrobbles will stay until you reconnect.</string>
@@ -284,7 +286,6 @@
     <string name="lastfm_scrobble">Scrobble to Last.fm</string>
     <string name="lastfm_scrobble_summary">Submit a play once you have heard half a track, or four minutes of it</string>
     <string name="lastfm_pending">Waiting to be sent</string>
-    <string name="lastfm_error_empty">Enter your username and password</string>
     <string name="lastfm_error_generic">Could not connect to Last.fm. Check your details and try again.</string>
     <plurals name="lastfm_pending_count">
         <item quantity="one">%1$d scrobble queued. Tap to send now.</item>
