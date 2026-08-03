@@ -22,6 +22,9 @@ import org.jellyfin.sdk.api.client.exception.SecureConnectionException
 import org.jellyfin.sdk.api.client.exception.TimeoutException
 import org.jellyfin.sdk.api.client.extensions.authenticateUserByName
 import org.jellyfin.sdk.api.client.extensions.userApi
+import org.jellyfin.sdk.discovery.DiscoveryService
+import org.jellyfin.sdk.discovery.RecommendedServerInfo
+import org.jellyfin.sdk.discovery.RecommendedServerInfoScore
 
 /**
  * First-run sign in. Stores the resulting token in the credential store and hands control back to
@@ -63,17 +66,22 @@ class JellyfinLoginActivity : AppCompatActivity() {
             showError(getString(R.string.jellyfin_error_no_username))
             return
         }
-        val serverUrl = normaliseUrl(rawUrl)
-        if (!hasHost(serverUrl)) {
-            showError(getString(R.string.jellyfin_error_bad_address))
-            return
-        }
-
         setBusy(true)
         status.visibility = View.VISIBLE
-        status.text = getString(R.string.jellyfin_signing_in)
+        status.text = getString(R.string.jellyfin_finding_server)
 
         lifecycleScope.launch {
+            // Resolve the address before trying to authenticate against it. What people type is
+            // rarely a complete URL - a bare IP, a hostname, an address with the scheme or port
+            // missing, or a reverse-proxy path - and the SDK knows which candidates are worth
+            // probing and which of them actually answers as a Jellyfin server.
+            val serverUrl = withContext(Dispatchers.IO) { resolveServer(rawUrl) }
+            if (serverUrl == null) {
+                setBusy(false)
+                showError(getString(R.string.jellyfin_error_no_server_found, rawUrl))
+                return@launch
+            }
+            status.text = getString(R.string.jellyfin_signing_in)
             val result = withContext(Dispatchers.IO) {
                 authenticate(serverUrl, username, password)
             }
@@ -89,6 +97,30 @@ class JellyfinLoginActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    /**
+     * Turns what the user typed into an address that actually answers, or null if none does.
+     *
+     * [DiscoveryService.getAddressCandidates] expands the input into the forms worth trying - adding
+     * https and http, the default port, and so on - and getRecommendedServers probes each and scores
+     * it. Taking the best-scoring candidate means "192.168.1.192" works whether the server is on
+     * 8096 or behind a proxy on 443, instead of being rejected for not looking like a URL.
+     */
+    private suspend fun resolveServer(input: String): String? = try {
+        JellyfinClientHolder.discovery()
+            .getRecommendedServers(input, RecommendedServerInfoScore.OK)
+            // Score first, response time only to break ties. Sorting by speed alone picks whatever
+            // answers quickest, and on a machine that also serves something on port 80 that is the
+            // other thing - which then returns an HTML page where the API was expected. A lower
+            // ordinal is a better score: GREAT, GOOD, OK, BAD.
+            .minWithOrNull(
+                compareBy<RecommendedServerInfo> { it.score.ordinal }.thenBy { it.responseTime }
+            )
+            ?.address
+    } catch (e: Exception) {
+        Log.w(TAG, "Could not resolve '$input'", e)
+        null
     }
 
     private suspend fun authenticate(
