@@ -45,7 +45,6 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.DefaultMediaNotificationProvider
 import coil3.imageLoader
 import com.google.android.material.bottomnavigation.BottomNavigationView
-import com.google.android.material.snackbar.Snackbar
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -157,7 +156,7 @@ class MainActivity : AppCompatActivity() {
                 // that happens on every launch or only when they ask for it.
                 val syncOnStartup = PreferenceManager
                     .getDefaultSharedPreferences(this@MainActivity)
-                    .getBoolean("sync_on_startup", true)
+                    .getBoolean("sync_on_startup", false)
                 if (!force && !syncOnStartup) {
                     Log.d("MainActivity", "Skipping startup sync (disabled in settings)")
                     withContext(Dispatchers.Main) { then?.let { it() } }
@@ -239,30 +238,16 @@ class MainActivity : AppCompatActivity() {
      * The splash screen gives up after 3s but a full sync of a large library takes far longer, so
      * without this the user stares at an empty library with no indication anything is happening.
      */
-    private var syncBar: Snackbar? = null
-
     private fun showSyncBar() {
-        if (syncBar != null) return
-        syncBar = Snackbar.make(
-            container,
-            getString(R.string.jellyfin_syncing_library),
-            Snackbar.LENGTH_INDEFINITE
-        ).apply {
-            anchorView = bottomNavigationView
-            show()
-        }
+        libraryViewModel.isSyncing.value = true
     }
 
     private fun updateSyncBar(loaded: Int, total: Int) {
-        syncBar?.setText(
-            if (total > 0) getString(R.string.jellyfin_syncing_progress, loaded, total)
-            else getString(R.string.jellyfin_syncing_library)
-        )
+        // Progress is not surfaced numerically any more; the header indicator only says "busy".
     }
 
     private fun hideSyncBar() {
-        syncBar?.dismiss()
-        syncBar = null
+        libraryViewModel.isSyncing.value = false
     }
 
     /**

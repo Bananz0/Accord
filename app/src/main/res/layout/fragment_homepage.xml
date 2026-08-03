@@ -50,6 +50,22 @@
                     android:gravity="center_vertical"
                     android:orientation="horizontal">
 
+                    <!--
+                        Library sync indicator. A quiet accent-coloured ring in the header rather
+                        than a snackbar, which sat over the content for the length of a sync.
+                    -->
+                    <com.google.android.material.progressindicator.CircularProgressIndicator
+                        android:id="@+id/sync_indicator"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginEnd="10dp"
+                        android:indeterminate="true"
+                        android:visibility="gone"
+                        app:indicatorColor="@color/accentColor"
+                        app:indicatorInset="0dp"
+                        app:indicatorSize="18dp"
+                        app:trackThickness="2dp" />
+
                     <ImageButton
                         android:id="@+id/nav_action_more"
                         android:layout_width="@dimen/navigation_bar_button_size"

@@ -46,4 +46,12 @@ class LibraryViewModel : ViewModel() {
     val privateAlbumList: MutableList<MediaStoreUtils.Album> = mutableListOf()
     val recommendList: MutableLiveData<RecommendationFactory.RecommendList> = MutableLiveData()
     var privatePlaylistId: Long = 0
+
+    /**
+     * Whether a library sync is running.
+     *
+     * Lives here rather than in MainActivity so the header can show a quiet indicator instead of a
+     * snackbar covering the content for the length of a sync.
+     */
+    val isSyncing: MutableLiveData<Boolean> = MutableLiveData(false)
 }
