@@ -7,6 +7,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.jellyfin.sdk.api.client.extensions.playStateApi
 import org.jellyfin.sdk.api.client.extensions.userLibraryApi
 import org.jellyfin.sdk.model.api.PlayMethod
@@ -16,6 +19,7 @@ import org.jellyfin.sdk.model.api.PlaybackStartInfo
 import org.jellyfin.sdk.model.api.PlaybackStopInfo
 import org.jellyfin.sdk.model.api.RepeatMode
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 
 /**
  * Tells the Jellyfin server what is being played, and syncs favourites.
@@ -83,14 +87,43 @@ class JellyfinReporter(private val context: Context) {
         Log.d(TAG, "Reported playback stopped for $id at ${positionMs}ms")
     }
 
-    /** Mirrors a favourite toggle to the server so other clients see it. */
-    fun setFavourite(mediaId: String?, favourite: Boolean) = report(mediaId) { api, id ->
-        if (favourite) {
-            api.userLibraryApi.markFavoriteItem(itemId = id)
-        } else {
-            api.userLibraryApi.unmarkFavoriteItem(itemId = id)
+    /**
+     * Mirrors a favourite toggle to the server so other clients see it.
+     *
+     * Deliberately not through the SDK. Its favourite call targets the newer "current user" route,
+     * which this server answers 200 to - with a body claiming the item is now a favourite - and then
+     * does not persist, for any user. Nothing here can detect that: the call succeeds, the response
+     * says yes, and the star silently means nothing. The older per-user route does persist, so it is
+     * addressed directly.
+     */
+    fun setFavourite(mediaId: String?, favourite: Boolean) = report(mediaId) { _, id ->
+        val credentials = JellyfinClientHolder.credentials
+        val server = credentials.serverUrl?.trimEnd('/')
+        val token = credentials.accessToken
+        val userId = credentials.userId
+        if (server == null || token == null || userId == null) {
+            Log.w(TAG, "Not signed in; cannot sync favourite for $id")
+            return@report
         }
-        Log.d(TAG, "Marked $id favourite=$favourite")
+        // Both GUIDs go in undashed. The server accepts the dashed form in this path, answers 200,
+        // and returns a body saying the item is now a favourite - while writing nothing at all.
+        // There is no way to detect that from the response, so the only defence is to send the form
+        // that works.
+        val request = Request.Builder()
+            .url(
+                "$server/Users/${userId.undashed()}" +
+                        "/FavoriteItems/${id.toString().undashed()}"
+            )
+            .header("Authorization", "MediaBrowser Token=\"$token\"")
+            .apply { if (favourite) post(EMPTY_BODY) else delete() }
+            .build()
+        PLAIN_CLIENT.newCall(request).execute().use { response ->
+            if (response.isSuccessful) {
+                Log.d(TAG, "Favourite ${request.method} for $id accepted")
+            } else {
+                Log.w(TAG, "Favourite for $id rejected with HTTP ${response.code}")
+            }
+        }
     }
 
     private inline fun report(
@@ -113,6 +146,26 @@ class JellyfinReporter(private val context: Context) {
     companion object {
         private const val TAG = "JellyfinReporter"
         private const val TICKS_PER_MILLISECOND = 10_000L
+
+        /**
+         * A client of our own, deliberately not the SDK's.
+         *
+         * The SDK's factory client carries its own auth handling; a hand-built request sent through
+         * it reaches the server without the credentials set here, which Jellyfin answers 200 to and
+         * then ignores.
+         */
+        private val PLAIN_CLIENT: OkHttpClient by lazy {
+            OkHttpClient.Builder()
+                .connectTimeout(15, TimeUnit.SECONDS)
+                .readTimeout(30, TimeUnit.SECONDS)
+                .build()
+        }
+
+        /** Jellyfin expects a POST with no payload for a favourite. */
+        private val EMPTY_BODY = ByteArray(0).toRequestBody(null)
+
+        /** Jellyfin's paths want GUIDs with no dashes; see [setFavourite] for why it matters. */
+        fun String.undashed(): String = replace("-", "")
 
         /**
          * Jellyfin returns GUIDs without dashes ("a1b2..."), but UUID.fromString() demands the
