@@ -43,4 +43,6 @@
     <dimen name="standard_side_padding">26.5dp</dimen>
     <dimen name="toolbar_height">58dp</dimen>
     <dimen name="toolbar_margin_bottom_offset">29dp</dimen>
+    <!-- Gap between Quick Connect code cells. -->
+    <dimen name="quick_connect_digit_gap">8dp</dimen>
 </resources>

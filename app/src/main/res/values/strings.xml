@@ -257,9 +257,8 @@
     <string name="jellyfin_connect">Connect</string>
     <string name="jellyfin_change_server">Choose a different server</string>
     <string name="jellyfin_quick_connect">Use Quick Connect</string>
-    <string name="jellyfin_quick_connect_code">Open Jellyfin on a device you are already signed in to, go to Quick Connect, and enter this code:
-
-%1$s</string>
+    <string name="jellyfin_quick_connect_instructions">Open Jellyfin on a device you are already signed in to, go to Quick Connect, and enter this code.</string>
+    <string name="jellyfin_quick_connect_waiting">Waiting for approval…</string>
     <string name="jellyfin_quick_connect_failed">Quick Connect could not be started on this server.</string>
     <string name="jellyfin_error_no_server_found">No Jellyfin server answered at %1$s. Check the address and that the server is running.</string>
     <string name="jellyfin_error_no_server">Enter your server address</string>
