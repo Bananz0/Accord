@@ -295,7 +295,7 @@ class JellyfinLoginActivity : AppCompatActivity() {
 
             val dialog = MaterialAlertDialogBuilder(this@JellyfinLoginActivity)
                 .setTitle(R.string.jellyfin_quick_connect)
-                .setMessage(getString(R.string.jellyfin_quick_connect_code, code))
+                .setView(buildCodeView(code))
                 .setNegativeButton(android.R.string.cancel) { _, _ -> quickConnectJob?.cancel() }
                 .setCancelable(false)
                 .show()
@@ -329,6 +329,29 @@ class JellyfinLoginActivity : AppCompatActivity() {
                 dialog.dismiss()
             }
         }
+    }
+
+    /**
+     * Lays the code out as one large boxed character each.
+     *
+     * The code has to be read off this screen and typed into another device, so it is set as
+     * separated cells rather than a run of digits inside a sentence - the same reason a verification
+     * code is never presented as prose.
+     */
+    private fun buildCodeView(code: String): View {
+        val view = layoutInflater.inflate(R.layout.dialog_quick_connect, null)
+        val boxes = view.findViewById<android.widget.LinearLayout>(R.id.code_boxes)
+        code.forEachIndexed { index, character ->
+            val cell = layoutInflater.inflate(R.layout.item_quick_connect_digit, boxes, false)
+                    as TextView
+            cell.text = character.toString()
+            if (index > 0) {
+                (cell.layoutParams as ViewGroup.MarginLayoutParams).marginStart =
+                    resources.getDimensionPixelSize(R.dimen.quick_connect_digit_gap)
+            }
+            boxes.addView(cell)
+        }
+        return view
     }
 
     private fun finishAuthentication(result: LoginResult) = when (result) {
