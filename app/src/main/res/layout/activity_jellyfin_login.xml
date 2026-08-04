@@ -1,102 +1,299 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:fillViewport="true">
+    android:background="@color/contrast_colorBackground">
 
-    <LinearLayout
+    <!--
+        Step one: which server. Servers broadcasting on the local network appear on their own, so
+        the common case is a tap rather than remembering an address.
+    -->
+    <ScrollView
+        android:id="@+id/step_server"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:gravity="center_vertical"
-        android:orientation="vertical"
-        android:paddingHorizontal="24dp"
-        android:paddingVertical="48dp">
+        android:layout_height="match_parent"
+        android:fillViewport="true">
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="8dp"
-            android:text="@string/jellyfin_login_title"
-            android:textAppearance="?attr/textAppearanceHeadlineMedium" />
-
-        <TextView
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="32dp"
-            android:text="@string/jellyfin_login_subtitle"
-            android:textAppearance="?attr/textAppearanceBodyMedium" />
+            android:orientation="vertical"
+            android:paddingHorizontal="24dp"
+            android:paddingTop="72dp"
+            android:paddingBottom="40dp">
 
-        <com.google.android.material.textfield.TextInputLayout
-            android:id="@+id/server_url_layout"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="16dp"
-            android:hint="@string/jellyfin_server_url"
-            app:startIconDrawable="@drawable/ic_search">
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="6dp"
+                android:fontFamily="@font/sf_pro_bold"
+                android:text="@string/jellyfin_login_title"
+                android:textColor="@color/onSurfaceColor"
+                android:textSize="32sp" />
 
-            <com.google.android.material.textfield.TextInputEditText
-                android:id="@+id/server_url"
+            <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:imeOptions="actionNext"
-                android:inputType="textUri"
-                android:singleLine="true" />
-        </com.google.android.material.textfield.TextInputLayout>
+                android:layout_marginBottom="36dp"
+                android:fontFamily="@font/sf_pro_regular"
+                android:text="@string/jellyfin_login_subtitle"
+                android:textColor="@color/onSurfaceColorInactive"
+                android:textSize="15sp" />
 
-        <com.google.android.material.textfield.TextInputLayout
-            android:id="@+id/username_layout"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="16dp"
-            android:hint="@string/jellyfin_username">
-
-            <com.google.android.material.textfield.TextInputEditText
-                android:id="@+id/username"
+            <LinearLayout
+                android:id="@+id/discovery_header"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:imeOptions="actionNext"
-                android:inputType="text"
-                android:singleLine="true" />
-        </com.google.android.material.textfield.TextInputLayout>
+                android:layout_marginBottom="10dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
 
-        <com.google.android.material.textfield.TextInputLayout
-            android:id="@+id/password_layout"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="24dp"
-            android:hint="@string/jellyfin_password"
-            app:endIconMode="password_toggle">
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:fontFamily="@font/sf_pro_semibold"
+                    android:text="@string/jellyfin_servers_nearby"
+                    android:textColor="@color/onSurfaceColor"
+                    android:textSize="15sp" />
 
-            <com.google.android.material.textfield.TextInputEditText
-                android:id="@+id/password"
+                <com.google.android.material.progressindicator.CircularProgressIndicator
+                    android:id="@+id/discovery_progress"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:indeterminate="true"
+                    app:indicatorColor="@color/accentColor"
+                    app:indicatorInset="0dp"
+                    app:indicatorSize="16dp"
+                    app:trackThickness="2dp" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/discovery_empty"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:imeOptions="actionDone"
-                android:inputType="textPassword"
-                android:singleLine="true" />
-        </com.google.android.material.textfield.TextInputLayout>
+                android:layout_marginBottom="8dp"
+                android:fontFamily="@font/sf_pro_regular"
+                android:text="@string/jellyfin_no_servers_found"
+                android:textColor="@color/onSurfaceColorInactive"
+                android:textSize="13sp"
+                android:visibility="gone" />
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/sign_in"
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/discovered_servers"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:visibility="gone" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="24dp"
+                android:layout_marginBottom="10dp"
+                android:fontFamily="@font/sf_pro_semibold"
+                android:text="@string/jellyfin_enter_address"
+                android:textColor="@color/onSurfaceColor"
+                android:textSize="15sp" />
+
+            <com.google.android.material.textfield.TextInputLayout
+                android:id="@+id/server_url_layout"
+                style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="16dp"
+                android:hint="@string/jellyfin_server_url"
+                app:boxCornerRadiusBottomEnd="14dp"
+                app:boxCornerRadiusBottomStart="14dp"
+                app:boxCornerRadiusTopEnd="14dp"
+                app:boxCornerRadiusTopStart="14dp">
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/server_url"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="@font/sf_pro_regular"
+                    android:imeOptions="actionDone"
+                    android:inputType="textUri"
+                    android:singleLine="true" />
+            </com.google.android.material.textfield.TextInputLayout>
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/connect"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:fontFamily="@font/sf_pro_semibold"
+                android:text="@string/jellyfin_connect"
+                android:textSize="16sp"
+                app:backgroundTint="@color/accentColor"
+                app:cornerRadius="14dp" />
+
+            <com.google.android.material.progressindicator.LinearProgressIndicator
+                android:id="@+id/server_progress"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:indeterminate="true"
+                android:visibility="gone"
+                app:indicatorColor="@color/accentColor" />
+
+            <TextView
+                android:id="@+id/server_status"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:fontFamily="@font/sf_pro_regular"
+                android:textColor="@color/onSurfaceColorInactive"
+                android:textSize="14sp"
+                android:visibility="gone" />
+        </LinearLayout>
+    </ScrollView>
+
+    <!--
+        Step two: which user. Jellyfin publishes its visible accounts, so this is a list of faces
+        rather than a name to spell exactly right - and reaching it at all already proves the
+        address works, so a failure here really is the password.
+    -->
+    <ScrollView
+        android:id="@+id/step_user"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:fillViewport="true"
+        android:visibility="gone">
+
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="@string/jellyfin_sign_in" />
+            android:orientation="vertical"
+            android:paddingHorizontal="24dp"
+            android:paddingTop="72dp"
+            android:paddingBottom="40dp">
 
-        <com.google.android.material.progressindicator.LinearProgressIndicator
-            android:id="@+id/progress"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:indeterminate="true"
-            android:visibility="gone" />
+            <TextView
+                android:id="@+id/server_name"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="4dp"
+                android:fontFamily="@font/sf_pro_bold"
+                android:textColor="@color/onSurfaceColor"
+                android:textSize="30sp" />
 
-        <TextView
-            android:id="@+id/status"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:textAppearance="?attr/textAppearanceBodyMedium"
-            android:visibility="gone" />
-    </LinearLayout>
-</ScrollView>
+            <TextView
+                android:id="@+id/change_server"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="32dp"
+                android:background="?attr/selectableItemBackground"
+                android:fontFamily="@font/sf_pro_medium"
+                android:paddingVertical="4dp"
+                android:text="@string/jellyfin_change_server"
+                android:textColor="@color/accentColor"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/users_label"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="10dp"
+                android:fontFamily="@font/sf_pro_semibold"
+                android:text="@string/jellyfin_choose_account"
+                android:textColor="@color/onSurfaceColor"
+                android:textSize="15sp"
+                android:visibility="gone" />
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/users"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="16dp" />
+
+            <com.google.android.material.textfield.TextInputLayout
+                android:id="@+id/username_layout"
+                style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="12dp"
+                android:hint="@string/jellyfin_username"
+                app:boxCornerRadiusBottomEnd="14dp"
+                app:boxCornerRadiusBottomStart="14dp"
+                app:boxCornerRadiusTopEnd="14dp"
+                app:boxCornerRadiusTopStart="14dp">
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/username"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="@font/sf_pro_regular"
+                    android:imeOptions="actionNext"
+                    android:inputType="text"
+                    android:singleLine="true" />
+            </com.google.android.material.textfield.TextInputLayout>
+
+            <com.google.android.material.textfield.TextInputLayout
+                android:id="@+id/password_layout"
+                style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="20dp"
+                android:hint="@string/jellyfin_password"
+                app:boxCornerRadiusBottomEnd="14dp"
+                app:boxCornerRadiusBottomStart="14dp"
+                app:boxCornerRadiusTopEnd="14dp"
+                app:boxCornerRadiusTopStart="14dp"
+                app:endIconMode="password_toggle">
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/password"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="@font/sf_pro_regular"
+                    android:imeOptions="actionDone"
+                    android:inputType="textPassword"
+                    android:singleLine="true" />
+            </com.google.android.material.textfield.TextInputLayout>
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/sign_in"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:fontFamily="@font/sf_pro_semibold"
+                android:text="@string/jellyfin_sign_in"
+                android:textSize="16sp"
+                app:backgroundTint="@color/accentColor"
+                app:cornerRadius="14dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/quick_connect"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:layout_marginTop="10dp"
+                android:fontFamily="@font/sf_pro_semibold"
+                android:text="@string/jellyfin_quick_connect"
+                android:textColor="@color/onSurfaceColor"
+                android:textSize="16sp"
+                android:visibility="gone"
+                app:cornerRadius="14dp"
+                app:strokeColor="@color/secondaryOverlayColor" />
+
+            <com.google.android.material.progressindicator.LinearProgressIndicator
+                android:id="@+id/progress"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:indeterminate="true"
+                android:visibility="gone"
+                app:indicatorColor="@color/accentColor" />
+
+            <TextView
+                android:id="@+id/status"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:fontFamily="@font/sf_pro_regular"
+                android:textColor="@color/onSurfaceColorInactive"
+                android:textSize="14sp"
+                android:visibility="gone" />
+        </LinearLayout>
+    </ScrollView>
+</FrameLayout>

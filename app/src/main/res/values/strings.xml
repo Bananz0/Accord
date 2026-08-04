@@ -250,6 +250,17 @@
     <string name="jellyfin_sign_in">Sign in</string>
     <string name="jellyfin_signing_in">Signing in…</string>
     <string name="jellyfin_finding_server">Looking for your server…</string>
+    <string name="jellyfin_servers_nearby">On your network</string>
+    <string name="jellyfin_no_servers_found">Nothing found. Enter the address below.</string>
+    <string name="jellyfin_choose_account">Choose an account</string>
+    <string name="jellyfin_enter_address">Or enter an address</string>
+    <string name="jellyfin_connect">Connect</string>
+    <string name="jellyfin_change_server">Choose a different server</string>
+    <string name="jellyfin_quick_connect">Use Quick Connect</string>
+    <string name="jellyfin_quick_connect_code">Open Jellyfin on a device you are already signed in to, go to Quick Connect, and enter this code:
+
+%1$s</string>
+    <string name="jellyfin_quick_connect_failed">Quick Connect could not be started on this server.</string>
     <string name="jellyfin_error_no_server_found">No Jellyfin server answered at %1$s. Check the address and that the server is running.</string>
     <string name="jellyfin_error_no_server">Enter your server address</string>
     <string name="jellyfin_error_no_username">Enter your username</string>
