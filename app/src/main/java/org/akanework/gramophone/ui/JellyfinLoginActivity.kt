@@ -3,117 +3,223 @@ package org.akanework.gramophone.ui
 import android.content.Intent
 import android.os.Bundle
 import android.util.Log
+import android.view.LayoutInflater
 import android.view.View
+import android.view.ViewGroup
+import android.widget.ImageView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.net.toUri
 import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import coil3.load
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.progressindicator.CircularProgressIndicator
 import com.google.android.material.progressindicator.LinearProgressIndicator
 import com.google.android.material.textfield.TextInputEditText
+import com.google.android.material.textfield.TextInputLayout
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.akanework.gramophone.R
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinClientHolder
+import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.exception.ApiClientException
 import org.jellyfin.sdk.api.client.exception.InvalidStatusException
 import org.jellyfin.sdk.api.client.exception.SecureConnectionException
 import org.jellyfin.sdk.api.client.exception.TimeoutException
 import org.jellyfin.sdk.api.client.extensions.authenticateUserByName
+import org.jellyfin.sdk.api.client.extensions.quickConnectApi
 import org.jellyfin.sdk.api.client.extensions.userApi
-import org.jellyfin.sdk.discovery.DiscoveryService
 import org.jellyfin.sdk.discovery.RecommendedServerInfo
 import org.jellyfin.sdk.discovery.RecommendedServerInfoScore
+import org.jellyfin.sdk.model.api.AuthenticationResult
+import org.jellyfin.sdk.model.api.QuickConnectDto
+import org.jellyfin.sdk.model.api.UserDto
 
 /**
- * First-run sign in. Stores the resulting token in the credential store and hands control back to
- * [MainActivity], which then syncs the library.
+ * First-run sign in, in two steps: pick a server, then pick a user.
+ *
+ * Splitting it that way is what Jellyfin's own clients do, and it earns its keep. Servers announce
+ * themselves on the local network, so the usual case needs no typing at all; and by the time a
+ * password is asked for, the address has already been proven to answer - which means a failure at
+ * that point really is the password, rather than the one error that used to stand in for every
+ * possible problem.
  */
 class JellyfinLoginActivity : AppCompatActivity() {
 
+    private lateinit var stepServer: View
+    private lateinit var stepUser: View
+
+    private lateinit var discoveryEmpty: TextView
+    private lateinit var discoveredList: RecyclerView
+    private lateinit var discoveryProgress: CircularProgressIndicator
     private lateinit var serverUrlField: TextInputEditText
+    private lateinit var connectButton: MaterialButton
+    private lateinit var serverProgress: LinearProgressIndicator
+    private lateinit var serverStatus: TextView
+
+    private lateinit var serverNameLabel: TextView
+    private lateinit var usersLabel: TextView
+    private lateinit var userList: RecyclerView
+    private lateinit var usernameLayout: TextInputLayout
     private lateinit var usernameField: TextInputEditText
     private lateinit var passwordField: TextInputEditText
     private lateinit var signInButton: MaterialButton
+    private lateinit var quickConnectButton: MaterialButton
     private lateinit var progress: LinearProgressIndicator
     private lateinit var status: TextView
+
+    /** Set once a server has been resolved; every step-two action needs it. */
+    private var serverUrl: String? = null
+    private var quickConnectJob: Job? = null
+
+    private val discoveredAdapter = ServerAdapter { connectTo(it.address) }
+    private val userAdapter = UserAdapter { user ->
+        usernameField.setText(user.name)
+        passwordField.requestFocus()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_jellyfin_login)
+        bindViews()
 
+        discoveredList.layoutManager = LinearLayoutManager(this)
+        discoveredList.adapter = discoveredAdapter
+        userList.layoutManager = LinearLayoutManager(this)
+        userList.adapter = userAdapter
+
+        connectButton.setOnClickListener {
+            connectTo(serverUrlField.text?.toString()?.trim().orEmpty())
+        }
+        signInButton.setOnClickListener { signInWithPassword() }
+        quickConnectButton.setOnClickListener { startQuickConnect() }
+        findViewById<TextView>(R.id.change_server).setOnClickListener { showServerStep() }
+
+        startDiscovery()
+    }
+
+    private fun bindViews() {
+        stepServer = findViewById(R.id.step_server)
+        stepUser = findViewById(R.id.step_user)
+        discoveryEmpty = findViewById(R.id.discovery_empty)
+        discoveredList = findViewById(R.id.discovered_servers)
+        discoveryProgress = findViewById(R.id.discovery_progress)
         serverUrlField = findViewById(R.id.server_url)
+        connectButton = findViewById(R.id.connect)
+        serverProgress = findViewById(R.id.server_progress)
+        serverStatus = findViewById(R.id.server_status)
+        serverNameLabel = findViewById(R.id.server_name)
+        usersLabel = findViewById(R.id.users_label)
+        userList = findViewById(R.id.users)
+        usernameLayout = findViewById(R.id.username_layout)
         usernameField = findViewById(R.id.username)
         passwordField = findViewById(R.id.password)
         signInButton = findViewById(R.id.sign_in)
+        quickConnectButton = findViewById(R.id.quick_connect)
         progress = findViewById(R.id.progress)
         status = findViewById(R.id.status)
-
-        signInButton.setOnClickListener { signIn() }
     }
 
-    private fun signIn() {
-        val rawUrl = serverUrlField.text?.toString()?.trim().orEmpty()
-        val username = usernameField.text?.toString()?.trim().orEmpty()
-        val password = passwordField.text?.toString().orEmpty()
+    /**
+     * Listens for servers announcing themselves on the local network.
+     *
+     * Jellyfin answers a UDP broadcast on port 7359, which is how its own clients find a server
+     * without being told where it is. Results arrive one at a time, so the list fills in as they
+     * reply rather than after a fixed wait.
+     */
+    private fun startDiscovery() {
+        JellyfinClientHolder.discovery()
+            .discoverLocalServers()
+            .onEach { found ->
+                discoveredAdapter.add(found.name.orEmpty(), found.address.orEmpty())
+                discoveredList.visibility = View.VISIBLE
+                discoveryEmpty.visibility = View.GONE
+                discoveryProgress.visibility = View.GONE
+            }
+            .catch { e ->
+                // A network that blocks broadcast traffic is ordinary, not an error worth showing;
+                // the address field is still there.
+                Log.d(TAG, "Local discovery unavailable", e)
+                discoveryProgress.visibility = View.GONE
+            }
+            .launchIn(lifecycleScope)
 
-        if (rawUrl.isEmpty()) {
-            showError(getString(R.string.jellyfin_error_no_server))
+        // Discovery has no completion signal beyond its timeout, so stop the spinner on our own
+        // rather than leaving it turning forever on a network with no Jellyfin on it.
+        lifecycleScope.launch {
+            delay(DISCOVERY_SPINNER_MS)
+            discoveryProgress.visibility = View.GONE
+            if (discoveredAdapter.itemCount == 0) discoveryEmpty.visibility = View.VISIBLE
+        }
+    }
+
+    /** Resolves [input] to a working address, then moves to the user step. */
+    private fun connectTo(input: String) {
+        if (input.isEmpty()) {
+            showServerError(getString(R.string.jellyfin_error_no_server))
             return
         }
-        if (username.isEmpty()) {
-            showError(getString(R.string.jellyfin_error_no_username))
-            return
-        }
-        setBusy(true)
-        status.visibility = View.VISIBLE
-        status.text = getString(R.string.jellyfin_finding_server)
+        setServerBusy(true)
+        serverStatus.visibility = View.VISIBLE
+        serverStatus.setText(R.string.jellyfin_finding_server)
 
         lifecycleScope.launch {
-            // Resolve the address before trying to authenticate against it. What people type is
-            // rarely a complete URL - a bare IP, a hostname, an address with the scheme or port
-            // missing, or a reverse-proxy path - and the SDK knows which candidates are worth
-            // probing and which of them actually answers as a Jellyfin server.
-            val serverUrl = withContext(Dispatchers.IO) { resolveServer(rawUrl) }
-            if (serverUrl == null) {
-                setBusy(false)
-                showError(getString(R.string.jellyfin_error_no_server_found, rawUrl))
+            val resolved = withContext(Dispatchers.IO) { resolveServer(input) }
+            if (resolved == null) {
+                setServerBusy(false)
+                showServerError(getString(R.string.jellyfin_error_no_server_found, input))
                 return@launch
             }
-            status.text = getString(R.string.jellyfin_signing_in)
-            val result = withContext(Dispatchers.IO) {
-                authenticate(serverUrl, username, password)
-            }
-            when (result) {
-                is LoginResult.Success -> {
-                    startActivity(Intent(this@JellyfinLoginActivity, MainActivity::class.java))
-                    finish()
-                }
+            serverUrl = resolved
+            val api = JellyfinClientHolder.createUnauthenticatedApi(resolved)
+            val users = withContext(Dispatchers.IO) { publicUsers(api) }
+            val quickConnectAvailable = withContext(Dispatchers.IO) { quickConnectEnabled(api) }
+            setServerBusy(false)
+            serverStatus.visibility = View.GONE
 
-                is LoginResult.Failure -> {
-                    setBusy(false)
-                    showError(result.message)
-                }
-            }
+            serverNameLabel.text = resolved.toUri().host ?: resolved
+            userAdapter.submit(users, resolved)
+            // With no public users the server is hiding them, so a name has to be typed. With some,
+            // the field is still there for hidden accounts but starts out of the way.
+            usersLabel.visibility = if (users.isEmpty()) View.GONE else View.VISIBLE
+            quickConnectButton.visibility =
+                if (quickConnectAvailable) View.VISIBLE else View.GONE
+            showUserStep()
         }
+    }
+
+    private fun showServerStep() {
+        quickConnectJob?.cancel()
+        stepUser.visibility = View.GONE
+        stepServer.visibility = View.VISIBLE
+        status.visibility = View.GONE
+    }
+
+    private fun showUserStep() {
+        stepServer.visibility = View.GONE
+        stepUser.visibility = View.VISIBLE
     }
 
     /**
      * Turns what the user typed into an address that actually answers, or null if none does.
      *
-     * [DiscoveryService.getAddressCandidates] expands the input into the forms worth trying - adding
-     * https and http, the default port, and so on - and getRecommendedServers probes each and scores
-     * it. Taking the best-scoring candidate means "192.168.1.192" works whether the server is on
-     * 8096 or behind a proxy on 443, instead of being rejected for not looking like a URL.
+     * The SDK expands the input into the candidates worth probing - adding schemes and the default
+     * port - and grades each. Score comes first and response time only breaks ties: picking the
+     * fastest reply instead resolves a bare IP to whatever else is on port 80, which then returns an
+     * HTML page where the API was expected.
      */
     private suspend fun resolveServer(input: String): String? = try {
         JellyfinClientHolder.discovery()
             .getRecommendedServers(input, RecommendedServerInfoScore.OK)
-            // Score first, response time only to break ties. Sorting by speed alone picks whatever
-            // answers quickest, and on a machine that also serves something on port 80 that is the
-            // other thing - which then returns an HTML page where the API was expected. A lower
-            // ordinal is a better score: GREAT, GOOD, OK, BAD.
             .minWithOrNull(
                 compareBy<RecommendedServerInfo> { it.score.ordinal }.thenBy { it.responseTime }
             )
@@ -123,13 +229,133 @@ class JellyfinLoginActivity : AppCompatActivity() {
         null
     }
 
-    private suspend fun authenticate(
-        serverUrl: String,
-        username: String,
-        password: String
+    /** The accounts the server chooses to advertise. Empty is valid - it just means type a name. */
+    private suspend fun publicUsers(api: ApiClient): List<UserDto> = try {
+        api.userApi.getPublicUsers().content
+    } catch (e: Exception) {
+        Log.d(TAG, "Server does not advertise its users", e)
+        emptyList()
+    }
+
+    private suspend fun quickConnectEnabled(api: ApiClient): Boolean = try {
+        api.quickConnectApi.getQuickConnectEnabled().content
+    } catch (e: Exception) {
+        Log.d(TAG, "Quick Connect unavailable", e)
+        false
+    }
+
+    private fun signInWithPassword() {
+        val server = serverUrl ?: return
+        val username = usernameField.text?.toString()?.trim().orEmpty()
+        val password = passwordField.text?.toString().orEmpty()
+        if (username.isEmpty()) {
+            showError(getString(R.string.jellyfin_error_no_username))
+            return
+        }
+        setBusy(true)
+        status.visibility = View.VISIBLE
+        status.setText(R.string.jellyfin_signing_in)
+
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runAuthentication(server) {
+                    it.userApi.authenticateUserByName(username, password).content
+                }
+            }
+            finishAuthentication(result)
+        }
+    }
+
+    /**
+     * Quick Connect: the server shows a code, the user approves it from a session they are already
+     * signed in to, and no password is ever typed here.
+     *
+     * The code is polled rather than pushed - Jellyfin offers no callback - so this loops until the
+     * server reports it authorised or the dialog is dismissed.
+     */
+    private fun startQuickConnect() {
+        val server = serverUrl ?: return
+        val api = JellyfinClientHolder.createUnauthenticatedApi(server)
+        quickConnectJob?.cancel()
+        quickConnectJob = lifecycleScope.launch {
+            val initiated = withContext(Dispatchers.IO) {
+                try {
+                    api.quickConnectApi.initiateQuickConnect().content
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not start Quick Connect", e)
+                    null
+                }
+            }
+            val secret = initiated?.secret
+            val code = initiated?.code
+            if (secret.isNullOrBlank() || code.isNullOrBlank()) {
+                showError(getString(R.string.jellyfin_quick_connect_failed))
+                return@launch
+            }
+
+            val dialog = MaterialAlertDialogBuilder(this@JellyfinLoginActivity)
+                .setTitle(R.string.jellyfin_quick_connect)
+                .setMessage(getString(R.string.jellyfin_quick_connect_code, code))
+                .setNegativeButton(android.R.string.cancel) { _, _ -> quickConnectJob?.cancel() }
+                .setCancelable(false)
+                .show()
+
+            try {
+                while (true) {
+                    delay(QUICK_CONNECT_POLL_MS)
+                    val state = withContext(Dispatchers.IO) {
+                        try {
+                            api.quickConnectApi.getQuickConnectState(secret).content
+                        } catch (e: Exception) {
+                            // The code expires server-side; treat that as still waiting and let the
+                            // user cancel rather than failing under them.
+                            Log.d(TAG, "Quick Connect not ready", e)
+                            null
+                        }
+                    }
+                    if (state?.authenticated == true) break
+                }
+                dialog.dismiss()
+                setBusy(true)
+                status.visibility = View.VISIBLE
+                status.setText(R.string.jellyfin_signing_in)
+                val result = withContext(Dispatchers.IO) {
+                    runAuthentication(server) {
+                        it.userApi.authenticateWithQuickConnect(QuickConnectDto(secret)).content
+                    }
+                }
+                finishAuthentication(result)
+            } finally {
+                dialog.dismiss()
+            }
+        }
+    }
+
+    private fun finishAuthentication(result: LoginResult) = when (result) {
+        is LoginResult.Success -> {
+            startActivity(Intent(this, MainActivity::class.java))
+            finish()
+        }
+
+        is LoginResult.Failure -> {
+            setBusy(false)
+            showError(result.message)
+        }
+    }
+
+    /**
+     * Runs an authentication call and stores whatever session comes back.
+     *
+     * Password and Quick Connect differ only in the call itself; everything after - checking the
+     * token, persisting it, dropping the stale client - is identical, and the error handling is
+     * worth having in one place.
+     */
+    private suspend fun runAuthentication(
+        server: String,
+        authenticate: suspend (ApiClient) -> AuthenticationResult
     ): LoginResult = try {
-        val api = JellyfinClientHolder.createUnauthenticatedApi(serverUrl)
-        val result by api.userApi.authenticateUserByName(username, password)
+        val api = JellyfinClientHolder.createUnauthenticatedApi(server)
+        val result = authenticate(api)
         val token = result.accessToken
         val userId = result.user?.id?.toString()
         if (token.isNullOrEmpty() || userId.isNullOrEmpty()) {
@@ -137,69 +363,62 @@ class JellyfinLoginActivity : AppCompatActivity() {
         } else {
             JellyfinClientHolder.credentials.saveSession(
                 context = this,
-                serverUrl = serverUrl,
+                serverUrl = server,
                 accessToken = token,
                 userId = userId,
                 serverName = result.serverId,
             )
-            // Drop any client built against the previous session.
             JellyfinClientHolder.invalidate()
             LoginResult.Success
         }
     } catch (e: TimeoutException) {
-        Log.w(TAG, "Timed out reaching $serverUrl", e)
+        Log.w(TAG, "Timed out reaching $server", e)
         LoginResult.Failure(getString(R.string.jellyfin_error_unreachable))
     } catch (e: InvalidStatusException) {
         Log.w(TAG, "Server rejected sign in with HTTP ${e.status}", e)
-        // Only an auth status actually means the credentials were wrong. Everything else (a
-        // reverse proxy 502, a wrong path, a server still starting up) used to be reported as a
-        // bad password, which sends people off checking the one thing that was fine.
+        // The address is already known to answer by this point, so an auth status really does mean
+        // the credentials; anything else is still worth reporting as itself.
         if (e.status == 401 || e.status == 403) {
             LoginResult.Failure(getString(R.string.jellyfin_error_credentials))
         } else {
             LoginResult.Failure(getString(R.string.jellyfin_error_http_status, e.status))
         }
     } catch (e: SecureConnectionException) {
-        Log.w(TAG, "TLS problem talking to $serverUrl", e)
+        Log.w(TAG, "TLS problem talking to $server", e)
         LoginResult.Failure(getString(R.string.jellyfin_error_tls))
     } catch (e: ApiClientException) {
-        Log.w(TAG, "Could not sign in to $serverUrl", e)
-        // Surface what actually went wrong rather than guessing; the cause carries the useful
-        // detail (unknown host, connection refused, cleartext blocked).
-        val detail = (e.cause ?: e).let { it.message ?: it::class.java.simpleName }
-        LoginResult.Failure(getString(R.string.jellyfin_error_detail, detail))
+        Log.w(TAG, "Could not sign in to $server", e)
+        LoginResult.Failure(
+            getString(
+                R.string.jellyfin_error_detail,
+                e.cause?.message ?: e.message.orEmpty()
+            )
+        )
     } catch (e: Exception) {
-        // The SDK builds the URL before it does any I/O and throws plain IllegalArgumentException
-        // for a malformed address ("Invalid URL host"). That is not an ApiClientException, so
-        // without this catch a typo in the server field takes the whole process down.
-        Log.w(TAG, "Unexpected failure signing in to $serverUrl", e)
-        LoginResult.Failure(getString(R.string.jellyfin_error_bad_address))
+        Log.e(TAG, "Unexpected failure signing in to $server", e)
+        LoginResult.Failure(
+            getString(R.string.jellyfin_error_detail, e.message.orEmpty())
+        )
     }
 
-    /**
-     * Accepts what people actually type - "jellyfin.example.com", "192.168.1.5:8096" - and turns it
-     * into something the SDK can use.
-     */
-    private fun normaliseUrl(input: String): String {
-        val withScheme =
-            if (input.startsWith("http://") || input.startsWith("https://")) input
-            else "http://$input"
-        return withScheme.trimEnd('/')
+    private fun setServerBusy(busy: Boolean) {
+        connectButton.isEnabled = !busy
+        serverProgress.visibility = if (busy) View.VISIBLE else View.GONE
     }
-
-    /** True if [url] actually has a host, so the SDK will not throw building a request from it. */
-    private fun hasHost(url: String): Boolean =
-        runCatching { url.toUri().host?.isNotBlank() == true }.getOrDefault(false)
 
     private fun setBusy(busy: Boolean) {
         signInButton.isEnabled = !busy
-        serverUrlField.isEnabled = !busy
-        usernameField.isEnabled = !busy
-        passwordField.isEnabled = !busy
+        quickConnectButton.isEnabled = !busy
         progress.visibility = if (busy) View.VISIBLE else View.GONE
     }
 
+    private fun showServerError(message: String) {
+        serverStatus.visibility = View.VISIBLE
+        serverStatus.text = message
+    }
+
     private fun showError(message: String) {
+        setBusy(false)
         status.visibility = View.VISIBLE
         status.text = message
     }
@@ -209,7 +428,87 @@ class JellyfinLoginActivity : AppCompatActivity() {
         data class Failure(val message: String) : LoginResult
     }
 
-    private companion object {
-        const val TAG = "JellyfinLogin"
+    private class ServerAdapter(
+        private val onClick: (Server) -> Unit
+    ) : RecyclerView.Adapter<ServerAdapter.Holder>() {
+
+        data class Server(val name: String, val address: String)
+
+        private val servers = mutableListOf<Server>()
+
+        class Holder(view: View) : RecyclerView.ViewHolder(view) {
+            val name: TextView = view.findViewById(R.id.name)
+            val address: TextView = view.findViewById(R.id.address)
+        }
+
+        /** Ignores repeats: a server answers the broadcast more than once. */
+        fun add(name: String, address: String) {
+            if (address.isBlank() || servers.any { it.address == address }) return
+            servers += Server(name.ifBlank { address }, address)
+            notifyItemInserted(servers.size - 1)
+        }
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) = Holder(
+            LayoutInflater.from(parent.context)
+                .inflate(R.layout.item_jellyfin_server, parent, false)
+        )
+
+        override fun getItemCount() = servers.size
+
+        override fun onBindViewHolder(holder: Holder, position: Int) {
+            val server = servers[position]
+            holder.name.text = server.name
+            holder.address.text = server.address
+            holder.itemView.setOnClickListener { onClick(server) }
+        }
+    }
+
+    private class UserAdapter(
+        private val onClick: (UserDto) -> Unit
+    ) : RecyclerView.Adapter<UserAdapter.Holder>() {
+
+        private val users = mutableListOf<UserDto>()
+        private var serverUrl: String = ""
+
+        class Holder(view: View) : RecyclerView.ViewHolder(view) {
+            val avatar: ImageView = view.findViewById(R.id.avatar)
+            val name: TextView = view.findViewById(R.id.name)
+        }
+
+        fun submit(newUsers: List<UserDto>, server: String) {
+            users.clear()
+            users.addAll(newUsers)
+            serverUrl = server
+            notifyDataSetChanged()
+        }
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) = Holder(
+            LayoutInflater.from(parent.context)
+                .inflate(R.layout.item_jellyfin_user, parent, false)
+        )
+
+        override fun getItemCount() = users.size
+
+        override fun onBindViewHolder(holder: Holder, position: Int) {
+            val user = users[position]
+            holder.name.text = user.name
+            val tag = user.primaryImageTag
+            if (tag != null) {
+                // No error()/placeholder(): Coil3 has no Int overloads, so a drawable id silently
+                // binds to kotlin.error() and throws. The layout's own src is the fallback.
+                holder.avatar.load("$serverUrl/Users/${user.id}/Images/Primary?tag=$tag")
+            }
+            holder.itemView.setOnClickListener { onClick(user) }
+        }
+    }
+
+    companion object {
+        private const val TAG = "JellyfinLoginActivity"
+
+        /** How long to keep the discovery spinner up before assuming nothing will answer. */
+        private const val DISCOVERY_SPINNER_MS = 4_000L
+
+        /** Jellyfin's own clients poll Quick Connect at about this rate. */
+        private const val QUICK_CONNECT_POLL_MS = 2_000L
     }
 }
