@@ -13,7 +13,11 @@ import androidx.core.net.toUri
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import android.content.res.ColorStateList
+import coil3.dispose
 import coil3.load
+import coil3.request.transformations
+import coil3.transform.CircleCropTransformation
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.progressindicator.CircularProgressIndicator
@@ -516,10 +520,32 @@ class JellyfinLoginActivity : AppCompatActivity() {
             val user = users[position]
             holder.name.text = user.name
             val tag = user.primaryImageTag
+            // Both branches set every property they depend on. Rows are recycled, so anything left
+            // over from the previous user - a photo behind a glyph, a glyph stretched edge to edge -
+            // shows up as a rendering bug that only appears after scrolling.
             if (tag != null) {
-                // No error()/placeholder(): Coil3 has no Int overloads, so a drawable id silently
-                // binds to kotlin.error() and throws. The layout's own src is the fallback.
-                holder.avatar.load("$serverUrl/Users/${user.id}/Images/Primary?tag=$tag")
+                holder.avatar.setPadding(0, 0, 0, 0)
+                holder.avatar.scaleType = ImageView.ScaleType.CENTER_CROP
+                holder.avatar.imageTintList = null
+                // Circle-cropped by the loader rather than by the view. An ImageView draws its own
+                // src, so clipToOutline against a round background does not touch it - the photo
+                // keeps its square corners and spills outside the circle.
+                holder.avatar.load(
+                    "$serverUrl/Users/${user.id}/Images/Primary?tag=$tag"
+                ) {
+                    transformations(CircleCropTransformation())
+                }
+            } else {
+                val inset = holder.itemView.resources
+                    .getDimensionPixelSize(R.dimen.jellyfin_avatar_glyph_inset)
+                holder.avatar.dispose()
+                holder.avatar.setImageResource(R.drawable.ic_person_small)
+                holder.avatar.imageTintList =
+                    ColorStateList.valueOf(
+                        holder.itemView.context.getColor(R.color.onSurfaceColorInactive)
+                    )
+                holder.avatar.scaleType = ImageView.ScaleType.FIT_CENTER
+                holder.avatar.setPadding(inset, inset, inset, inset)
             }
             holder.itemView.setOnClickListener { onClick(user) }
         }
