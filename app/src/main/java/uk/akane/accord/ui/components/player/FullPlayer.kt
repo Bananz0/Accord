@@ -53,9 +53,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.akanework.gramophone.logic.GramophonePlaybackService
-import org.akanework.gramophone.logic.getLyrics
 import uk.akane.accord.ui.components.lyrics.Lyrics
 import uk.akane.accord.ui.components.lyrics.LyricsLine
+import android.os.Bundle
+import androidx.core.os.BundleCompat
+import androidx.media3.session.SessionCommand
+import org.akanework.gramophone.logic.utils.MediaStoreUtils
 import uk.akane.accord.R
 import uk.akane.accord.logic.dp
 import uk.akane.accord.logic.inverseLerp
@@ -134,6 +137,9 @@ class FullPlayer @JvmOverloads constructor(
     private var queueItemTouchHelper: ItemTouchHelper? = null
 
     private var lyricsViewModel: LyricsViewModel? = null
+
+    /** onViewCreated builds the line views, so it must run once and not on every toggle. */
+    private var lyricsViewAttached = false
     private val floatingPanelLayout: FloatingPanelLayout
         get() = parent as FloatingPanelLayout
 
@@ -256,10 +262,35 @@ class FullPlayer @JvmOverloads constructor(
         queueContainer.visibility = INVISIBLE
         lyricsViewModel = LyricsViewModel(context) { instance?.currentPosition ?: 0L }
 
-        lyricsBtn.setOnClickListener {
-            fadingEdgeLayout.visibility = VISIBLE
-            lyricsViewModel?.onViewCreated(fadingEdgeLayout)
-            lyricsBtn.visibility = GONE
+        // Upstream reveals lyrics from a stray Button of its own and leaves the quote control in the
+        // bottom row inert. The quote button is where anyone would look for lyrics, so it gets the
+        // job, and it toggles rather than being one-way.
+        lyricsBtn.visibility = GONE
+        captionOverlayButton.setOnClickListener {
+            val showing = fadingEdgeLayout.visibility == VISIBLE
+            if (showing) {
+                fadingEdgeLayout.visibility = GONE
+            } else {
+                fadingEdgeLayout.visibility = VISIBLE
+                if (!lyricsViewAttached) {
+                    lyricsViewAttached = true
+                    lyricsViewModel?.onViewCreated(fadingEdgeLayout)
+                }
+                refreshLyrics()
+            }
+            captionOverlayButton.isChecked = !showing
+            // The lyrics container is constrained over exactly the space the artwork and titles
+            // occupy, so without this the lines render on top of the cover and are unreadable.
+            val coverVisibility = if (showing) VISIBLE else INVISIBLE
+            coverSimpleImageView.visibility = coverVisibility
+            titleTextView.visibility = coverVisibility
+            subtitleTextView.visibility = coverVisibility
+            if (showing) {
+                // Restores whatever the current track earned rather than assuming a badge.
+                instance?.currentTracks?.let { onTracksChanged(it) }
+            } else {
+                qualityBadge.visibility = INVISIBLE
+            }
         }
 
         volumeOverlaySlider.addEmphasizeListener(object : OverlaySlider.EmphasizeListener {
@@ -383,8 +414,14 @@ class FullPlayer @JvmOverloads constructor(
                 _, command, _ ->
             if (command.customAction == GramophonePlaybackService.SERVICE_GET_LYRICS) {
                 refreshLyrics()
+                Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+            } else {
+                // The dispatcher walks listeners until one claims the command, so anything not
+                // handled here has to decline rather than swallow it.
+                Futures.immediateFuture(
+                    SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED)
+                )
             }
-            Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
         }
 
         activity.controllerViewModel.addControllerCallback(activity.lifecycle) { _, _ ->
@@ -859,8 +896,23 @@ class FullPlayer @JvmOverloads constructor(
      */
     private fun refreshLyrics() {
         val controller = instance ?: return
-        CoroutineScope(Dispatchers.Default).launch {
-            val resolved = runCatching { controller.getLyrics() }.getOrNull()
+        CoroutineScope(Dispatchers.Main).launch {
+            // Two steps on purpose. MediaController rejects calls from any thread but the one it
+            // was built on, so the command has to be sent from here; waiting on the reply blocks,
+            // so that part cannot be. Doing both off-main threw IllegalStateException every time,
+            // which is why lyrics never appeared.
+            val resolved = runCatching {
+                val future = controller.sendCustomCommand(
+                    SessionCommand(GramophonePlaybackService.SERVICE_GET_LYRICS, Bundle.EMPTY),
+                    Bundle.EMPTY
+                )
+                withContext(Dispatchers.IO) {
+                    @Suppress("UNCHECKED_CAST")
+                    BundleCompat.getParcelableArray(
+                        future.get().extras, "lyrics", MediaStoreUtils.Lyric::class.java
+                    ) as Array<MediaStoreUtils.Lyric>?
+                }?.toList()
+            }.onFailure { Log.e(TAG, "fetching lyrics failed", it) }.getOrNull()
             val mapped = resolved.orEmpty()
                 // The service prepends an empty element as a lead-in; it has no text to show.
                 .filter { !it.content.isNullOrBlank() }

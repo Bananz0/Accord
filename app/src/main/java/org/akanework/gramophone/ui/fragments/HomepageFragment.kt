@@ -59,7 +59,7 @@ class HomepageFragment : BaseFragment(null) {
         val nestedScrollView = rootView.findViewById<NestedScrollView>(R.id.nested)
         val sectionsView = rootView.findViewById<RecyclerView>(R.id.home_sections)
 
-        sectionAdapter = HomeSectionAdapter { (requireActivity() as MainActivity).getPlayer() }
+        sectionAdapter = HomeSectionAdapter(player = { (requireActivity() as MainActivity).getPlayer() })
 
         appBarLayout = rootView.findViewById(R.id.appbarlayout)
         appBarLayout.enableEdgeToEdgePaddingListener()

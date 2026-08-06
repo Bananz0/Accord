@@ -64,11 +64,61 @@ object HomeFeed {
 
         return buildList {
             jumpBackIn(context, library)?.let(::add)
+            dailyShuffle(context, library)?.let(::add)
+            mostPlayed(context, library)?.let(::add)
             topMixes(context, artists)?.let(::add)
             daylist(context, library)?.let(::add)
             recentlyAdded(context, library)?.let(::add)
             favourites(context, library)?.let(::add)
         }
+    }
+
+    /**
+     * A shuffle of the whole library that holds still for the day.
+     *
+     * Seeded by the date, so it is the same set all day and a different one tomorrow - a row that
+     * reshuffled on every glance would not be worth returning to.
+     */
+    private fun dailyShuffle(context: Context, library: List<MediaItem>): HomeSection? {
+        if (library.size < ROW_SIZE) return null
+        val calendar = Calendar.getInstance()
+        val seed = calendar.get(Calendar.YEAR) * 1000L + calendar.get(Calendar.DAY_OF_YEAR)
+        val shown = library.shuffled(Random(seed)).take(ROW_SIZE)
+        return HomeSection(
+            id = "daily_shuffle",
+            title = context.getString(R.string.mix_daily_shuffle),
+            subtitle = context.getString(R.string.mix_daily_shuffle_subtitle),
+            cards = shown.mapIndexed { index, item ->
+                HomeCard(
+                    title = item.mediaMetadata.title?.toString().orEmpty(),
+                    subtitle = item.mediaMetadata.artist?.toString(),
+                    cover = item.mediaMetadata.artworkUri,
+                    songs = shown,
+                    startIndex = index,
+                )
+            }
+        )
+    }
+
+    /** Straight play counts, which on Jellyfin are counted across every client, not just this one. */
+    private fun mostPlayed(context: Context, library: List<MediaItem>): HomeSection? {
+        val played = library.filter { it.playCount() > 0 }
+            .sortedByDescending { it.playCount() }
+            .take(ROW_SIZE)
+        if (played.isEmpty()) return null
+        return HomeSection(
+            id = "most_played",
+            title = context.getString(R.string.mix_most_played),
+            cards = played.mapIndexed { index, item ->
+                HomeCard(
+                    title = item.mediaMetadata.title?.toString().orEmpty(),
+                    subtitle = item.mediaMetadata.artist?.toString(),
+                    cover = item.mediaMetadata.artworkUri,
+                    songs = played,
+                    startIndex = index,
+                )
+            }
+        )
     }
 
     /**
