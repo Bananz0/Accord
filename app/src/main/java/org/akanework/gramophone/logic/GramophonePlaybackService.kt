@@ -92,7 +92,10 @@ import org.akanework.gramophone.logic.data.lastfm.LastFmScrobbler
 import org.akanework.gramophone.logic.utils.exoplayer.GramophoneExtractorsFactory
 import org.akanework.gramophone.logic.utils.exoplayer.GramophoneMediaSourceFactory
 import org.akanework.gramophone.logic.utils.exoplayer.GramophoneRenderFactory
-import org.akanework.gramophone.ui.MainActivity
+// The notification and the media session must reopen the app the user is actually
+// using. Pointing at the old shell dropped them into the retired UI, where nothing
+// they tapped belonged to the screen they had left.
+import uk.akane.accord.ui.MainActivity
 import kotlin.random.Random
 
 

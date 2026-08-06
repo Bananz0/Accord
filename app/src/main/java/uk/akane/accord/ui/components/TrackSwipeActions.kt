@@ -14,6 +14,11 @@ import org.akanework.gramophone.logic.data.jellyfin.JellyfinDownloadManager
 import uk.akane.accord.R
 import uk.akane.accord.logic.dp
 import uk.akane.accord.ui.MainActivity
+import android.view.MotionEvent
+import android.view.ViewConfiguration
+import kotlin.math.abs
+import android.view.HapticFeedbackConstants
+import kotlin.math.min
 
 /**
  * Swipe a track row to do the two things worth doing without opening a menu.
@@ -48,10 +53,23 @@ object TrackSwipeActions {
         val corner = 12.dp.px
         val inset = 16.dp.px
 
+        // Tracks which rows have already buzzed, so crossing the threshold reports once per
+        // gesture rather than on every frame past it.
+        val armed = mutableSetOf<Int>()
+
         val callback = object : ItemTouchHelper.SimpleCallback(
             0,
             ItemTouchHelper.LEFT or ItemTouchHelper.RIGHT
         ) {
+            /** How far the finger must travel, as a fraction of the row, to mean it. */
+            override fun getSwipeThreshold(viewHolder: RecyclerView.ViewHolder) = 0.30F
+
+            /**
+             * A flick should not throw the row off the screen. Raising the escape velocity
+             * well above the default means the distance decides, not the speed.
+             */
+            override fun getSwipeEscapeVelocity(defaultValue: Float) = defaultValue * 8F
+
             override fun getSwipeDirs(
                 recyclerView: RecyclerView,
                 viewHolder: RecyclerView.ViewHolder
@@ -69,6 +87,8 @@ object TrackSwipeActions {
 
             override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
                 val position = viewHolder.bindingAdapterPosition
+                armed.remove(viewHolder.hashCode())
+                viewHolder.itemView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
                 val item = trackAt(position)
                 if (item == null) {
                     recyclerView.adapter?.notifyItemChanged(position)
@@ -100,27 +120,36 @@ object TrackSwipeActions {
                 actionState: Int,
                 isCurrentlyActive: Boolean
             ) {
-                if (actionState == ItemTouchHelper.ACTION_STATE_SWIPE && dX != 0F) {
-                    val view = viewHolder.itemView
-                    backgroundPaint.color = if (dX > 0) accent else Color.argb(255, 90, 90, 96)
-                    val bounds = if (dX > 0) {
+                val view = viewHolder.itemView
+                // The row follows at a fraction of the finger and stops at a limit well short
+                // of the edge: it never leaves, so it always reads as something that will come
+                // back, and the extra travel of the finger is the resistance.
+                val limit = view.width * MAX_TRAVEL
+                val damped = if (dX == 0F) 0F else {
+                    val magnitude = min(abs(dX) * FOLLOW, limit)
+                    if (dX > 0) magnitude else -magnitude
+                }
+
+                if (actionState == ItemTouchHelper.ACTION_STATE_SWIPE && damped != 0F) {
+                    backgroundPaint.color = if (damped > 0) accent else Color.argb(255, 90, 90, 96)
+                    val bounds = if (damped > 0) {
                         RectF(
                             view.left.toFloat(), view.top.toFloat(),
-                            view.left + dX, view.bottom.toFloat()
+                            view.left + damped, view.bottom.toFloat()
                         )
                     } else {
                         RectF(
-                            view.right + dX, view.top.toFloat(),
+                            view.right + damped, view.top.toFloat(),
                             view.right.toFloat(), view.bottom.toFloat()
                         )
                     }
                     canvas.drawRoundRect(bounds, corner, corner, backgroundPaint)
 
-                    val icon = if (dX > 0) queueIcon else leftIcon
+                    val icon = if (damped > 0) queueIcon else leftIcon
                     icon?.let {
                         val size = 22.dp.px.toInt()
                         val centerY = (view.top + view.bottom) / 2
-                        val centerX = if (dX > 0) {
+                        val centerX = if (damped > 0) {
                             (view.left + inset + size / 2).toInt()
                         } else {
                             (view.right - inset - size / 2).toInt()
@@ -132,14 +161,77 @@ object TrackSwipeActions {
                         )
                         it.draw(canvas)
                     }
+
+                    // A tick the moment the swipe is far enough to do something, so the user
+                    // knows they can let go without watching the row.
+                    val key = viewHolder.hashCode()
+                    val past = abs(dX) > view.width * getSwipeThreshold(viewHolder)
+                    if (isCurrentlyActive && past && armed.add(key)) {
+                        view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                    } else if (!past) {
+                        armed.remove(key)
+                    }
                 }
                 super.onChildDraw(
-                    canvas, recyclerView, viewHolder, dX, dY, actionState, isCurrentlyActive
+                    canvas, recyclerView, viewHolder, damped, dY, actionState, isCurrentlyActive
                 )
             }
         }
         ItemTouchHelper(callback).attachToRecyclerView(recyclerView)
+        claimHorizontalGestures(recyclerView, trackAt)
     }
+
+    /**
+     * Stops the page stealing a sideways drag that started on a row.
+     *
+     * FragmentSwitcherView treats any horizontal movement past the touch slop as its back-swipe and
+     * intercepts it, unless a child reports it can scroll horizontally - which a vertical list never
+     * does. The row swipe therefore never happened: the whole page slid instead.
+     *
+     * A parent decides whether to intercept before the child sees the move, so the decision has to
+     * be made on the way down and reversed once the gesture turns out to be vertical, which is the
+     * list's own scrolling and none of our business.
+     */
+    private fun claimHorizontalGestures(
+        recyclerView: RecyclerView,
+        trackAt: (Int) -> MediaItem?,
+    ) {
+        val touchSlop = ViewConfiguration.get(recyclerView.context).scaledTouchSlop
+        var downX = 0F
+        var downY = 0F
+        recyclerView.addOnItemTouchListener(object : RecyclerView.SimpleOnItemTouchListener() {
+            override fun onInterceptTouchEvent(rv: RecyclerView, e: MotionEvent): Boolean {
+                when (e.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        downX = e.x
+                        downY = e.y
+                        // Only where a track is. Anywhere else - the header, the footer, the
+                        // empty space below the list - the sideways drag still belongs to the
+                        // page, and should take the user back the way they came.
+                        val child = rv.findChildViewUnder(e.x, e.y)
+                        val onTrack = child != null &&
+                            trackAt(rv.getChildAdapterPosition(child)) != null
+                        rv.parent?.requestDisallowInterceptTouchEvent(onTrack)
+                    }
+
+                    MotionEvent.ACTION_MOVE -> {
+                        val dx = e.x - downX
+                        val dy = e.y - downY
+                        if (abs(dy) > touchSlop && abs(dy) > abs(dx)) {
+                            // Scrolling the list, not swiping a row - hand the gesture back.
+                            rv.parent?.requestDisallowInterceptTouchEvent(false)
+                        }
+                    }
+                }
+                // Never consumed here; this only decides who is allowed to intercept.
+                return false
+            }
+        })
+    }
+
+    /** How far the row follows the finger, and the furthest it will go. */
+    private const val FOLLOW = 0.45F
+    private const val MAX_TRAVEL = 0.24F
 
     private fun addToQueue(activity: MainActivity, item: MediaItem) {
         val player = activity.getPlayer() ?: return

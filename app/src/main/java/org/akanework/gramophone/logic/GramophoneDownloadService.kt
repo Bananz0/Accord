@@ -16,7 +16,10 @@ import androidx.media3.exoplayer.scheduler.PlatformScheduler
 import androidx.media3.exoplayer.scheduler.Scheduler
 import uk.akane.accord.R
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinDownloadManager
-import org.akanework.gramophone.ui.MainActivity
+// The notification and the media session must reopen the app the user is actually
+// using. Pointing at the old shell dropped them into the retired UI, where nothing
+// they tapped belonged to the screen they had left.
+import uk.akane.accord.ui.MainActivity
 
 /**
  * Runs offline downloads in the foreground.
