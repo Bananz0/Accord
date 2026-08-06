@@ -8,6 +8,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinDownloadManager
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinLibraryLoader
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinReporter
 import uk.akane.accord.R
 
@@ -26,10 +27,18 @@ object SongRowMenu {
 
     fun show(anchor: View, item: MediaItem) {
         val context = anchor.context
+        // Whether the server already has this starred, so the row can offer the opposite action
+        // rather than only ever setting it - favouriting with no way to unfavourite is half a
+        // feature.
+        val isFavourite = item.mediaMetadata.extras
+            ?.getBoolean(JellyfinLibraryLoader.EXTRA_IS_FAVOURITE, false) == true
         PopupMenu(context, anchor).apply {
             menu.add(0, ID_DOWNLOAD, 0, R.string.song_menu_download)
             menu.add(0, ID_REMOVE_DOWNLOAD, 1, R.string.song_menu_remove_download)
-            menu.add(0, ID_FAVOURITE, 2, R.string.song_menu_favourite)
+            menu.add(
+                0, ID_FAVOURITE, 2,
+                if (isFavourite) R.string.song_menu_unfavourite else R.string.song_menu_favourite
+            )
             setOnMenuItemClickListener { menuItem ->
                 when (menuItem.itemId) {
                     ID_DOWNLOAD -> {
@@ -41,7 +50,7 @@ object SongRowMenu {
                         true
                     }
                     ID_FAVOURITE -> {
-                        setFavourite(context, item)
+                        setFavourite(context, item, !isFavourite)
                         true
                     }
                     else -> false
@@ -55,9 +64,9 @@ object SongRowMenu {
      * Favourites are the server's, so this goes straight there rather than to a local list - the
      * same way the player's star does.
      */
-    private fun setFavourite(context: Context, item: MediaItem) {
+    private fun setFavourite(context: Context, item: MediaItem, favourite: Boolean) {
         CoroutineScope(Dispatchers.IO).launch {
-            JellyfinReporter(context).setFavourite(item.mediaId, true)
+            JellyfinReporter(context).setFavourite(item.mediaId, favourite)
         }
     }
 

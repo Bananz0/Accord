@@ -62,7 +62,25 @@ class CompositeLibraryReader(
     override val albumListFlow = concat(remote.albumListFlow, local.albumListFlow)
     override val albumArtistListFlow = concat(remote.albumArtistListFlow, local.albumArtistListFlow)
     override val artistListFlow = concat(remote.artistListFlow, local.artistListFlow)
-    override val genreListFlow = concat(remote.genreListFlow, local.genreListFlow)
+    /**
+     * Merged by name rather than concatenated. A genre is the same genre whichever library it came
+     * from, and straight concatenation put two "Unknown genre" rows next to each other - one from
+     * the server, one from local files - and would split any genre both libraries carry.
+     */
+    override val genreListFlow: Flow<List<Genre>> =
+        combine(remote.genreListFlow, local.genreListFlow) { remoteGenres, localGenres ->
+            val merged = LinkedHashMap<String, Genre>()
+            (remoteGenres + localGenres).forEach { genre ->
+                val key = genre.title?.lowercase().orEmpty()
+                val existing = merged[key]
+                merged[key] = if (existing == null) {
+                    genre
+                } else {
+                    Genre(existing.id, existing.title, existing.songList + genre.songList)
+                }
+            }
+            merged.values.toList()
+        }
     override val dateListFlow = concat(remote.dateListFlow, local.dateListFlow)
     override val playlistListFlow = concat(remote.playlistListFlow, local.playlistListFlow)
 

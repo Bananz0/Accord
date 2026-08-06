@@ -12,6 +12,7 @@ import uk.akane.accord.ui.fragments.browse.AlbumsFragment
 import uk.akane.accord.ui.fragments.browse.ArtistsFragment
 import uk.akane.accord.ui.fragments.browse.PlaylistsFragment
 import uk.akane.accord.ui.fragments.RequestsFragment
+import uk.akane.accord.ui.fragments.browse.GenresFragment
 import uk.akane.accord.ui.fragments.browse.SongFragment
 
 class BrowseAdapter(
@@ -67,8 +68,8 @@ class BrowseAdapter(
                     FragmentType.Album -> AlbumsFragment()
                     FragmentType.Artist -> ArtistsFragment()
                     FragmentType.Playlist -> PlaylistsFragment()
+                    FragmentType.Genre -> GenresFragment()
                     FragmentType.Request -> RequestsFragment()
-                    // Genre has no screen of its own yet; the Search tab already lists genres.
                     else -> null
                 }
                 destination?.let { activity.fragmentSwitcherView.addFragmentToCurrentStack(it) }

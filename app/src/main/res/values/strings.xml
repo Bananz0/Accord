@@ -235,6 +235,7 @@
     </plurals>
     <string name="song_menu_download">Download</string>
     <string name="song_menu_remove_download">Remove download</string>
+    <string name="song_menu_unfavourite">Remove favourite</string>
     <string name="song_menu_favourite">Favourite</string>
     <string name="search_no_results">No results in your library</string>
     <string name="no_lyrics">No lyrics for this track</string>

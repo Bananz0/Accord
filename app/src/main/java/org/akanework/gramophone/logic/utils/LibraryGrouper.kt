@@ -140,9 +140,24 @@ object LibraryGrouper {
                     Pair(mutableListOf(), mutableListOf())
                 }.second.add(song)
             }.songList.add(song)
-            genreMap.getOrPut(entry.genre) {
-                Genre(entry.genreId, entry.genre, mutableListOf())
-            }.songList.add(song)
+            // A track's genre tag is often several genres in one string - "Afrobeat;Afrobeats",
+            // "Alt. Metal / Metalcore / Industrial Rock". Keyed whole, every distinct combination
+            // became its own genre, so the list held "Afrobeat", "Afrobeats" and "Afrobeat;
+            // Afrobeats" as three unrelated entries and none of them held all the tracks. Split
+            // them, and a song joins each genre it actually belongs to.
+            val genres = entry.genre.splitGenreTag()
+            if (genres.isEmpty()) {
+                genreMap.getOrPut(null) { Genre(entry.genreId, null, mutableListOf()) }
+                    .songList.add(song)
+            } else {
+                genres.forEach { name ->
+                    // Keyed on the lowercased name, not the id: the same genre reached through
+                    // different combinations carries different ids, and taggers disagree on case.
+                    // The first spelling seen is the one displayed.
+                    genreMap.getOrPut(name.lowercase()) { Genre(null, name, mutableListOf()) }
+                        .songList.add(song)
+                }
+            }
             dateMap.getOrPut(entry.albumYear) {
                 Date(
                     entry.albumYear?.toLong() ?: 0,
@@ -196,3 +211,21 @@ object LibraryGrouper {
         )
     }
 }
+
+/**
+ * Splits a genre tag into the genres it actually names.
+ *
+ * Tags arrive delimited in whatever way the tagger used - ';', '/', ',' - and with inconsistent
+ * spacing, so "Afrobeat;Afrobeats" and "Afrobeat ; Afrobeats" have to land on the same two genres.
+ * Case is preserved for display but compared case-insensitively by the caller's map key, which is
+ * why the trimmed original is returned rather than a lowercased one.
+ */
+internal fun String?.splitGenreTag(): List<String> =
+    this?.split(';', '/', ',')
+        ?.map { it.trim() }
+        ?.filter { it.isNotBlank() }
+        // Bare numbers are not genres. Tags carry ID3v1 genre indices and stray numeric fragments,
+        // and splitting turned those into entries called "13" and "79" sitting above the real ones.
+        ?.filterNot { token -> token.all { it.isDigit() } }
+        ?.distinctBy { it.lowercase() }
+        .orEmpty()

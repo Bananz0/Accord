@@ -40,15 +40,45 @@ class SongAdapter(
     private val mainActivity
         get() = fragment.activity as MainActivity
 
+    /** Everything the library holds, before the screen's search box narrows it. */
+    private var unfiltered: List<MediaItem> = emptyList()
+    private var filter: String = ""
+
     init {
         fragment.viewLifecycleOwner.lifecycleScope.launch {
             fragment.viewLifecycleOwner.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
                 (fragment.activity as MainActivity).reader.songListFlow.collectLatest { newList ->
-                    submitList(newList)
+                    unfiltered = newList
+                    submitList(applyFilter(newList))
                 }
             }
         }
     }
+
+    /**
+     * Narrows the list to what matches the screen's search box. Upstream includes that box in the
+     * layout and never reads it, so typing in it did nothing.
+     */
+    fun setFilter(query: String) {
+        val next = query.trim()
+        if (next == filter) return
+        filter = next
+        submitList(applyFilter(unfiltered))
+    }
+
+    private fun applyFilter(source: List<MediaItem>): List<MediaItem> {
+        if (filter.isEmpty()) return source
+        val needle = filter.normaliseForFilter()
+        return source.filter { item ->
+            val metadata = item.mediaMetadata
+            metadata.title?.toString()?.normaliseForFilter()?.contains(needle) == true ||
+                metadata.artist?.toString()?.normaliseForFilter()?.contains(needle) == true ||
+                metadata.albumTitle?.toString()?.normaliseForFilter()?.contains(needle) == true
+        }
+    }
+
+    private fun String.normaliseForFilter(): String =
+        lowercase().filter { it.isLetterOrDigit() || it.isWhitespace() }
 
     override fun onCreateViewHolder(
         parent: ViewGroup,
