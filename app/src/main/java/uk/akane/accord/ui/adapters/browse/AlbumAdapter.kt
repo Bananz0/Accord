@@ -16,6 +16,8 @@ import coil3.load
 import coil3.request.crossfade
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -119,8 +121,11 @@ class AlbumAdapter(
         val subtitle: TextView? = view.findViewById(R.id.subtitle)
     }
 
+    /** See [SongAdapter.submitMutex] - same race, same reason. */
+    private val submitMutex = Mutex()
+
     private fun submitFromSongs(songs: List<MediaItem>) {
-        CoroutineScope(Dispatchers.Default).launch {
+        CoroutineScope(Dispatchers.Default).launch { submitMutex.withLock {
             // Build album groups from the song list
             val albumMap = LinkedHashMap<String, MutableList<MediaItem>>()
 
@@ -155,7 +160,8 @@ class AlbumAdapter(
             newItems.add(AlbumListItem.Control)
             newItems.addAll(albums)
 
-            val diff = DiffUtil.calculateDiff(AlbumDiffCallback(list, newItems))
+            val oldSnapshot = withContext(Dispatchers.Main) { list.toList() }
+            val diff = DiffUtil.calculateDiff(AlbumDiffCallback(oldSnapshot, newItems))
 
             withContext(Dispatchers.Main) {
                 list.clear()
@@ -163,7 +169,7 @@ class AlbumAdapter(
                 diff.dispatchUpdatesTo(this@AlbumAdapter)
                 recyclerView.post { onContentLoaded.invoke() }
             }
-        }
+        } }
     }
 
     class AlbumDiffCallback(

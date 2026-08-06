@@ -28,6 +28,10 @@ import okio.Path.Companion.toOkioPath
 import okio.buffer
 import okio.source
 import org.lsposed.hiddenapibypass.LSPass
+import org.akanework.gramophone.logic.data.library.CompositeLibraryReader
+import org.akanework.gramophone.logic.data.library.JellyfinLibraryReader
+import org.akanework.gramophone.logic.data.library.LibraryReader
+import org.akanework.gramophone.logic.data.library.MediaStoreLibraryReader
 import uk.akane.accord.logic.hasScopedStorageWithMediaTypes
 import uk.akane.libphonograph.Constants
 import uk.akane.libphonograph.reader.FlowReader
@@ -45,8 +49,19 @@ import java.io.IOException
  */
 open class Accord : Application(), SingletonImageLoader.Factory {
 
-    lateinit var reader: FlowReader
+    /**
+     * What the screens read the library from. Upstream exposes libPhonograph's [FlowReader] here
+     * directly; this app serves the Jellyfin library alongside the local one, so the screens get
+     * the [LibraryReader] interface instead and the composition is decided in [onCreate].
+     */
+    lateinit var reader: LibraryReader
         private set
+
+    /** The Jellyfin half, exposed for the screens that show sync progress or sign-in state. */
+    lateinit var jellyfinReader: JellyfinLibraryReader
+        private set
+
+    private lateinit var flowReader: FlowReader
 
     val minSongLengthSecondsFlow = MutableStateFlow<Long>(0)
     val blackListSetFlow = MutableStateFlow<Set<String>>(setOf())
@@ -67,7 +82,7 @@ open class Accord : Application(), SingletonImageLoader.Factory {
 
     override fun onCreate() {
         super.onCreate()
-        reader = FlowReader(
+        flowReader = FlowReader(
             this,
             MutableStateFlow(0),
             blackListSetFlow,
@@ -78,6 +93,10 @@ open class Accord : Application(), SingletonImageLoader.Factory {
             MutableStateFlow(true),
             "gramophoneAlbumCover"
         )
+        jellyfinReader = JellyfinLibraryReader(this)
+        // Server first: it is the larger collection here, and the reason this fork exists. Local
+        // files still show up underneath it for anyone who keeps some on the device.
+        reader = CompositeLibraryReader(jellyfinReader, MediaStoreLibraryReader(flowReader))
     }
 
     override fun newImageLoader(context: PlatformContext): ImageLoader {

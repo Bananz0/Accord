@@ -15,6 +15,8 @@ import coil3.load
 import coil3.request.crossfade
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -77,8 +79,11 @@ class ArtistAdapter(
         val artistName: TextView = view.findViewById(R.id.artistName)
     }
 
+    /** See [SongAdapter.submitMutex] - same race, same reason. */
+    private val submitMutex = Mutex()
+
     private fun submitFromSongs(songs: List<MediaItem>) {
-        CoroutineScope(Dispatchers.Default).launch {
+        CoroutineScope(Dispatchers.Default).launch { submitMutex.withLock {
             val artistMap = LinkedHashMap<String, MutableList<MediaItem>>()
 
             for (song in songs) {
@@ -97,8 +102,9 @@ class ArtistAdapter(
                 }
                 .sortedBy { it.name.lowercase() }
 
+            val oldSnapshot = withContext(Dispatchers.Main) { list.toList() }
             val diff = DiffUtil.calculateDiff(
-                ArtistDiffCallback(list, newItems)
+                ArtistDiffCallback(oldSnapshot, newItems)
             )
 
             withContext(Dispatchers.Main) {
@@ -107,7 +113,7 @@ class ArtistAdapter(
                 diff.dispatchUpdatesTo(this@ArtistAdapter)
                 recyclerView.post { onContentLoaded.invoke() }
             }
-        }
+        } }
     }
 
     class ArtistDiffCallback(
