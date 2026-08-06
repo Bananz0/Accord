@@ -18,6 +18,21 @@ import androidx.core.view.doOnLayout
 import androidx.fragment.app.Fragment
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import androidx.core.widget.doAfterTextChanged
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.media3.common.MediaItem
+import androidx.recyclerview.widget.LinearLayoutManager
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import uk.akane.accord.Accord
+import uk.akane.accord.ui.MainActivity
+import uk.akane.accord.ui.adapters.SearchResultsAdapter
 import uk.akane.accord.R
 import uk.akane.accord.logic.dp
 import uk.akane.accord.ui.adapters.SearchAdapter
@@ -39,6 +54,14 @@ class SearchFragment: Fragment() {
     private lateinit var tabLibraryTextView: TextView
     private lateinit var searchInputNav: EditText
     private lateinit var searchInputDetail: EditText
+
+    private lateinit var searchResults: RecyclerView
+    private lateinit var searchEmpty: TextView
+    private lateinit var resultsAdapter: SearchResultsAdapter
+
+    /** The library to search. Kept in step with the reader so results follow a sync. */
+    private var library: List<MediaItem> = emptyList()
+    private var pendingQuery: Job? = null
 
     private var indicatorTitleVisible = true
     private var indicatorSubtitleVisible = true
@@ -105,6 +128,15 @@ class SearchFragment: Fragment() {
         detailedSearchContainer.visibility = View.GONE
         resetTabRevealState()
 
+        searchResults = detailedSearchContainer.findViewById(R.id.search_results)
+        searchEmpty = detailedSearchContainer.findViewById(R.id.search_empty)
+        resultsAdapter = SearchResultsAdapter { (activity as? MainActivity)?.getPlayer() }
+        searchResults.layoutManager = LinearLayoutManager(requireContext())
+        searchResults.adapter = resultsAdapter
+
+        observeLibrary()
+        searchInputDetail.doAfterTextChanged { runQuery(it?.toString().orEmpty()) }
+
         searchBarNav.setOnClickListener { enterSearchMode() }
         searchInputNav.setOnClickListener { enterSearchMode() }
         searchInputNav.setOnFocusChangeListener { _, hasFocus ->
@@ -133,6 +165,58 @@ class SearchFragment: Fragment() {
         super.onHiddenChanged(hidden)
         navigationBar.onVisibilityChangedFromFragment(hidden)
     }
+
+    private fun observeLibrary() {
+        val reader = (requireActivity().application as Accord).reader
+        viewLifecycleOwner.lifecycleScope.launch {
+            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                reader.songListFlow.collectLatest { songs ->
+                    library = songs
+                    // A sync finishing mid-query should widen the results, not leave them stale.
+                    runQuery(searchInputDetail.text?.toString().orEmpty())
+                }
+            }
+        }
+    }
+
+    /**
+     * Matches title, artist and album, all normalised, so "sabrina" finds "Sabrina Carpenter" and
+     * punctuation in a tag does not hide a track.
+     *
+     * Debounced and run off the main thread: this scans the whole library on every keystroke, and
+     * that library is thousands of items.
+     */
+    private fun runQuery(rawQuery: String) {
+        pendingQuery?.cancel()
+        val query = rawQuery.trim().lowercase()
+        if (query.isEmpty()) {
+            resultsAdapter.submit(emptyList())
+            searchEmpty.visibility = View.GONE
+            return
+        }
+        pendingQuery = viewLifecycleOwner.lifecycleScope.launch {
+            delay(SEARCH_DEBOUNCE_MS)
+            val matches = withContext(Dispatchers.Default) {
+                val needle = query.normaliseForSearch()
+                library.asSequence()
+                    .filter { item ->
+                        val metadata = item.mediaMetadata
+                        metadata.title?.toString()?.normaliseForSearch()?.contains(needle) == true ||
+                            metadata.artist?.toString()?.normaliseForSearch()
+                                ?.contains(needle) == true ||
+                            metadata.albumTitle?.toString()?.normaliseForSearch()
+                                ?.contains(needle) == true
+                    }
+                    .take(SEARCH_RESULT_LIMIT)
+                    .toList()
+            }
+            resultsAdapter.submit(matches)
+            searchEmpty.visibility = if (matches.isEmpty()) View.VISIBLE else View.GONE
+        }
+    }
+
+    private fun String.normaliseForSearch(): String =
+        lowercase().filter { it.isLetterOrDigit() || it.isWhitespace() }
 
     private fun enterSearchMode() {
         if (isSearchExpanded) return
@@ -357,5 +441,13 @@ class SearchFragment: Fragment() {
     private fun hideKeyboard(target: View) {
         val imm = requireContext().getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
         imm.hideSoftInputFromWindow(target.windowToken, 0)
+    }
+
+    private companion object {
+        /** Long enough that a fast typist scans the library once, short enough to feel immediate. */
+        const val SEARCH_DEBOUNCE_MS = 180L
+
+        /** The list is scrolled, not read whole; past this it is cheaper to refine the query. */
+        const val SEARCH_RESULT_LIMIT = 200
     }
 }
