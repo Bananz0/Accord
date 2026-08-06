@@ -14,6 +14,9 @@ class LyricsView @JvmOverloads constructor(
 ) : ViewGroup(context, attrs, defStyleAttr) {
     val contentPaddingTop = 160.dp.px.roundToInt()
 
+    /** Set by whoever owns the player, so tapping a line can jump to it. */
+    var onSeek: ((Long) -> Unit)? = null
+
     fun update(lyrics: Lyrics) {
         forEach { child: View ->
             child as LyricsLineView
@@ -22,7 +25,7 @@ class LyricsView @JvmOverloads constructor(
         removeAllViews()
         val deviceHeight = resources.displayMetrics.heightPixels.toFloat()
         lyrics.lyrics.forEachIndexed { index, line ->
-            val view = LyricsLineView(context, line)
+            val view = LyricsLineView(context, line) { timestamp -> onSeek?.invoke(timestamp) }
             view.setAnimations(index, 0f, deviceHeight)
             addView(view)
         }

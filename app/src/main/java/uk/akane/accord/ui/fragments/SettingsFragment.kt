@@ -73,7 +73,13 @@ class SettingsFragment : Fragment() {
         navigationBar.setOnReturnClickListener {
             mainActivity.fragmentSwitcherView.popBackTopFragmentIfExists()
         }
-        navigationBar.attach(rootView.findViewById<NestedScrollView>(R.id.scrollContainer))
+        // The scroll view is already constrained below the bar in the layout. Padding it by
+        // the bar's height as well counted the same space twice, which is the blank band at
+        // the top of this screen.
+        navigationBar.attach(
+            rootView.findViewById<NestedScrollView>(R.id.scrollContainer),
+            applyTopPadding = false,
+        )
 
         builder = SettingsListBuilder(rootView.findViewById<LinearLayout>(R.id.settings_rows))
         return rootView

@@ -134,6 +134,18 @@ class SearchFragment: Fragment() {
         resultsAdapter = SearchResultsAdapter { (activity as? MainActivity)?.getPlayer() }
         searchResults.layoutManager = LinearLayoutManager(requireContext())
         searchResults.adapter = resultsAdapter
+        // This list is not the one the navigation bar is attached to, so nothing was leaving
+        // room for the mini player: the last result sat behind it and sprang back when
+        // dragged into view.
+        searchResults.clipToPadding = false
+        searchResults.doOnLayout {
+            searchResults.setPadding(
+                searchResults.paddingLeft,
+                searchResults.paddingTop,
+                searchResults.paddingRight,
+                (requireActivity() as MainActivity).bottomHeight,
+            )
+        }
         // Same gesture as every other list: right queues it, left downloads it.
         TrackSwipeActions.attach(
             recyclerView = searchResults,

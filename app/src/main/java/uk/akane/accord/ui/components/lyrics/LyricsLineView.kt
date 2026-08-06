@@ -1,14 +1,12 @@
 package uk.akane.accord.ui.components.lyrics
 
 import android.content.Context
-import android.content.res.ColorStateList
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RenderEffect
 import android.graphics.RenderNode
 import android.graphics.Shader
-import android.graphics.drawable.RippleDrawable
 import android.os.Build
 import android.text.StaticLayout
 import android.text.TextPaint
@@ -27,7 +25,9 @@ import kotlin.math.roundToInt
 @Suppress("ViewConstructor")
 class LyricsLineView internal constructor(
     context: Context,
-    private val line: LyricsLine
+    private val line: LyricsLine,
+    /** Where to jump to when this line is tapped; see [performClick]. */
+    private val onSeek: ((Long) -> Unit)? = null,
 ) : View(context) {
     private val horizontalPadding = 32.dp.px
     private val verticalPadding = 14.dp.px
@@ -91,7 +91,8 @@ class LyricsLineView internal constructor(
     init {
         isClickable = true
         isFocusable = true
-        foreground = RippleDrawable(rippleColorStateList, null, null)
+        // No ripple. A lyric is text, not a button, and a grey box flashing over the words
+        // reads as a control - the line coming into focus is the feedback.
         contentDescription = line.text
     }
 
@@ -126,7 +127,12 @@ class LyricsLineView internal constructor(
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             blurRenderNode?.apply {
                 setPosition(hP, vP, layoutWidth - hP, layoutHeight - vP)
-                pivotY = layoutHeight / 2f
+                // Relative to the node, not to the view. The node starts at the padding, so a
+                // pivot measured in the view's coordinates scaled the current line about a
+                // point below its own centre and left it sitting lower than its neighbours -
+                // the line that looked misaligned while the others agreed with each other.
+                pivotX = (layoutWidth - hP * 2) / 2f
+                pivotY = (layoutHeight - vP * 2) / 2f
             }
         }
     }
@@ -161,9 +167,10 @@ class LyricsLineView internal constructor(
         canvas.restoreToCount(count)
     }
 
+    /** Tapping a line jumps to it. This was left as a comment upstream and did nothing. */
     override fun performClick(): Boolean {
-        // GlobalPlayer.seekTo(line.timestamp)
         super.performClick()
+        onSeek?.invoke(line.timestamp)
         return true
     }
 
@@ -212,7 +219,7 @@ class LyricsLineView internal constructor(
 
         fun updateImmediately(targetIndex: Int) {
             val isActivated = index == targetIndex
-            val targetAlpha = if (isActivated) ACTIVE_ALPHA else INACTIVE_ALPHA
+            val targetAlpha = alphaFor(index, targetIndex)
             val targetScale = if (isActivated) ACTIVE_SCALE else INACTIVE_SCALE
             val targetBlurRadius = (abs(index - targetIndex) * blurRadiusStep).coerceAtMost(maxBlurRadius)
 
@@ -224,7 +231,7 @@ class LyricsLineView internal constructor(
 
         fun update(targetIndex: Int, preventBlurUpdate: Boolean = false) {
             val isActivated = index == targetIndex
-            val targetAlpha = if (isActivated) ACTIVE_ALPHA else INACTIVE_ALPHA
+            val targetAlpha = alphaFor(index, targetIndex)
             val targetScale = if (isActivated) ACTIVE_SCALE else INACTIVE_SCALE
             val targetBlurRadius = (abs(index - targetIndex) * blurRadiusStep).coerceAtMost(maxBlurRadius)
 
@@ -261,6 +268,21 @@ class LyricsLineView internal constructor(
     private companion object {
         const val BLUR_NODE_NAME = "LyricsLineViewBlurNode"
 
+        /**
+         * How visible a line is, by how far it is from the one being sung.
+         *
+         * Three lines carry the song - the one before, the one now, the one next - so those are
+         * the ones lifted out. The rest stay legible rather than being erased: the whole lyric is
+         * still there to read ahead in and scroll through, just quieter.
+         */
+        fun alphaFor(index: Int, targetIndex: Int): Float = when (abs(index - targetIndex)) {
+            0 -> ACTIVE_ALPHA
+            1 -> NEIGHBOUR_ALPHA
+            else -> INACTIVE_ALPHA
+        }
+
+        const val NEIGHBOUR_ALPHA = 0.45f
+
         const val ACTIVE_ALPHA = 0.9f
         const val INACTIVE_ALPHA = 0.2f
         const val ACTIVE_SCALE = 1f
@@ -279,6 +301,5 @@ class LyricsLineView internal constructor(
             null
         }
 
-        val rippleColorStateList = ColorStateList.valueOf(0x60FFFFFF)
     }
 }

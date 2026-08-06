@@ -70,7 +70,8 @@ class AddToPlaylistFragment : SwitcherPostponeFragment() {
         recyclerView = rootView.findViewById(R.id.playlist_list)
         recyclerView.layoutManager = LinearLayoutManager(requireContext())
         recyclerView.adapter = adapter
-        navigationBar.attach(recyclerView)
+        // Constrained below the bar in the layout already; see SettingsFragment.
+        navigationBar.attach(recyclerView, applyTopPadding = false)
 
         refresh()
 

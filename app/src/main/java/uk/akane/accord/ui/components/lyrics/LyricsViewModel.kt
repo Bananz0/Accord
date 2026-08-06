@@ -28,7 +28,9 @@ import kotlin.math.roundToInt
  */
 class LyricsViewModel(
     private val context: Context,
-    private val positionProvider: () -> Long = { 0L }
+    private val positionProvider: () -> Long = { 0L },
+    /** Where a tapped line should take playback. */
+    private val onSeek: (Long) -> Unit = {},
 ) {
     private val scope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
 
@@ -57,6 +59,7 @@ class LyricsViewModel(
         val fadingEdgeLayout = view as FadingVerticalEdgeLayout
         val scrollView = fadingEdgeLayout.getChildAt(0) as ListenableNestedScrollView
         val lyricsView = scrollView.getChildAt(0) as LyricsView
+        lyricsView.onSeek = onSeek
 
         var isUserScrolling = false
 

@@ -337,7 +337,12 @@ class FullPlayer @JvmOverloads constructor(
 
         fadingEdgeLayout.visibility = GONE
         queueContainer.visibility = INVISIBLE
-        lyricsViewModel = LyricsViewModel(context) { instance?.currentPosition ?: 0L }
+        lyricsViewModel = LyricsViewModel(
+            context,
+            positionProvider = { instance?.currentPosition ?: 0L },
+            // Tapping a lyric jumps to it, which is the whole reason the timestamps are there.
+            onSeek = { timestamp -> instance?.seekTo(timestamp) },
+        )
 
         // Upstream reveals lyrics from a stray Button of its own and leaves the quote control in the
         // bottom row inert. The quote button is where anyone would look for lyrics, so it gets the

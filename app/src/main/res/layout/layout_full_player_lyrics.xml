@@ -11,7 +11,9 @@
         android:layout_width="0dp"
         android:layout_height="0dp"
         app:fel_edge="top|bottom"
-        app:fel_size_bottom="200dp"
+        <!-- 200dp of fade swallowed the line coming next, which is one of the three that
+             matter. Enough to soften the edge, not enough to hide a line. -->
+        app:fel_size_bottom="72dp"
         app:fel_size_top="40dp"
         app:layout_constraintBottom_toTopOf="@id/progressBar"
         app:layout_constraintEnd_toEndOf="parent"

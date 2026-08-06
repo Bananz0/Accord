@@ -584,7 +584,10 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
     override fun onTracksChanged(tracks: Tracks) {
         val mediaItem = controller!!.currentMediaItem
         lyricsLock.runInBg {
-            val trim = prefs.getBoolean("trim_lyrics", false)
+            // Default on. LRC files routinely carry a space after the timestamp, which is
+            // formatting rather than part of the words - untrimmed it indented the first
+            // line of every verse while the lines it wrapped onto stayed flush.
+            val trim = prefs.getBoolean("trim_lyrics", true)
             var lrc = loadAndParseLyricsFile(mediaItem?.getFile(), trim)
             if (lrc == null) {
                 loop@ for (i in tracks.groups) {
