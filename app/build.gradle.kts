@@ -98,7 +98,6 @@ android {
             "SPOTIFY_CLIENT_ID",
             "\"${readProperties(file("../package.properties")).getProperty("spotifyClientId", "")}\""
         )
-        setProperty("archivesBaseName", "Accord-$versionName")
     }
 
     signingConfigs {
@@ -163,6 +162,12 @@ android {
     lint {
         checkReleaseBuilds = false
     }
+}
+
+// Gradle 9 dropped the `archivesBaseName` project property, so the APK name is set through the base
+// plugin instead.
+base {
+    archivesName = "Accord-${android.defaultConfig.versionName}"
 }
 
 // https://stackoverflow.com/a/77745844

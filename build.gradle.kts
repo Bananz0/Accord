@@ -1,12 +1,16 @@
 // Top-level build file where you can add configuration options common to all sub-projects/modules.
 plugins {
-    val agpVersion = "8.9.0"
+    // Kept in step with upstream Accord (AGP 8.13.2 / Kotlin 2.3.0), whose sources this app's UI is
+    // ported from - its modules will not compile on the older toolchain this fork used to pin.
+    val agpVersion = "8.13.2"
     id("com.android.application") version agpVersion apply false
     id("com.android.library") version agpVersion apply false
-    val kotlinVersion = "2.1.20-RC3"
+    val kotlinVersion = "2.3.0"
     kotlin("android") version kotlinVersion apply false
     kotlin("plugin.parcelize") version kotlinVersion apply false
-    id("com.google.devtools.ksp") version "$kotlinVersion-1.0.31" apply false
+    // KSP moved to its own version line for the Kotlin 2.3 series, so it no longer carries the
+    // Kotlin version as a prefix.
+    id("com.google.devtools.ksp") version "2.3.11" apply false
 }
 
 tasks.withType(JavaCompile::class) {
