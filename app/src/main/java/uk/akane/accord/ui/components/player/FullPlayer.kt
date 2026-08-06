@@ -53,6 +53,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.akanework.gramophone.logic.GramophonePlaybackService
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinReporter
 import uk.akane.accord.ui.components.lyrics.Lyrics
 import uk.akane.accord.ui.components.lyrics.LyricsLine
 import android.os.Bundle
@@ -560,7 +561,15 @@ class FullPlayer @JvmOverloads constructor(
         }
         PlaylistAdapter.saveFavoriteKeys(context, keys)
         updateFavoriteButtons(!isFavorite)
-        activity.updateLibrary()
+        // Upstream keeps favourites in local preferences and nothing else. Favourites belong to the
+        // server here, so the star has to reach it - otherwise starring a track on this phone is
+        // invisible to the web client and gets undone by the next sync.
+        CoroutineScope(Dispatchers.IO).launch {
+            JellyfinReporter(context).setFavourite(mediaItem.mediaId, !isFavorite)
+        }
+        // Deliberately not refreshing the library here. Upstream called updateLibrary on every tap,
+        // which on this fork means a full Jellyfin sync - the better part of a minute of requests
+        // for one star.
     }
 
     private fun syncFavoriteButtonsForCurrentItem() {

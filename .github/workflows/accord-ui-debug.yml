@@ -32,10 +32,12 @@ jobs:
           # Cupertino and libPhonograph are submodules and nothing compiles without them.
           submodules: recursive
 
-      - name: Set up JDK 17
+      # 21, not 17: misc:audiofxstub targets Java 21, and hificore's native build needs a JDK
+      # newer than the one android.yml pins.
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
+          java-version: '21'
           distribution: 'temurin'
 
       - name: Setup Gradle
