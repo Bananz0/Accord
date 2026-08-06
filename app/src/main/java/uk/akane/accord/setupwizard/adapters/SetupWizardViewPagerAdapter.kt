@@ -4,7 +4,7 @@ import androidx.fragment.app.Fragment
 import androidx.fragment.app.FragmentManager
 import androidx.lifecycle.Lifecycle
 import androidx.viewpager2.adapter.FragmentStateAdapter
-import uk.akane.accord.setupwizard.fragments.PermissionPageFragment
+import uk.akane.accord.setupwizard.fragments.JellyfinPageFragment
 import uk.akane.accord.setupwizard.fragments.WelcomePageFragment
 
 class SetupWizardViewPagerAdapter(
@@ -17,7 +17,9 @@ class SetupWizardViewPagerAdapter(
     override fun createFragment(position: Int): Fragment =
         when (position) {
             0 -> WelcomePageFragment()
-            1 -> PermissionPageFragment()
+            // Upstream's PermissionPageFragment sat here. It is still in the tree, but this app
+            // needs a server before it needs local storage access.
+            1 -> JellyfinPageFragment()
             else -> throw IllegalArgumentException("Didn't find desired fragment!")
         }
 }

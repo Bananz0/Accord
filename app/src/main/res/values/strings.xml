@@ -201,6 +201,18 @@
         text is kept as the zh-rCN translation.
     -->
     <string name="home_recommendations_title">Handpicked for you</string>
+    <!-- Setup wizard, Jellyfin page (replaces upstream's media permission page). -->
+    <string name="setup_jellyfin_title">Connect your library</string>
+    <string name="setup_jellyfin_desc">Accord plays the music on your Jellyfin server. Sign in to get started.</string>
+    <string name="setup_jellyfin_server">Server</string>
+    <string name="setup_jellyfin_server_desc">Find your Jellyfin server and sign in</string>
+    <string name="setup_jellyfin_server_connected">Connected</string>
+    <string name="setup_jellyfin_account">Account</string>
+    <string name="setup_jellyfin_account_desc">Signed out</string>
+    <string name="setup_jellyfin_account_connected">Signed in</string>
+    <string name="setup_jellyfin_connect">Connect</string>
+    <string name="setup_jellyfin_connected">Done</string>
+    <string name="setup_jellyfin_note">Music stored on this device is picked up as well, if you allow access later in Settings.</string>
     <string name="sync_in_progress">Syncing library…</string>
     <string name="sync_progress">Syncing library… %1$d of %2$d</string>
     <string name="new_songs">New songs</string>

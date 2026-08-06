@@ -8,6 +8,7 @@ import android.view.ViewGroup
 import androidx.fragment.app.Fragment
 import androidx.viewpager2.widget.ViewPager2
 import com.google.android.material.button.MaterialButton
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinCredentialStore
 import uk.akane.accord.R
 import uk.akane.accord.logic.isEssentialPermissionGranted
 import uk.akane.accord.logic.setCurrentItemInterpolated
@@ -61,7 +62,11 @@ class SetupWizardFragment : Fragment() {
 
         continueButton.setOnClickListener {
             if (viewPager2.currentItem + 1 < viewPagerAdapter.itemCount) {
-                if (viewPager2.currentItem + 1 == 1 && !requireContext().isEssentialPermissionGranted()) {
+                // Landing on the Jellyfin page with no server signed in greys Continue out until
+                // one is. Upstream gated on media permissions here for the same reason.
+                if (viewPager2.currentItem + 1 == 1 &&
+                    !JellyfinCredentialStore.hasStoredSession(requireContext())
+                ) {
                     continueButton.isEnabled = false
                     AnimationUtils.createValAnimator(
                         activeBtnColor,

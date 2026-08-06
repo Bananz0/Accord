@@ -24,6 +24,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinCredentialStore
 import uk.akane.accord.Accord
 import uk.akane.accord.R
 import uk.akane.accord.logic.enableEdgeToEdgeProperly
@@ -86,7 +87,9 @@ class MainActivity : AppCompatActivity() {
 
         setContentView(R.layout.activity_main)
 
-        if (!isEssentialPermissionGranted()) {
+        // Gated on having a Jellyfin server rather than on media permissions: the library lives on
+        // the server, so an install with permissions but no server still has nothing to show.
+        if (!JellyfinCredentialStore.hasStoredSession(this)) {
             insertContainer(SetupWizardFragment())
         } else {
             updateLibrary()
