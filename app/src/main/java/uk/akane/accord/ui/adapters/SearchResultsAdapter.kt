@@ -14,6 +14,7 @@ import coil3.load
 import coil3.request.crossfade
 import uk.akane.accord.R
 import uk.akane.accord.logic.dp
+import uk.akane.accord.ui.components.TrackRowMenu
 
 /**
  * The results of a library search.
@@ -56,12 +57,15 @@ class SearchResultsAdapter(
                 play()
             }
         }
+        // The row layout has always drawn a menu button; nothing was behind it here either.
+        holder.menu?.setOnClickListener { anchor -> TrackRowMenu.show(anchor, item) }
     }
 
     class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val cover: ImageView? = view.findViewById(R.id.cover)
         val title: TextView? = view.findViewById(R.id.title)
         val subtitle: TextView? = view.findViewById(R.id.subtitle)
+        val menu: View? = view.findViewById(R.id.menu_btn)
     }
 
     private class Diff(

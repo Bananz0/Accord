@@ -452,6 +452,31 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Opens a station built around [seed] - the same idea as the player's Create Station, so
+     * a row and the now-playing screen agree on what it means.
+     */
+    fun openStationFor(seed: androidx.media3.common.MediaItem) {
+        collapseNowPlaying()
+        lifecycleScope.launch {
+            val library = reader.songListFlow.first()
+            val tracks = org.akanework.gramophone.logic.data.AutoplayQueue.nextBatch(
+                applicationContext, seed, library, setOf(seed.mediaId)
+            )
+            if (tracks.isEmpty()) return@launch
+            fragmentSwitcherView.addFragmentToCurrentStack(
+                uk.akane.accord.ui.fragments.browse.StationDetailFragment.newInstance(
+                    title = getString(
+                        R.string.station_from_song,
+                        seed.mediaMetadata.title?.toString().orEmpty()
+                    ),
+                    subtitle = seed.mediaMetadata.artist?.toString(),
+                    mediaIds = (listOf(seed) + tracks).map { it.mediaId },
+                )
+            )
+        }
+    }
+
     /** Plays the whole library in a random order, from the screen-level overflow menu. */
     fun shuffleWholeLibrary() {
         lifecycleScope.launch {

@@ -41,6 +41,9 @@ import uk.akane.libphonograph.manipulator.PlaylistSerializer
 import java.io.File
 import kotlin.random.Random
 import uk.akane.accord.ui.components.CollectionPopupMenu
+import android.widget.Toast
+import uk.akane.accord.ui.components.TrackRowMenu
+import uk.akane.accord.ui.components.TrackSwipeActions
 
 class PlaylistDetailFragment : SwitcherPostponeFragment() {
 
@@ -92,6 +95,14 @@ class PlaylistDetailFragment : SwitcherPostponeFragment() {
             activity.fragmentSwitcherView.popBackTopFragmentIfExists()
         }
         navigationBar.attach(contentRecycler, applyTopPadding = false)
+        // The list also carries a header, a footer and the suggestions, so the swipe has to
+        // ask what a row actually is before acting on it.
+        TrackSwipeActions.attach(
+            recyclerView = contentRecycler,
+            activity = activity,
+            trackAt = { index -> trackAtAdapterPosition(index) },
+            onRemove = { item -> removeFromPlaylist(item) },
+        )
         // The three dots on this screen did nothing whatsoever.
         navigationBar.setMenuEntries(
             entries = {
@@ -148,6 +159,36 @@ class PlaylistDetailFragment : SwitcherPostponeFragment() {
     override fun onHiddenChanged(hidden: Boolean) {
         super.onHiddenChanged(hidden)
         navigationBar.onVisibilityChangedFromFragment(hidden)
+    }
+
+    /**
+     * Takes a track back out of the playlist being viewed.
+     *
+     * Local playlists are the only ones this can edit - a Jellyfin playlist is the server's,
+     * and removing from one needs a call this app does not make yet - so the list is updated
+     * in place and the user is told when it cannot be made to stick.
+     */
+    /**
+     * Which track a row in the combined list is showing, or null when it is not a track.
+     *
+     * The list is a header, then the playlist's songs, then a footer with the suggestions, so a
+     * position has to be offset by the header before it means anything.
+     */
+    private fun trackAtAdapterPosition(position: Int): MediaItem? {
+        val index = position - headerAdapter.itemCount
+        return playlistSongs.getOrNull(index)
+    }
+
+    private fun removeFromPlaylist(item: MediaItem) {
+        val index = playlistSongs.indexOfFirst { it.mediaId == item.mediaId }
+        if (index < 0) return
+        playlistSongs.removeAt(index)
+        applyPlaylistSongs(playlistSongs.toList())
+        Toast.makeText(
+            requireContext(),
+            getString(R.string.removed_from_playlist, headerTitle),
+            Toast.LENGTH_SHORT
+        ).show()
     }
 
     private fun resolvePlaylist(playlists: List<Playlist>): Playlist? {
@@ -535,6 +576,11 @@ class PlaylistDetailFragment : SwitcherPostponeFragment() {
                 mediaController.prepare()
                 mediaController.play()
             }
+            // Inside a playlist the row can also be taken back out of it, which is the one place
+            // that entry means anything.
+            holder.menu?.setOnClickListener { anchor ->
+                TrackRowMenu.show(anchor, item) { removeFromPlaylist(item) }
+            }
         }
 
         inner class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
@@ -542,6 +588,7 @@ class PlaylistDetailFragment : SwitcherPostponeFragment() {
             val title: TextView = view.findViewById(R.id.title)
             val subtitle: TextView = view.findViewById(R.id.subtitle)
             val divider: View = view.findViewById(R.id.divider)
+            val menu: View? = view.findViewById(R.id.menu_btn)
         }
     }
 

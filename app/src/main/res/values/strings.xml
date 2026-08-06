@@ -741,6 +741,14 @@
     <string name="popup_favorite">Favorite</string>
     <string name="no_song_playing">Nothing is playing</string>
     <string name="output_device">Audio output</string>
+
+    <!-- Track row menu and swipes. -->
+    <string name="add_to_queue">Add to Queue</string>
+    <string name="queued">Added to queue</string>
+    <string name="queued_next">Playing next</string>
+    <string name="download_started">Downloading…</string>
+    <string name="remove_from_playlist">Remove from Playlist</string>
+    <string name="removed_from_playlist">Removed from %1$s</string>
     <string name="autoplay_on">Infinity play on — similar music keeps going</string>
     <string name="autoplay_off">Infinity play off</string>
 

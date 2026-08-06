@@ -27,6 +27,8 @@ import uk.akane.accord.ui.components.NavigationBar
 import uk.akane.cupertino.navigation.SwitcherPostponeFragment
 import kotlin.random.Random
 import uk.akane.accord.ui.components.CollectionPopupMenu
+import uk.akane.accord.ui.components.TrackRowMenu
+import uk.akane.accord.ui.components.TrackSwipeActions
 
 class AlbumDetailFragment : SwitcherPostponeFragment() {
 
@@ -99,6 +101,11 @@ class AlbumDetailFragment : SwitcherPostponeFragment() {
         recyclerView.layoutManager = LinearLayoutManager(requireContext())
         recyclerView.adapter = trackAdapter
         navigationBar.attach(scrollView, applyTopPadding = false)
+        TrackSwipeActions.attach(
+            recyclerView = recyclerView,
+            activity = activity,
+            trackAt = { index -> currentTracks.getOrNull(index) },
+        )
 
         val headerHeight = (resources.displayMetrics.heightPixels * 0.7f).toInt()
         val headerParams = headerContainer.layoutParams
@@ -225,6 +232,8 @@ class AlbumDetailFragment : SwitcherPostponeFragment() {
                 mediaController.prepare()
                 mediaController.play()
             }
+            // The button was inflated and located, and nothing was ever attached to it.
+            holder.menu?.setOnClickListener { anchor -> TrackRowMenu.show(anchor, item) }
         }
 
         override fun getItemCount(): Int = items.size

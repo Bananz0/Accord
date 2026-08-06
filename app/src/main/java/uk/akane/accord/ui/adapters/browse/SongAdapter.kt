@@ -25,8 +25,8 @@ import kotlinx.coroutines.withContext
 import uk.akane.accord.R
 import uk.akane.accord.logic.dp
 import uk.akane.accord.ui.MainActivity
-import uk.akane.accord.ui.components.SongRowMenu
 import kotlin.random.Random
+import uk.akane.accord.ui.components.TrackRowMenu
 
 class SongAdapter(
     private val recyclerView: RecyclerView,
@@ -128,7 +128,7 @@ class SongAdapter(
                 // Upstream draws this button and leaves it inert, which is what made offline
                 // downloads unreachable in the new UI.
                 holder.menuButton?.setOnClickListener { anchor ->
-                    SongRowMenu.show(anchor, item.mediaItem)
+                    TrackRowMenu.show(anchor, item.mediaItem)
                 }
 
                 holder.itemView.setOnClickListener {
