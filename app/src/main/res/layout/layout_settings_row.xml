@@ -1,14 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- One tappable settings row: title, optional summary, chevron. -->
+<!--
+    One settings row: title, optional subtitle, and either a chevron (opens something) or a switch
+    (toggles something). Matches the row shape the 1.0-stable build uses.
+-->
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:background="?attr/selectableItemBackground"
     android:clickable="true"
     android:focusable="true"
-    android:paddingHorizontal="18dp"
-    android:paddingVertical="14dp">
+    android:minHeight="52dp"
+    android:paddingHorizontal="14dp"
+    android:paddingVertical="12dp">
 
     <TextView
         android:id="@+id/row_title"
@@ -17,10 +22,11 @@
         android:fontFamily="@font/inter_regular"
         android:includeFontPadding="false"
         android:textColor="@color/onSurfaceColor"
-        android:textSize="17sp"
-        app:layout_constraintEnd_toStartOf="@id/row_chevron"
+        android:textSize="16sp"
+        app:layout_constraintEnd_toStartOf="@id/row_accessory"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
+        app:layout_constraintTop_toTopOf="parent"
+        tools:text="Scrobble to Last.fm" />
 
     <TextView
         android:id="@+id/row_summary"
@@ -30,21 +36,58 @@
         android:fontFamily="@font/inter_regular"
         android:includeFontPadding="false"
         android:textColor="@color/onSurfaceColorInactive"
-        android:textSize="14sp"
+        android:textSize="13sp"
         android:visibility="gone"
-        app:layout_constraintEnd_toStartOf="@id/row_chevron"
+        app:layout_constraintEnd_toStartOf="@id/row_accessory"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/row_title" />
+        app:layout_constraintTop_toBottomOf="@id/row_title"
+        tools:text="Not connected"
+        tools:visibility="visible" />
 
-    <ImageView
-        android:id="@+id/row_chevron"
+    <!-- Holds whichever accessory the row uses, so the title constraints stay the same either way. -->
+    <FrameLayout
+        android:id="@+id/row_accessory"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:importantForAccessibility="no"
-        android:src="@drawable/ic_chevron_small"
-        app:tint="@color/onSurfaceColorInactive"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
+        app:layout_constraintTop_toTopOf="parent">
+
+        <ImageView
+            android:id="@+id/row_chevron"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:importantForAccessibility="no"
+            android:src="@drawable/ic_chevron_small"
+            app:tint="@color/onSurfaceColorInactive" />
+
+        <androidx.appcompat.widget.SwitchCompat
+            android:id="@+id/row_switch"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:clickable="false"
+            android:focusable="false"
+            android:visibility="gone"
+            app:showText="false"
+            android:textOff=""
+            android:textOn=""
+            app:thumbTint="@color/cl_settings_switch_thumb"
+            app:trackTint="@color/cl_settings_switch_track"
+            app:trackTintMode="src_in" />
+
+    </FrameLayout>
+
+    <View
+        android:id="@+id/row_divider"
+        android:layout_width="0dp"
+        android:layout_height="0.5dp"
+        android:layout_marginTop="12dp"
+        android:alpha="0.5"
+        android:background="@color/bottomNavigationDividerColor"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>
