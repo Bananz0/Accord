@@ -201,6 +201,14 @@
         text is kept as the zh-rCN translation.
     -->
     <string name="home_recommendations_title">Handpicked for you</string>
+    <!--
+        Now-playing quality badge. These names match the ones the 1.0-stable build carries, which
+        defines them but never shows them - the badge itself is new here.
+    -->
+    <string name="music_quality_lossless">Lossless</string>
+    <string name="music_quality_hires_lossless">Hi-Res Lossless</string>
+    <string name="music_quality_dolby_atmos">Dolby Atmos</string>
+
     <!-- Setup wizard, Jellyfin page (replaces upstream's media permission page). -->
     <string name="setup_jellyfin_title">Connect your library</string>
     <string name="setup_jellyfin_desc">Accord plays the music on your Jellyfin server. Sign in to get started.</string>

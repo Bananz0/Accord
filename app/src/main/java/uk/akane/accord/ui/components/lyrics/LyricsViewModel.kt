@@ -21,7 +21,15 @@ import uk.akane.accord.ui.components.FadingVerticalEdgeLayout
 import uk.akane.accord.ui.components.scroll.ListenableNestedScrollView
 import kotlin.math.roundToInt
 
-class LyricsViewModel(private val context: Context) {
+/**
+ * @param positionProvider current playback position in milliseconds. Upstream ships this view as a
+ *   demo - it walks a hardcoded verse on a five second timer with no idea what is playing - so real
+ *   lyrics need both a source ([setLyrics]) and a clock to follow.
+ */
+class LyricsViewModel(
+    private val context: Context,
+    private val positionProvider: () -> Long = { 0L }
+) {
     private val scope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
 
     private val lyrics = MutableStateFlow(Lyrics.Empty)
@@ -136,25 +144,41 @@ class LyricsViewModel(private val context: Context) {
             }
         }
 
-        lyrics.value = sampleLyrics
-        lyricsView.update(sampleLyrics)
+        lyricsView.update(lyrics.value)
         updateOnLayout()
 
-        val timeOffset = 200L
+        // Follow the player rather than a timer. getCurrentLyricsLineIndex already maps a position
+        // onto a line; upstream simply never called it with a real one.
         scope.launch {
+            var lastIndex = -1
             while (isActive) {
-                val currentLyrics = lyrics.value
-                if (currentLyrics != Lyrics.Empty) {
-                    val totalLines = currentLyrics.lyrics.size
-                    for (index in 0 until totalLines) {
-                        if (!isLayoutFinished) break
+                if (isLayoutFinished && lyrics.value != Lyrics.Empty) {
+                    val index = getCurrentLyricsLineIndex(positionProvider())
+                    if (index != lastIndex && index >= 0) {
+                        lastIndex = index
                         updateCurrentIndex(index)
-                        delay(5000L)
                     }
                 }
-                delay(1000L)
+                delay(POSITION_POLL_MS)
             }
         }
+
+        this.applyPending = { newLyrics ->
+            lyricsView.update(newLyrics)
+            updateOnLayout()
+        }
+        pendingLyrics?.let { applyPending?.invoke(it); pendingLyrics = null }
+    }
+
+    /** Hooked up once the view exists; before that, lyrics arriving are held in [pendingLyrics]. */
+    private var applyPending: ((Lyrics) -> Unit)? = null
+    private var pendingLyrics: Lyrics? = null
+
+    /** Replaces what is on screen. [Lyrics.Empty] hides the view's content. */
+    fun setLyrics(newLyrics: Lyrics) {
+        lyrics.value = newLyrics
+        val apply = applyPending
+        if (apply == null) pendingLyrics = newLyrics else apply(newLyrics)
     }
 
     fun release() {
@@ -165,5 +189,10 @@ class LyricsViewModel(private val context: Context) {
         val currentLyrics = lyrics.value
         val line = currentLyrics.lyrics.indexOfLast { it.timestamp <= position }
         return if (line != -1) line else 0
+    }
+
+    companion object {
+        /** Fast enough that a line change is not visibly late, cheap enough to leave running. */
+        private const val POSITION_POLL_MS = 200L
     }
 }

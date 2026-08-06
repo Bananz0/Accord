@@ -70,6 +70,31 @@
         app:layout_constraintEnd_toEndOf="@id/title"
         />
 
+    <!--
+        Lossless / Hi-Res Lossless / Dolby Atmos, read from the format the player actually selected.
+        Gone unless the current track earns one, so a lossy stream shows nothing rather than an
+        empty pill.
+    -->
+    <TextView
+        android:id="@+id/quality_badge"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:paddingHorizontal="6dp"
+        android:paddingVertical="1dp"
+        android:background="@drawable/bg_quality_badge"
+        android:fontFamily="@font/inter_semibold"
+        android:includeFontPadding="false"
+        android:textSize="11sp"
+        android:textAllCaps="true"
+        android:letterSpacing="0.04"
+        android:visibility="gone"
+        tools:text="@string/music_quality_lossless"
+        tools:visibility="visible"
+        app:layout_constraintTop_toBottomOf="@id/subtitle"
+        app:layout_constraintStart_toStartOf="@id/title"
+        />
+
     <uk.akane.cupertino.widget.divider.OverlayDivider
         android:id="@+id/divider"
         android:layout_width="match_parent"
