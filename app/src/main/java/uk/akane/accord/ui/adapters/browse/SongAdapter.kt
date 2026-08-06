@@ -25,6 +25,7 @@ import kotlinx.coroutines.withContext
 import uk.akane.accord.R
 import uk.akane.accord.logic.dp
 import uk.akane.accord.ui.MainActivity
+import uk.akane.accord.ui.components.SongRowMenu
 import kotlin.random.Random
 
 class SongAdapter(
@@ -94,6 +95,12 @@ class SongAdapter(
                 holder.title?.text = item.mediaItem.mediaMetadata.title
                 holder.subtitle?.text = item.mediaItem.mediaMetadata.artist
 
+                // Upstream draws this button and leaves it inert, which is what made offline
+                // downloads unreachable in the new UI.
+                holder.menuButton?.setOnClickListener { anchor ->
+                    SongRowMenu.show(anchor, item.mediaItem)
+                }
+
                 holder.itemView.setOnClickListener {
                     val mediaController = mainActivity.getPlayer()
                     mediaController?.apply {
@@ -116,6 +123,7 @@ class SongAdapter(
         val cover: ImageView? = view.findViewById(R.id.cover)
         val title: TextView? = view.findViewById(R.id.title)
         val subtitle: TextView? = view.findViewById(R.id.subtitle)
+        val menuButton: View? = view.findViewById(R.id.menu_btn)
     }
 
     private fun bindControl(holder: ViewHolder) {
