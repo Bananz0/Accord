@@ -26,6 +26,8 @@ import org.akanework.gramophone.logic.data.requests.PlaylistLinkResolver
 import uk.akane.accord.R
 import uk.akane.accord.ui.MainActivity
 import uk.akane.accord.ui.components.NavigationBar
+import uk.akane.accord.ui.components.LidarrSetupPrompt
+import uk.akane.accord.ui.components.TrackSwipeActions
 
 /**
  * Asking Lidarr for music that is not in the library yet.
@@ -68,6 +70,12 @@ class RequestsFragment : Fragment() {
         results = rootView.findViewById(R.id.request_results)
         results.layoutManager = LinearLayoutManager(requireContext())
         results.adapter = adapter
+        // Same gesture as everywhere else in the app; here both directions mean request it.
+        TrackSwipeActions.attachRequest(
+            recyclerView = results,
+            canSwipe = { position -> adapter.albumAt(position)?.alreadyAdded == false },
+            onRequest = { position -> adapter.albumAt(position)?.let { addAlbum(it) } },
+        )
 
         query.setOnEditorActionListener { _, _, _ ->
             submit(query.text?.toString().orEmpty())
@@ -153,6 +161,8 @@ class RequestsFragment : Fragment() {
     private inner class ResultAdapter : RecyclerView.Adapter<ResultAdapter.ViewHolder>() {
         private val items = mutableListOf<LidarrClient.AlbumResult>()
 
+        fun albumAt(position: Int): LidarrClient.AlbumResult? = items.getOrNull(position)
+
         fun submit(albums: List<LidarrClient.AlbumResult>) {
             items.clear()
             items.addAll(albums)
@@ -199,10 +209,13 @@ class RequestsFragment : Fragment() {
     }
 
     private fun addAlbum(album: LidarrClient.AlbumResult) {
-        // Adding does need the defaults - Lidarr will not accept an album without a root folder and
-        // both profiles - so this is where the fuller check belongs.
+        // Lidarr will not accept an album without a root folder and both profiles. Rather than
+        // sending the user off to find three fields, ask for them here - the server knows what
+        // the choices are - and carry on with the request that prompted it.
         if (!LidarrCredentialStore(requireContext()).isConfigured()) {
-            showStatus(getString(R.string.requests_needs_defaults))
+            LidarrSetupPrompt.ensureConfigured(requireContext(), viewLifecycleOwner) {
+                addAlbum(album)
+            }
             return
         }
         showStatus(getString(R.string.requests_adding, album.title))

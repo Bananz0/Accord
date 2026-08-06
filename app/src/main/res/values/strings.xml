@@ -742,6 +742,27 @@
     <string name="no_song_playing">Nothing is playing</string>
     <string name="output_device">Audio output</string>
 
+    <!-- Playlist management. -->
+    <string name="playlist_rename">Rename</string>
+    <string name="playlist_rename_confirm">Rename</string>
+    <string name="playlist_rename_failed">That playlist cannot be renamed</string>
+    <string name="playlist_change_picture">Change Picture</string>
+    <string name="playlist_cover_updated">Picture updated</string>
+    <string name="playlist_delete">Delete Playlist</string>
+    <string name="playlist_delete_title">Delete %1$s?</string>
+    <string name="playlist_delete_message">The songs stay in your library. Only the playlist goes.</string>
+    <string name="playlist_delete_confirm">Delete</string>
+    <string name="playlist_delete_failed">That playlist cannot be deleted</string>
+
+    <!-- Asking for the Lidarr settings a request needs, when it needs them. -->
+    <string name="lidarr_setup_root_title">Where should Lidarr put it?</string>
+    <string name="lidarr_setup_quality_title">Which quality profile?</string>
+    <string name="lidarr_setup_metadata_title">Which metadata profile?</string>
+    <string name="lidarr_setup_unreachable">Could not reach Lidarr to ask what the options are</string>
+    <string name="lidarr_setup_no_root">Lidarr has no root folder configured yet</string>
+    <string name="lidarr_setup_no_profiles">Lidarr has no profiles configured yet</string>
+    <string name="lidarr_setup_incomplete">Still missing something Lidarr needs</string>
+
     <!-- Track row menu and swipes. -->
     <string name="add_to_queue">Add to Queue</string>
     <string name="queued">Added to queue</string>

@@ -233,7 +233,12 @@ class PlaylistAdapter(
     )
 
     companion object {
-        private const val PREFS_NAME = "playlist_covers"
+        /** Shared with the playlist screen, which lets the user change a cover. */
+        const val PREFS_NAME = "playlist_covers"
+
+        /** The key a playlist's chosen cover is filed under; see PREFS_NAME. */
+        fun coverKeyFor(name: String): String = "$COVER_KEY_PREFIX$name"
+
         private const val COVER_KEY_PREFIX = "playlist_cover_"
         private const val FAVORITE_PREFS_NAME = "favorite_playlist"
         private const val FAVORITE_PREFS_KEY = "favorite_keys"

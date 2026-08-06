@@ -44,6 +44,9 @@ import uk.akane.accord.ui.components.CollectionPopupMenu
 import android.widget.Toast
 import uk.akane.accord.ui.components.TrackRowMenu
 import uk.akane.accord.ui.components.TrackSwipeActions
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 
 class PlaylistDetailFragment : SwitcherPostponeFragment() {
 
@@ -106,10 +109,26 @@ class PlaylistDetailFragment : SwitcherPostponeFragment() {
         // The three dots on this screen did nothing whatsoever.
         navigationBar.setMenuEntries(
             entries = {
-                CollectionPopupMenu.build(resources, withArtist = false, withAlbum = true)
+                CollectionPopupMenu.build(
+                    resources,
+                    withArtist = false,
+                    withAlbum = true,
+                    // Only a real playlist can be renamed or deleted; Favourites and
+                    // Recently Added are generated and have nothing to edit.
+                    withPlaylistManagement = isEditablePlaylist(),
+                )
             },
             onClick = { entry ->
-                CollectionPopupMenu.handle(activity, entry, playlistSongs.toList(), headerTitle)
+                when (CollectionPopupMenu.actionOf(entry)) {
+                    CollectionPopupMenu.Action.RENAME -> promptRename()
+                    CollectionPopupMenu.Action.CHANGE_PICTURE -> playlistCoverPicker.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
+                    CollectionPopupMenu.Action.DELETE -> promptDelete()
+                    else -> CollectionPopupMenu.handle(
+                        activity, entry, playlistSongs.toList(), headerTitle
+                    )
+                }
             },
         )
 
@@ -189,6 +208,126 @@ class PlaylistDetailFragment : SwitcherPostponeFragment() {
             getString(R.string.removed_from_playlist, headerTitle),
             Toast.LENGTH_SHORT
         ).show()
+    }
+
+    /** Generated playlists - Favourites and the like - have no file to rename or delete. */
+    private fun isEditablePlaylist(): Boolean {
+        val playlist = currentPlaylist ?: return false
+        return playlist !is Favorite && playlist.id != null
+    }
+
+    private val playlistCoverPicker = registerForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) { uri -> if (uri != null) setPlaylistCover(uri) }
+
+    /**
+     * Remembers a cover for this playlist.
+     *
+     * MediaStore playlists have no artwork of their own, so the choice is kept alongside the
+     * others the list screen already reads, keyed by title.
+     */
+    private fun setPlaylistCover(uri: android.net.Uri) {
+        runCatching {
+            requireContext().contentResolver.takePersistableUriPermission(
+                uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        }
+        requireContext()
+            .getSharedPreferences(PlaylistAdapter.PREFS_NAME, android.content.Context.MODE_PRIVATE)
+            .edit()
+            .putString(PlaylistAdapter.coverKeyFor(headerTitle), uri.toString())
+            .apply()
+        headerAdapter.update(
+            headerTitle,
+            headerSubtitle,
+            resources.getString(R.string.artist_song_count, playlistSongs.size)
+        )
+        Toast.makeText(requireContext(), R.string.playlist_cover_updated, Toast.LENGTH_SHORT)
+            .show()
+    }
+
+    private fun promptRename() {
+        val input = android.widget.EditText(requireContext()).apply {
+            setText(headerTitle)
+            setSingleLine()
+        }
+        MaterialAlertDialogBuilder(requireContext())
+            .setTitle(R.string.playlist_rename)
+            .setView(input)
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(R.string.playlist_rename_confirm) { _, _ ->
+                val name = input.text?.toString()?.trim().orEmpty()
+                if (name.isNotEmpty() && name != headerTitle) renamePlaylist(name)
+            }
+            .show()
+    }
+
+    private fun renamePlaylist(newName: String) {
+        val file = currentPlaylist?.path
+        if (file == null) {
+            Toast.makeText(requireContext(), R.string.playlist_rename_failed, Toast.LENGTH_SHORT)
+                .show()
+            return
+        }
+        val oldTitle = headerTitle
+        val renamed = runCatching {
+            ItemManipulator.renamePlaylist(requireContext(), file, newName)
+        }.isSuccess
+        if (!renamed) {
+            Toast.makeText(requireContext(), R.string.playlist_rename_failed, Toast.LENGTH_SHORT)
+                .show()
+            return
+        }
+        // The cover is filed under the title, so it has to move with it or the playlist
+        // silently loses its picture.
+        val prefs = requireContext()
+            .getSharedPreferences(PlaylistAdapter.PREFS_NAME, android.content.Context.MODE_PRIVATE)
+        prefs.getString(PlaylistAdapter.coverKeyFor(oldTitle), null)?.let { cover ->
+            prefs.edit()
+                .remove(PlaylistAdapter.coverKeyFor(oldTitle))
+                .putString(PlaylistAdapter.coverKeyFor(newName), cover)
+                .apply()
+        }
+        headerTitle = newName
+        navigationBar.setTitle(newName)
+        headerAdapter.update(
+            newName,
+            headerSubtitle,
+            resources.getString(R.string.artist_song_count, playlistSongs.size)
+        )
+        activity.updateLibrary()
+    }
+
+    private fun promptDelete() {
+        MaterialAlertDialogBuilder(requireContext())
+            .setTitle(getString(R.string.playlist_delete_title, headerTitle))
+            .setMessage(R.string.playlist_delete_message)
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(R.string.playlist_delete_confirm) { _, _ -> deletePlaylist() }
+            .show()
+    }
+
+    private fun deletePlaylist() {
+        val id = currentPlaylist?.id
+        if (id == null) {
+            Toast.makeText(requireContext(), R.string.playlist_delete_failed, Toast.LENGTH_SHORT)
+                .show()
+            return
+        }
+        val request = runCatching { ItemManipulator.deletePlaylist(requireContext(), id) }
+            .getOrNull()
+        if (request == null) {
+            Toast.makeText(requireContext(), R.string.playlist_delete_failed, Toast.LENGTH_SHORT)
+                .show()
+            return
+        }
+        requireContext()
+            .getSharedPreferences(PlaylistAdapter.PREFS_NAME, android.content.Context.MODE_PRIVATE)
+            .edit()
+            .remove(PlaylistAdapter.coverKeyFor(headerTitle))
+            .apply()
+        activity.updateLibrary()
+        activity.fragmentSwitcherView.popBackTopFragmentIfExists()
     }
 
     private fun resolvePlaylist(playlists: List<Playlist>): Playlist? {

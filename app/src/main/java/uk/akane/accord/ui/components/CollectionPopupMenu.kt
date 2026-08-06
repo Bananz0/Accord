@@ -20,7 +20,14 @@ import kotlin.random.Random
  */
 object CollectionPopupMenu {
 
-    enum class Action { PLAY, SHUFFLE, ADD_TO_PLAYLIST, GO_TO_ARTIST, GO_TO_ALBUM }
+    enum class Action {
+        PLAY, SHUFFLE, ADD_TO_PLAYLIST, GO_TO_ARTIST, GO_TO_ALBUM,
+        RENAME, CHANGE_PICTURE, DELETE,
+    }
+
+    /** The action an entry carries, for screens that handle some of them themselves. */
+    fun actionOf(entry: PopupHelper.PopupEntry): Action? =
+        (entry as? PopupHelper.MenuEntry)?.payload as? Action
 
     /**
      * @param withArtist whether "Go to Artist" is worth offering - it is not on the artist's own page.
@@ -30,6 +37,7 @@ object CollectionPopupMenu {
         resources: Resources,
         withArtist: Boolean = true,
         withAlbum: Boolean = false,
+        withPlaylistManagement: Boolean = false,
     ): PopupHelper.PopupEntries =
         PopupHelper.PopupMenuBuilder()
             .addMenuEntry(resources, R.drawable.ic_master_play, R.string.play, Action.PLAY)
@@ -49,6 +57,20 @@ object CollectionPopupMenu {
                 if (withAlbum) {
                     addMenuEntry(
                         resources, R.drawable.ic_album, R.string.go_to_album, Action.GO_TO_ALBUM
+                    )
+                }
+                // Only a playlist the user made can be renamed, re-covered or deleted.
+                if (withPlaylistManagement) {
+                    addSpacer()
+                    addMenuEntry(
+                        resources, R.drawable.ic_edit, R.string.playlist_rename, Action.RENAME
+                    )
+                    addMenuEntry(
+                        resources, R.drawable.ic_album, R.string.playlist_change_picture,
+                        Action.CHANGE_PICTURE
+                    )
+                    addDestructiveMenuEntry(
+                        resources, R.drawable.ic_trash, R.string.playlist_delete, Action.DELETE
                     )
                 }
             }
@@ -78,6 +100,8 @@ object CollectionPopupMenu {
             // for is "everything by them", and that is what this shows.
             Action.GO_TO_ARTIST -> openBy(activity, tracks) { it.mediaMetadata.artist?.toString() }
             Action.GO_TO_ALBUM -> openBy(activity, tracks) { it.mediaMetadata.albumTitle?.toString() }
+            // Handled by the playlist screen itself, which owns the file being renamed or deleted.
+            Action.RENAME, Action.CHANGE_PICTURE, Action.DELETE -> Unit
             null -> Unit
         }
     }

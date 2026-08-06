@@ -185,6 +185,120 @@ object TrackSwipeActions {
     }
 
     /**
+     * The same gesture on a list of things that are not library tracks - Lidarr's search
+     * results - where both directions mean the one thing worth doing: request it.
+     *
+     * @param canSwipe whether the row at this position can be requested at all.
+     */
+    fun attachRequest(
+        recyclerView: RecyclerView,
+        canSwipe: (Int) -> Boolean,
+        onRequest: (Int) -> Unit,
+    ) {
+        val resources = recyclerView.resources
+        val icon = ResourcesCompat.getDrawable(resources, R.drawable.ic_download, null)
+        val accent = resources.getColor(R.color.accentColor, null)
+        val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        val corner = 12.dp.px
+        val inset = 16.dp.px
+        val armed = mutableSetOf<Int>()
+
+        val callback = object : ItemTouchHelper.SimpleCallback(
+            0,
+            ItemTouchHelper.LEFT or ItemTouchHelper.RIGHT
+        ) {
+            override fun getSwipeThreshold(viewHolder: RecyclerView.ViewHolder) = 0.30F
+            override fun getSwipeEscapeVelocity(defaultValue: Float) = defaultValue * 8F
+
+            override fun getSwipeDirs(
+                recyclerView: RecyclerView,
+                viewHolder: RecyclerView.ViewHolder
+            ) = if (canSwipe(viewHolder.absoluteAdapterPosition)) {
+                super.getSwipeDirs(recyclerView, viewHolder)
+            } else 0
+
+            override fun onMove(
+                recyclerView: RecyclerView,
+                viewHolder: RecyclerView.ViewHolder,
+                target: RecyclerView.ViewHolder
+            ) = false
+
+            override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
+                val position = viewHolder.absoluteAdapterPosition
+                armed.remove(viewHolder.hashCode())
+                viewHolder.itemView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+                if (canSwipe(position)) onRequest(position)
+                recyclerView.adapter?.notifyItemChanged(position)
+            }
+
+            override fun onChildDraw(
+                canvas: Canvas,
+                recyclerView: RecyclerView,
+                viewHolder: RecyclerView.ViewHolder,
+                dX: Float,
+                dY: Float,
+                actionState: Int,
+                isCurrentlyActive: Boolean
+            ) {
+                val view = viewHolder.itemView
+                val limit = view.width * MAX_TRAVEL
+                val damped = if (dX == 0F) 0F else {
+                    val magnitude = min(abs(dX) * FOLLOW, limit)
+                    if (dX > 0) magnitude else -magnitude
+                }
+                if (actionState == ItemTouchHelper.ACTION_STATE_SWIPE && damped != 0F) {
+                    backgroundPaint.color = accent
+                    val bounds = if (damped > 0) {
+                        RectF(
+                            view.left.toFloat(), view.top.toFloat(),
+                            view.left + damped, view.bottom.toFloat()
+                        )
+                    } else {
+                        RectF(
+                            view.right + damped, view.top.toFloat(),
+                            view.right.toFloat(), view.bottom.toFloat()
+                        )
+                    }
+                    canvas.drawRoundRect(bounds, corner, corner, backgroundPaint)
+                    icon?.let {
+                        val size = 22.dp.px.toInt()
+                        val centerY = (view.top + view.bottom) / 2
+                        val centerX = if (damped > 0) {
+                            (view.left + inset + size / 2).toInt()
+                        } else {
+                            (view.right - inset - size / 2).toInt()
+                        }
+                        it.setTint(Color.WHITE)
+                        it.setBounds(
+                            centerX - size / 2, centerY - size / 2,
+                            centerX + size / 2, centerY + size / 2
+                        )
+                        it.draw(canvas)
+                    }
+                    val key = viewHolder.hashCode()
+                    val past = abs(dX) > view.width * getSwipeThreshold(viewHolder)
+                    if (isCurrentlyActive && past && armed.add(key)) {
+                        view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                    } else if (!past) {
+                        armed.remove(key)
+                    }
+                }
+                super.onChildDraw(
+                    canvas, recyclerView, viewHolder, damped, dY, actionState, isCurrentlyActive
+                )
+            }
+        }
+        ItemTouchHelper(callback).attachToRecyclerView(recyclerView)
+        claimHorizontalGestures(recyclerView) { position ->
+            // Reuses the track hook only as a yes/no; the value itself is never read.
+            if (canSwipe(position)) PLACEHOLDER else null
+        }
+    }
+
+    /** Stands in for "there is something swipeable here" on lists that hold no MediaItems. */
+    private val PLACEHOLDER: MediaItem = MediaItem.EMPTY
+
+    /**
      * Stops the page stealing a sideways drag that started on a row.
      *
      * FragmentSwitcherView treats any horizontal movement past the touch slop as its back-swipe and

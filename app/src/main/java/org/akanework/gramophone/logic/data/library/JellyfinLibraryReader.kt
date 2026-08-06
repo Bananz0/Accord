@@ -56,8 +56,22 @@ class JellyfinLibraryReader(private val context: Context) : LibraryReader {
         store.map { s -> s?.genreList?.map { it.toLibPhonograph() } ?: emptyList() }
     override val dateListFlow: Flow<List<Date>> =
         store.map { s -> s?.dateList?.map { it.toLibPhonograph() } ?: emptyList() }
+    /**
+     * The server's playlists.
+     *
+     * The grouper appends a "recently added" pseudo-playlist to every library it builds. Converting
+     * it like the rest stripped the type that identifies it, leaving a titleless playlist holding
+     * thousands of songs: the list screen drew it as "(Untitled Playlist)", and the detail screen -
+     * which matches by title - could never resolve it, so it opened claiming the whole library and
+     * showing none of it. It is dropped here; the home screen already has a recently-added row.
+     */
     override val playlistListFlow: Flow<List<Playlist>> =
-        store.map { s -> s?.playlistList?.map { it.toLibPhonograph() } ?: emptyList() }
+        store.map { s ->
+            s?.playlistList
+                ?.filterNot { it is MediaStoreUtils.RecentlyAdded }
+                ?.map { it.toLibPhonograph() }
+                ?: emptyList()
+        }
 
     override suspend fun refresh() = refresh(force = false)
 
