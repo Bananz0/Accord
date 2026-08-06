@@ -307,7 +307,7 @@ class MainActivity : AppCompatActivity() {
         }, false)
 
         // Set content Views.
-        setContentView(R.layout.activity_main)
+        setContentView(R.layout.legacy_activity_main)
         window.decorView.setBackgroundColor(
             ContextCompat.getColor(
                 this,

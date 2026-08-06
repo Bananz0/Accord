@@ -9,3 +9,8 @@
 .cxx
 local.properties
 package.properties
+# The wrapper module around the libPhonograph submodule has no .gitignore of its own.
+/libPhonograph/build
+# A 142 MB apktool/jadx dump of the Accord build whose screens are being ported in. Kept locally as
+# a reference for the parts that exist nowhere in source form; far too large to belong in git.
+/accord_new_ui_and_functionality
