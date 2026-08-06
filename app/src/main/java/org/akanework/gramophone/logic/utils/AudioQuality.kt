@@ -26,6 +26,18 @@ enum class AudioQuality(@param:StringRes val label: Int) {
     HIRES_LOSSLESS(R.string.music_quality_hires_lossless),
     DOLBY_ATMOS(R.string.music_quality_dolby_atmos);
 
+    /**
+     * The badge plus the numbers behind it, for the sheet that opens when the badge is tapped -
+     * "Hi-Res Lossless" on its own does not say whether a track is 24/48 or 24/192.
+     */
+    data class Details(
+        val quality: AudioQuality,
+        /** Display name of the codec: FLAC, ALAC, PCM. Null when media3 did not name one. */
+        val codec: String?,
+        val bitDepth: Int?,
+        val sampleRateHz: Int?,
+    )
+
     companion object {
 
         /** Above CD sample rate, or deeper than CD bit depth. */
@@ -67,6 +79,39 @@ enum class AudioQuality(@param:StringRes val label: Int) {
                     (bitDepth != null && bitDepth > CD_BIT_DEPTH)
             return if (isHiRes) HIRES_LOSSLESS else LOSSLESS
         }
+
+        /** The badge and the format behind it, or null when the track earns no badge. */
+        @OptIn(UnstableApi::class)
+        fun detailsOf(tracks: Tracks): Details? {
+            val format = selectedAudioFormat(tracks) ?: return null
+            val quality = of(format) ?: return null
+            return Details(
+                quality = quality,
+                codec = codecNameOf(format),
+                bitDepth = bitDepthOf(format),
+                sampleRateHz = format.sampleRate.takeIf { it != Format.NO_VALUE },
+            )
+        }
+
+        /**
+         * A readable codec name. media3 reports MIME types, and "audio/x-ape" is not what anyone
+         * calls the format.
+         */
+        @OptIn(UnstableApi::class)
+        private fun codecNameOf(format: Format): String? =
+            when (val mimeType = format.sampleMimeType?.lowercase()) {
+                null -> null
+                MimeTypes.AUDIO_FLAC -> "FLAC"
+                MimeTypes.AUDIO_ALAC -> "ALAC"
+                MimeTypes.AUDIO_RAW, MimeTypes.AUDIO_WAV -> "PCM"
+                MimeTypes.AUDIO_TRUEHD -> "Dolby TrueHD"
+                MimeTypes.AUDIO_E_AC3_JOC -> "Dolby Digital Plus"
+                MimeTypes.AUDIO_AC4 -> "Dolby AC-4"
+                "audio/x-ape" -> "APE"
+                "audio/x-wavpack" -> "WavPack"
+                "audio/aiff", "audio/x-aiff" -> "AIFF"
+                else -> mimeType.substringAfter('/').removePrefix("x-").uppercase()
+            }
 
         @OptIn(UnstableApi::class)
         private fun selectedAudioFormat(tracks: Tracks): Format? =

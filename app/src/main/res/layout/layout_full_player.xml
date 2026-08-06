@@ -74,25 +74,31 @@
         Lossless / Hi-Res Lossless / Dolby Atmos, read from the format the player actually selected.
         Gone unless the current track earns one, so a lossy stream shows nothing rather than an
         empty pill.
+
+        Sits centred on the timestamp row, between elapsed and remaining, which is where a listener
+        looks for it. Tapping it names the actual format.
     -->
     <TextView
         android:id="@+id/quality_badge"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="6dp"
-        android:paddingHorizontal="6dp"
-        android:paddingVertical="1dp"
-        android:background="@drawable/bg_quality_badge"
+        android:background="@drawable/bg_quality_chip"
+        android:drawableStart="@drawable/ic_lossless_glyph"
+        android:drawablePadding="5dp"
         android:fontFamily="@font/inter_semibold"
         android:includeFontPadding="false"
-        android:textSize="11sp"
-        android:textAllCaps="true"
-        android:letterSpacing="0.04"
+        android:paddingHorizontal="9dp"
+        android:paddingVertical="3dp"
+        android:textColor="@color/onSurfaceColor"
+        android:drawableTint="@color/onSurfaceColor"
+        android:textSize="12sp"
         android:visibility="gone"
         tools:text="@string/music_quality_lossless"
         tools:visibility="visible"
-        app:layout_constraintTop_toBottomOf="@id/subtitle"
-        app:layout_constraintStart_toStartOf="@id/title"
+        app:layout_constraintTop_toTopOf="@id/current_timestamp"
+        app:layout_constraintBottom_toBottomOf="@id/current_timestamp"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
         />
 
     <uk.akane.cupertino.widget.divider.OverlayDivider
@@ -140,6 +146,44 @@
         app:layout_constraintEnd_toStartOf="@id/list"
         app:layout_constraintTop_toTopOf="@id/list"
         app:layout_constraintBottom_toBottomOf="@id/list"
+        />
+
+    <!--
+        The connected output, shown in place of the AirPlay glyph whenever there is one. Two views
+        rather than swapping the button's icon: OverlayButton renders its icon through a bitmap it
+        builds at attach time and exposes no setter, and the device also needs a name under it.
+    -->
+    <ImageView
+        android:id="@+id/output_device_icon"
+        android:layout_width="30dp"
+        android:layout_height="30dp"
+        android:contentDescription="@string/output_device"
+        android:visibility="gone"
+        app:tint="@color/onSurfaceColor"
+        app:layout_constraintStart_toStartOf="@id/airplay"
+        app:layout_constraintEnd_toEndOf="@id/airplay"
+        app:layout_constraintTop_toTopOf="@id/airplay"
+        app:layout_constraintBottom_toBottomOf="@id/airplay"
+        />
+
+    <TextView
+        android:id="@+id/output_device_name"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="24dp"
+        android:ellipsize="end"
+        android:fontFamily="@font/inter_semibold"
+        android:gravity="center"
+        android:includeFontPadding="false"
+        android:singleLine="true"
+        android:textColor="@color/onSurfaceColorInactive"
+        android:textSize="13sp"
+        android:visibility="gone"
+        tools:text="Galaxy Buds3 Pro"
+        tools:visibility="visible"
+        app:layout_constraintTop_toBottomOf="@id/airplay"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
         />
 
     <uk.akane.cupertino.widget.button.OverlayButton

@@ -157,6 +157,12 @@
     <style name="Widget.Accord.ActionPanel.FullPlayer.Cover.Shape">
         <item name="cornerRadius">@dimen/full_cover_radius</item>
     </style>
+    <!-- Credited people are shown as circles, the way every other artist thumbnail in the app is. -->
+    <style name="ShapeAppearanceOverlay.Accord.Credit.Thumbnail" parent="">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">50%</item>
+    </style>
+
     <style name="Widget.Accord.Main.Browse" />
     <style name="Widget.Accord.Main.Browse.TabLayout" parent="TextAppearance.Design.Tab">
         <item name="textAllCaps">false</item>

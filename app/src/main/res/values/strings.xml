@@ -243,6 +243,9 @@
     <string name="music_quality_lossless">Lossless</string>
     <string name="music_quality_hires_lossless">Hi-Res Lossless</string>
     <string name="music_quality_dolby_atmos">Dolby Atmos</string>
+    <string name="music_quality_depth_rate">%1$d-bit/%2$s kHz</string>
+    <string name="music_quality_rate">%1$s kHz</string>
+    <string name="music_quality_unknown">The player did not report a format for this track</string>
 
     <!-- Setup wizard, Jellyfin page (replaces upstream's media permission page). -->
     <string name="setup_jellyfin_title">Connect your library</string>
@@ -711,4 +714,32 @@
     <string name="add_music">Add Music</string>
     <string name="suggested_songs">Suggested Songs</string>
     <string name="preview_and_add_to_playlist">Preview and add to playlist</string>
+
+    <!-- Playlist picker, reached from a song's overflow menu. -->
+    <string name="add_to_playlist_title">Add to a Playlist</string>
+    <string name="add_to_playlist_new">New Playlist…</string>
+    <string name="add_to_playlist_new_subtitle">Create one holding this song</string>
+    <string name="add_to_playlist_signed_out">Playlists live on your Jellyfin server. Sign in to add songs to one.</string>
+    <string name="add_to_playlist_empty">No playlists yet</string>
+    <string name="add_to_playlist_added">Added to %1$s</string>
+    <string name="add_to_playlist_failed">Could not add to %1$s</string>
+    <string name="add_to_playlist_created">Created %1$s</string>
+    <string name="add_to_playlist_create_failed">Could not create that playlist</string>
+    <string name="playlist_name_hint">Playlist name</string>
+
+    <!-- Credits screen. -->
+    <string name="credits_none">No credits for this track</string>
+    <string name="credits_unavailable">Credits are only available for songs on your Jellyfin server</string>
+    <string name="credits_section_performance">Performance</string>
+    <string name="credits_section_release">Release</string>
+    <string name="credits_section_audio">Audio</string>
+
+    <!-- Overflow-menu outcomes. -->
+    <string name="popup_favorite">Favorite</string>
+    <string name="no_song_playing">Nothing is playing</string>
+    <string name="output_device">Audio output</string>
+    <string name="station_from_song">%1$s Station</string>
+    <string name="share_song_text">%1$s — %2$s</string>
+    <string name="share_lyrics_none">This track has no lyrics to share</string>
+    <string name="go_to_album_missing">This song is not filed under an album</string>
 </resources>

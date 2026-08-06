@@ -13,7 +13,9 @@ import android.graphics.drawable.Drawable
 import android.os.Parcelable
 import android.util.AttributeSet
 import android.view.GestureDetector
+import android.graphics.RectF
 import android.view.MotionEvent
+import android.view.ViewConfiguration
 import android.view.View
 import android.view.WindowInsets
 import androidx.constraintlayout.widget.ConstraintLayout
@@ -40,6 +42,7 @@ import uk.akane.cupertino.popup.PopupMenuHost
 import uk.akane.cupertino.widget.dpToPx
 import uk.akane.cupertino.widget.image.SimpleImageView
 import uk.akane.cupertino.utils.AnimationUtils
+import kotlin.math.abs
 import kotlin.math.absoluteValue
 import kotlin.math.roundToInt
 
@@ -431,6 +434,28 @@ class FloatingPanelLayout @JvmOverloads constructor(
             )
             return true
         }
+        // A touch inside an open popup used to be swallowed by the guard below, so every entry in
+        // the menu was decoration - the helper already knows which entry a point falls in and can
+        // draw it pressed; nothing was asking it.
+        if (popupHelper.transformFraction == 1F) {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE ->
+                    if (popupHelper.updatePressedEntry(event.x, event.y)) invalidate()
+
+                MotionEvent.ACTION_UP -> {
+                    val entry = popupHelper.findEntryAt(event.x, event.y)
+                    if (popupHelper.clearPressedEntry()) invalidate()
+                    dismissPopupMenu()
+                    // After the dismissal, so the menu is on its way out as the action runs rather
+                    // than still covering whatever the action opens.
+                    entry?.let { popupEntryClickListener?.invoke(it) }
+                }
+
+                MotionEvent.ACTION_CANCEL ->
+                    if (popupHelper.clearPressedEntry()) invalidate()
+            }
+            return true
+        }
         if (popupHelper.transformFraction != 0F) return true
         return if (isInsideBoundingBox(event.x, event.y) || isDragging) {
             if (gestureDetector.onTouchEvent(event)) {
@@ -477,6 +502,10 @@ class FloatingPanelLayout @JvmOverloads constructor(
         velocityX: Float,
         velocityY: Float
     ): Boolean {
+        // A fling ends the gesture without onUp() ever running, so the artwork swipe has to be let
+        // go of here too or the cover stays wherever the finger left it.
+        if (endCoverSwipeIfActive()) return true
+        coverSwipeRejected = false
         isDragging = false
         val isSlidingUp = (penultimateMotionY - lastMotionY) > 0
         val lastVelocity = -(lastMotionY - penultimateMotionY) / (lastMotionTime - penultimateMotionTime) * SPEED_FACTOR
@@ -517,6 +546,31 @@ class FloatingPanelLayout @JvmOverloads constructor(
         distanceX: Float,
         distanceY: Float
     ): Boolean {
+        // A sideways drag that began on the artwork belongs to the player, not to this panel. It has
+        // to be decided here rather than by a touch listener on the artwork itself: this panel owns
+        // the gesture from the moment it starts, and a child that consumed the press to watch for a
+        // swipe would take drag-to-collapse away from the whole cover.
+        val handler = coverSwipeHandler
+        if (handler != null && !coverSwipeRejected && e1 != null) {
+            val dx = e2.x - e1.x
+            val dy = e2.y - e1.y
+            if (!coverSwipeActive) {
+                if (abs(dx) > touchSlop && abs(dx) > abs(dy) &&
+                    handler.coverBounds()?.contains(e1.x, e1.y) == true
+                ) {
+                    coverSwipeActive = true
+                } else if (abs(dy) > touchSlop) {
+                    // Committed to a vertical drag; do not reconsider for the rest of the gesture.
+                    coverSwipeRejected = true
+                }
+            }
+            if (coverSwipeActive) {
+                coverSwipeDx = dx
+                handler.onCoverSwipeMove(dx)
+                return true
+            }
+        }
+
         isDragging = true
 
         flingValueAnimator?.cancel()
@@ -561,6 +615,7 @@ class FloatingPanelLayout @JvmOverloads constructor(
     }
 
     private fun onUp() {
+        if (endCoverSwipeIfActive()) return
         if (isDragging) {
             flingValueAnimator?.cancel()
             flingValueAnimator = null
@@ -721,14 +776,52 @@ class FloatingPanelLayout @JvmOverloads constructor(
         return popupBackgroundRenderNode
     }
 
+    /** What to run when an entry in the open popup is tapped; see [onTouchEvent]. */
+    private var popupEntryClickListener: ((PopupHelper.PopupEntry) -> Unit)? = null
+
+    /**
+     * Lets the player claim sideways drags that start on the artwork. See [onScroll] for why this
+     * cannot simply be a touch listener on the artwork.
+     */
+    interface CoverSwipeHandler {
+        /** Where the artwork is, in this panel's coordinates, or null when it cannot be swiped. */
+        fun coverBounds(): RectF?
+
+        /** Called continuously with the distance dragged from where the finger went down. */
+        fun onCoverSwipeMove(dx: Float)
+
+        /** Called once when the finger lifts, with the final distance. */
+        fun onCoverSwipeEnd(dx: Float)
+    }
+
+    var coverSwipeHandler: CoverSwipeHandler? = null
+
+    private var coverSwipeActive = false
+    private var coverSwipeRejected = false
+    private var coverSwipeDx = 0F
+    private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
+
+    /** @return true when a swipe was in progress and has now been handed back to the player. */
+    private fun endCoverSwipeIfActive(): Boolean {
+        coverSwipeRejected = false
+        if (!coverSwipeActive) return false
+        coverSwipeActive = false
+        isDragging = false
+        coverSwipeHandler?.onCoverSwipeEnd(coverSwipeDx)
+        coverSwipeDx = 0F
+        return true
+    }
+
     fun callUpPopup(
         entryList: PopupHelper.PopupEntries,
         locationX: Int,
         locationY: Int,
         anchorFromTop: Boolean = false,
         backgroundView: View? = null,
-        dismissAction: (() -> Unit)? = null
+        dismissAction: (() -> Unit)? = null,
+        entryClickListener: ((PopupHelper.PopupEntry) -> Unit)? = null
     ) {
+        popupEntryClickListener = entryClickListener
         val backgroundRenderNode = backgroundView?.let { recordPopupBackground(it) }
         popupHelper.callUpPopup(
             false,
@@ -759,7 +852,9 @@ class FloatingPanelLayout @JvmOverloads constructor(
         onDismiss: (() -> Unit)?,
         onEntryClick: ((PopupHelper.PopupEntry) -> Unit)?
     ) {
-        callUpPopup(entries, locationX, locationY, anchorFromTop, backgroundView, onDismiss)
+        callUpPopup(
+            entries, locationX, locationY, anchorFromTop, backgroundView, onDismiss, onEntryClick
+        )
     }
 
     @Suppress("CanBeParameter")

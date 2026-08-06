@@ -1,6 +1,9 @@
 package uk.akane.accord.ui.components.player
 
+import android.annotation.SuppressLint
+import android.app.AlertDialog
 import android.content.Context
+import android.graphics.RectF
 import android.animation.ValueAnimator
 import android.content.BroadcastReceiver
 import android.content.Intent
@@ -12,6 +15,7 @@ import android.media.MediaRouter2
 import android.os.Build
 import android.util.AttributeSet
 import android.util.Log
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowInsets
 import android.widget.Button
@@ -60,6 +64,12 @@ import android.os.Bundle
 import androidx.core.os.BundleCompat
 import androidx.media3.session.SessionCommand
 import org.akanework.gramophone.logic.utils.MediaStoreUtils
+import android.media.AudioDeviceCallback
+import android.view.ViewConfiguration
+import android.view.animation.DecelerateInterpolator
+import android.widget.ImageView
+import org.akanework.gramophone.logic.utils.AudioOutput
+import kotlin.math.abs
 import uk.akane.accord.R
 import uk.akane.accord.logic.dp
 import uk.akane.accord.logic.inverseLerp
@@ -96,7 +106,7 @@ class FullPlayer @JvmOverloads constructor(
     defStyleAttr: Int = 0,
     defStyleRes: Int = 0
 ) : ConstraintLayout(context, attrs, defStyleAttr, defStyleRes),
-    FloatingPanelLayout.OnSlideListener, Player.Listener {
+    FloatingPanelLayout.OnSlideListener, FloatingPanelLayout.CoverSwipeHandler, Player.Listener {
 
     private val activity
         get() = context as MainActivity
@@ -127,6 +137,10 @@ class FullPlayer @JvmOverloads constructor(
     private var nextButton: AnimatedVectorButton
     private var ellipsisButton: OverlayBackgroundButton
     private var qualityBadge: TextView
+    private var currentQualityDetails: AudioQuality.Details? = null
+    private var outputDeviceIcon: ImageView
+    private var outputDeviceName: TextView
+    private var audioDeviceCallback: AudioDeviceCallback? = null
 
     private var fullPlayerToolbar: FullPlayerToolbar
     private var queueContainer: View
@@ -150,6 +164,8 @@ class FullPlayer @JvmOverloads constructor(
     private var isUserVolumeScrubbing = false
     private var coverBaseScale = 1F
     private var coverBaseTranslationX = 0F
+    private var coverSwipeRestingTranslationX: Float? = null
+    private var slideFraction = 0F
     private var coverBaseTranslationY = 0F
     private var coverPauseScale = 1F
     private var coverPauseAnimator: ValueAnimator? = null
@@ -200,6 +216,10 @@ class FullPlayer @JvmOverloads constructor(
         starTransformButton = findViewById(R.id.star)
         ellipsisButton = findViewById(R.id.ellipsis)
         qualityBadge = findViewById(R.id.quality_badge)
+        qualityBadge.setOnClickListener { showQualityDetails() }
+        outputDeviceIcon = findViewById(R.id.output_device_icon)
+        outputDeviceName = findViewById(R.id.output_device_name)
+        outputDeviceIcon.setOnClickListener { startSystemMediaControl() }
         controllerButton = findViewById(R.id.main_control_btn)
         previousButton = findViewById(R.id.backward_btn)
         nextButton = findViewById(R.id.forward_btn)
@@ -409,6 +429,7 @@ class FullPlayer @JvmOverloads constructor(
             startSystemMediaControl()
         }
 
+
         // The service resolves lyrics off the main thread and announces the result with this
         // command once it has them, which for a Jellyfin lookup is well after the track started.
         activity.controllerViewModel.customCommandListeners.addCallback(activity.lifecycle) {
@@ -458,6 +479,7 @@ class FullPlayer @JvmOverloads constructor(
 
         doOnLayout {
             floatingPanelLayout.addOnSlideListener(this)
+            floatingPanelLayout.coverSwipeHandler = this
 
             finalTranslationX = 32.dp.px - coverSimpleImageView.left
             finalTranslationY = (20 - 18).dp.px
@@ -846,6 +868,7 @@ class FullPlayer @JvmOverloads constructor(
     }
 
     override fun onSlide(value: Float) {
+        slideFraction = value
         if (contentType == ContentType.PLAYLIST) {
             fullPlayerToolbar.getCoverView().alpha = if (value >= 1F) 1F else 0F
         }
@@ -941,13 +964,113 @@ class FullPlayer @JvmOverloads constructor(
     }
 
     override fun onTracksChanged(tracks: Tracks) {
-        val quality = AudioQuality.of(tracks)
-        if (quality == null) {
+        val details = AudioQuality.detailsOf(tracks)
+        currentQualityDetails = details
+        if (details == null) {
             qualityBadge.visibility = GONE
         } else {
-            qualityBadge.setText(quality.label)
+            qualityBadge.setText(details.quality.label)
             qualityBadge.visibility = VISIBLE
         }
+    }
+
+    /**
+     * Names the format behind the badge - "FLAC 24-bit/96 kHz" - which is the one thing the badge
+     * itself cannot say, since 24/48 and 24/192 both read "Hi-Res Lossless".
+     */
+    private fun showQualityDetails() {
+        val details = currentQualityDetails ?: return
+        val parts = buildList {
+            details.codec?.let { add(it) }
+            val bitDepth = details.bitDepth
+            val sampleRate = details.sampleRateHz
+            if (bitDepth != null && sampleRate != null) {
+                add(context.getString(R.string.music_quality_depth_rate, bitDepth, sampleRate.khz()))
+            } else if (sampleRate != null) {
+                add(context.getString(R.string.music_quality_rate, sampleRate.khz()))
+            }
+        }
+        AlertDialog.Builder(context)
+            .setTitle(details.quality.label)
+            .setMessage(
+                parts.joinToString(" ").ifEmpty { context.getString(R.string.music_quality_unknown) }
+            )
+            .setPositiveButton(android.R.string.ok, null)
+            .show()
+    }
+
+    /** 44100 reads as "44.1", 48000 as "48" - trailing zeroes here are noise. */
+    private fun Int.khz(): String = "%.1f".format(this / 1000f).removeSuffix(".0")
+
+    /**
+     * Where the artwork is, for the panel's gesture handling. Null while the player is not fully
+     * open, where the cover is a thumbnail in the collapsed bar and swiping it means nothing.
+     */
+    override fun coverBounds(): RectF? {
+        // onSlide keeps this in step with the panel; a swipe only means anything once the player is
+        // fully open, where the cover is a large target rather than a thumbnail in the collapsed bar.
+        if (slideFraction < 1F) return null
+        val location = IntArray(2)
+        val panelLocation = IntArray(2)
+        coverSimpleImageView.getLocationOnScreen(location)
+        floatingPanelLayout.getLocationOnScreen(panelLocation)
+        val left = (location[0] - panelLocation[0]).toFloat()
+        val top = (location[1] - panelLocation[1]).toFloat()
+        return RectF(
+            left, top,
+            left + coverSimpleImageView.width, top + coverSimpleImageView.height
+        )
+    }
+
+    /**
+     * The cover follows the finger at half distance rather than one-to-one: it is anchored in the
+     * layout and cannot actually leave, and a cover that tracks the finger exactly reads as
+     * something that should come away in your hand.
+     */
+    override fun onCoverSwipeMove(dx: Float) {
+        // Captured on the first move rather than read from coverBaseTranslationX: the resting
+        // position also carries the offset the paused-state shrink applies, and starting from the
+        // base would make the cover jump the moment a swipe began while paused.
+        val resting = coverSwipeRestingTranslationX
+            ?: coverSimpleImageView.translationX.also { coverSwipeRestingTranslationX = it }
+        coverSimpleImageView.translationX = resting + dx * COVER_SWIPE_FOLLOW
+    }
+
+    override fun onCoverSwipeEnd(dx: Float) {
+        val resting = coverSwipeRestingTranslationX ?: coverSimpleImageView.translationX
+        coverSwipeRestingTranslationX = null
+        if (abs(dx) > coverSimpleImageView.width * COVER_SWIPE_THRESHOLD) {
+            // Dragging the current cover away to the left brings on the next track, matching how
+            // every carousel on the platform reads.
+            if (dx < 0) instance?.seekToNext() else instance?.seekToPrevious()
+        }
+        coverSimpleImageView.animate()
+            .translationX(resting)
+            .setDuration(COVER_SWIPE_SETTLE_MS)
+            .setInterpolator(DecelerateInterpolator())
+            .start()
+    }
+
+    /**
+     * Shows what is actually connected in place of the fixed AirPlay glyph, with its name beneath.
+     * On the phone's own speaker there is nothing worth naming, so the AirPlay button stays as it
+     * was - a way into the system output picker.
+     */
+    private fun refreshOutputDevice() {
+        val device = AudioOutput.current(context)
+        if (!device.isExternal || device.name == null) {
+            outputDeviceIcon.visibility = GONE
+            outputDeviceName.visibility = GONE
+            airplayOverlayButton.visibility = VISIBLE
+            return
+        }
+        outputDeviceIcon.setImageResource(device.icon)
+        outputDeviceIcon.visibility = VISIBLE
+        outputDeviceName.text = device.name
+        outputDeviceName.visibility = VISIBLE
+        // Hidden rather than removed: the device icon is constrained to this button's bounds, so it
+        // still has to occupy its place in the row.
+        airplayOverlayButton.visibility = INVISIBLE
     }
 
     override fun onMediaItemTransition(
@@ -1158,11 +1281,19 @@ class FullPlayer @JvmOverloads constructor(
             runCatching { context.unregisterReceiver(volumeChangeReceiver) }
             isVolumeReceiverRegistered = false
         }
+        audioDeviceCallback?.let {
+            runCatching { AudioOutput.unregister(context, it) }
+            audioDeviceCallback = null
+        }
         super.onDetachedFromWindow()
     }
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
+        if (audioDeviceCallback == null) {
+            audioDeviceCallback = AudioOutput.register(context) { refreshOutputDevice() }
+        }
+        refreshOutputDevice()
         if (!isVolumeReceiverRegistered) {
             val filter = IntentFilter().apply {
                 addAction("android.media.VOLUME_CHANGED_ACTION")
@@ -1227,5 +1358,10 @@ class FullPlayer @JvmOverloads constructor(
         const val TAG = "FullPlayer"
         private const val POSITION_UPDATE_INTERVAL_MS = 500L
         private const val PAUSED_COVER_SCALE = 0.84F
+
+        /** How far the cover follows the finger, and how far it has to go to count as a swipe. */
+        private const val COVER_SWIPE_FOLLOW = 0.5F
+        private const val COVER_SWIPE_THRESHOLD = 0.25F
+        private const val COVER_SWIPE_SETTLE_MS = 220L
     }
 }
