@@ -221,6 +221,7 @@
     <string name="requests_reading_link">Reading playlist…</string>
     <string name="requests_no_results">Nothing found</string>
     <string name="requests_failed">That did not work</string>
+    <string name="requests_needs_defaults">Pick a music folder and profiles in Settings → Lidarr first</string>
     <string name="requests_no_lidarr">Set up Lidarr in Settings first</string>
     <string name="requests_unknown_link">Only Spotify and Deezer playlist links can be read</string>
     <string name="requests_already_added">Already in Lidarr</string>

@@ -80,7 +80,11 @@ class RequestsFragment : Fragment() {
     private fun submit(input: String) {
         val text = input.trim()
         if (text.isEmpty()) return
-        if (!LidarrCredentialStore(requireContext()).isConfigured()) {
+        // Searching only needs somewhere to ask. isConfigured() additionally demands a root folder
+        // and the two profiles, which are only needed to actually add something - gating search on
+        // them meant a fully reachable Lidarr still answered "set up Lidarr first".
+        val store = LidarrCredentialStore(requireContext())
+        if (store.serverUrl.isNullOrBlank() || store.apiKey.isNullOrBlank()) {
             showStatus(getString(R.string.requests_no_lidarr))
             return
         }
@@ -195,6 +199,12 @@ class RequestsFragment : Fragment() {
     }
 
     private fun addAlbum(album: LidarrClient.AlbumResult) {
+        // Adding does need the defaults - Lidarr will not accept an album without a root folder and
+        // both profiles - so this is where the fuller check belongs.
+        if (!LidarrCredentialStore(requireContext()).isConfigured()) {
+            showStatus(getString(R.string.requests_needs_defaults))
+            return
+        }
         showStatus(getString(R.string.requests_adding, album.title))
         viewLifecycleOwner.lifecycleScope.launch {
             val added = withContext(Dispatchers.IO) {
