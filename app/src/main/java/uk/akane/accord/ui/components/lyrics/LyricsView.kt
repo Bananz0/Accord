@@ -18,7 +18,7 @@ class LyricsView @JvmOverloads constructor(
      * 160dp put the top line most of a thumb below the toolbar with nothing in the gap.
      * Enough to breathe, not enough to look like the text failed to load.
      */
-    val contentPaddingTop = 56.dp.px.roundToInt()
+    val contentPaddingTop = 28.dp.px.roundToInt()
 
     /** Set by whoever owns the player, so tapping a line can jump to it. */
     var onSeek: ((Long) -> Unit)? = null

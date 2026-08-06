@@ -964,6 +964,7 @@ class FullPlayer @JvmOverloads constructor(
                 }
 
                 ContentType.NORMAL -> {
+                    setTrackControlsVisible(true)
                     AnimationUtils.createValAnimator(
                         transformationFraction, 0F,
                         duration = MID_DURATION,
@@ -976,6 +977,12 @@ class FullPlayer @JvmOverloads constructor(
 
                 ContentType.PLAYLIST -> {
                     captionOverlayButton.isChecked = false
+                    // The queue and the lyrics are two views of the same space. Upstream
+                    // never made them exclusive, so opening the queue left the lyrics
+                    // rendering behind it, and the star and overflow - which act on the one
+                    // playing track - stayed over a list of many.
+                    hideLyrics()
+                    setTrackControlsVisible(false)
                     queueContainer.visibility = VISIBLE
                     queueContainer.translationY = queueEnterOffset
                     setQueueChildrenAlpha(0F)
@@ -993,6 +1000,21 @@ class FullPlayer @JvmOverloads constructor(
             field = value
             updateTransitionTargetForContentType(value)
         }
+
+    /** Puts the lyrics away without disturbing whether they had been opened. */
+    private fun hideLyrics() {
+        fadingEdgeLayout.visibility = GONE
+        coverSimpleImageView.visibility = VISIBLE
+        titleTextView.visibility = VISIBLE
+        subtitleTextView.visibility = VISIBLE
+    }
+
+    /** The star and the overflow belong to the playing track, so they follow it out of view. */
+    private fun setTrackControlsVisible(visible: Boolean) {
+        val visibility = if (visible) VISIBLE else INVISIBLE
+        starTransformButton.visibility = visibility
+        ellipsisButton.visibility = visibility
+    }
 
     private var lastDisposable: Disposable? = null
 
