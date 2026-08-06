@@ -143,11 +143,27 @@
         android:orientation="vertical"
         android:background="@color/surfaceColor">
 
-        <include layout="@layout/layout_song_item" />
+        <!--
+            Upstream leaves three hardcoded song rows here as a mock. Replaced with the list the
+            query actually fills.
+        -->
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/search_results"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clipToPadding="false" />
 
-        <include layout="@layout/layout_song_item" />
-
-        <include layout="@layout/layout_song_item" />
+        <TextView
+            android:id="@+id/search_empty"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="48dp"
+            android:fontFamily="@font/inter_regular"
+            android:gravity="center"
+            android:text="@string/search_no_results"
+            android:textColor="@color/onSurfaceColorInactive"
+            android:textSize="16sp"
+            android:visibility="gone" />
 
     </LinearLayout>
 

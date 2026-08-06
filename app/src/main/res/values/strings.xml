@@ -214,6 +214,7 @@
     <string name="settings_section_audio">Audio</string>
     <string name="settings_section_about">About</string>
     <string name="settings_jellyfin_summary">Server and account</string>
+    <string name="search_no_results">No results in your library</string>
     <string name="no_lyrics">No lyrics for this track</string>
 
     <string name="music_quality_lossless">Lossless</string>
