@@ -180,6 +180,7 @@
     <string name="daily_shuffle">每日电台</string>
     <string name="genre_shuffle">主题狂欢</string>
     <string name="recommendations">专属推荐</string>
+    <string name="home_recommendations_title">专属精选推荐</string>
     <string name="new_songs">每日新曲</string>
     <string name="recently_played">最近播放</string>
     <string name="main_developers">主要开发者</string>
