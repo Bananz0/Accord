@@ -27,6 +27,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.akanework.gramophone.logic.data.db.AppDatabase
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinClientHolder
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinPlugins
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinItemResolver
 import org.akanework.gramophone.ui.JellyfinLoginActivity
 import org.akanework.gramophone.ui.LibraryViewModel
@@ -188,6 +189,7 @@ class HomepageFragment : BaseFragment(null) {
                     publishSessionFlag(requireContext().applicationContext)
                 }
                 JellyfinClientHolder.invalidate()
+                JellyfinPlugins.invalidate()
                 // The cached library belongs to the account being signed out of; leaving it would
                 // show another user's collection after the next sign in.
                 AppDatabase.getInstance(requireContext()).cachedSongDao().deleteAll()

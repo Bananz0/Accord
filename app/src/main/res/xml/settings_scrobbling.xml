@@ -6,6 +6,21 @@
         android:layout="@layout/preference_category_md"
         android:title="@string/lastfm_category_account">
 
+        <!--
+            Shown only when the Jellyfin server is found to be scrobbling already. Hidden by default
+            so a server that cannot be asked - offline, or one that keeps its plugin list to
+            administrators - says nothing rather than guessing.
+        -->
+        <Preference
+            android:key="lastfm_server_scrobbles"
+            android:layout="@layout/preference_basic"
+            android:persistent="false"
+            android:selectable="false"
+            android:summary="@string/lastfm_server_scrobbles_summary"
+            android:title="@string/lastfm_server_scrobbles"
+            app:isPreferenceVisible="false"
+            app:iconSpaceReserved="false" />
+
         <Preference
             android:key="lastfm_account"
             android:layout="@layout/preference_basic"

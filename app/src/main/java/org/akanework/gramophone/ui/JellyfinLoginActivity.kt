@@ -35,6 +35,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import uk.akane.accord.R
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinClientHolder
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinPlugins
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.exception.ApiClientException
 import org.jellyfin.sdk.api.client.exception.InvalidStatusException
@@ -397,6 +398,7 @@ class JellyfinLoginActivity : AppCompatActivity() {
                 serverName = result.serverId,
             )
             JellyfinClientHolder.invalidate()
+            JellyfinPlugins.invalidate()
             LoginResult.Success
         }
     } catch (e: TimeoutException) {

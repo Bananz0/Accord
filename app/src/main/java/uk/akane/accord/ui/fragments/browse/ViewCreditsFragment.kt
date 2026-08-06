@@ -138,7 +138,13 @@ class ViewCreditsFragment : SwitcherPostponeFragment() {
                         visibility = View.GONE
                     } else {
                         visibility = View.VISIBLE
-                        load(credit.imageUrl) { crossfade(true) }
+                        // The server names an image for every person it knows, whether or not it
+                        // actually has one, so a URL is not evidence a picture exists. Without this
+                        // the row keeps an empty circle and the name sits indented behind nothing.
+                        load(credit.imageUrl) {
+                            crossfade(true)
+                            listener(onError = { _, _ -> visibility = View.GONE })
+                        }
                     }
                 }
                 // The last row in a card has nothing below it to separate from, and a divider there

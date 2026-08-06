@@ -13,6 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import uk.akane.accord.R
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinPlugins
 import org.akanework.gramophone.logic.data.lastfm.LastFmClient
 import org.akanework.gramophone.logic.data.lastfm.LastFmCredentialStore
 import org.akanework.gramophone.logic.data.lastfm.LastFmScrobbler
@@ -64,9 +65,13 @@ class ScrobblingSettingsTopFragment : BasePreferenceFragment() {
                     isLinked = store.isLinked(),
                     hasKeys = store.hasApplicationCredentials(),
                     pending = LastFmScrobbler(requireContext()).pendingCount(),
+                    // Only true when the server was actually asked and said yes; null - offline, or
+                    // a server that will not list its plugins - leaves the notice hidden.
+                    serverScrobbles = JellyfinPlugins.isLastFmScrobblingActive() == true,
                 )
             }
             if (!isAdded) return@launch
+            findPreference<Preference>("lastfm_server_scrobbles")?.isVisible = state.serverScrobbles
             findPreference<Preference>("lastfm_account")?.summary = when {
                 !state.hasKeys -> getString(R.string.lastfm_account_needs_keys)
                 state.isLinked -> getString(R.string.lastfm_account_linked, state.username ?: "")
@@ -84,15 +89,37 @@ class ScrobblingSettingsTopFragment : BasePreferenceFragment() {
             val store = withContext(Dispatchers.IO) { LastFmCredentialStore(requireContext()) }
             val linked = withContext(Dispatchers.IO) { store.isLinked() }
             val hasKeys = withContext(Dispatchers.IO) { store.hasApplicationCredentials() }
+            // Asking the server is a network call, so it cannot happen in the branch below.
+            val serverScrobbles = withContext(Dispatchers.IO) {
+                JellyfinPlugins.isLastFmScrobblingActive() == true
+            }
             if (!isAdded) return@launch
             when {
                 // Signing in is impossible without credentials, so send the user straight to where
                 // they can add them instead of failing at the approval step.
                 !hasKeys -> showApiKeyDialog()
                 linked -> showDisconnectDialog()
+                // The notice at the top of the screen says this too, but the moment someone taps
+                // connect is the moment it matters, and duplicate scrobbles are tedious to undo.
+                serverScrobbles -> showDoubleScrobbleWarning(store)
                 else -> startWebAuth(store)
             }
         }
+    }
+
+    /**
+     * Warns that the server is already scrobbling, and lets the user go ahead anyway.
+     *
+     * Not a refusal: someone may deliberately want the app's own scrobbles - richer metadata, or
+     * because they are about to turn the server plugin off - and this cannot tell the difference.
+     */
+    private fun showDoubleScrobbleWarning(store: LastFmCredentialStore) {
+        MaterialAlertDialogBuilder(requireContext())
+            .setTitle(R.string.lastfm_server_scrobbles)
+            .setMessage(R.string.lastfm_server_scrobbles_summary)
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(R.string.lastfm_connect_anyway) { _, _ -> startWebAuth(store) }
+            .show()
     }
 
     /**
@@ -279,5 +306,7 @@ class ScrobblingSettingsTopFragment : BasePreferenceFragment() {
         val isLinked: Boolean,
         val hasKeys: Boolean,
         val pending: Int,
+        /** Whether the Jellyfin server is known to be scrobbling on its own. */
+        val serverScrobbles: Boolean,
     )
 }

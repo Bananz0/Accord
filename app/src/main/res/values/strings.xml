@@ -348,6 +348,9 @@
     <string name="lastfm_account_linked">Connected as %1$s</string>
     <string name="lastfm_account_not_linked">Not connected</string>
     <string name="lastfm_account_needs_keys">Add an API key first</string>
+    <string name="lastfm_server_scrobbles">Your server already scrobbles</string>
+    <string name="lastfm_connect_anyway">Connect anyway</string>
+    <string name="lastfm_server_scrobbles_summary">Jellyfin\'s Last.fm plugin is running, and this app tells the server what it plays — so your listening is already reaching Last.fm. Connecting here as well would scrobble every track twice.</string>
     <string name="lastfm_api_keys">API key</string>
     <string name="lastfm_api_keys_summary">The application credentials Accord uses to talk to Last.fm</string>
     <string name="lastfm_api_keys_explainer">Accord does not ship with a Last.fm API key. Create one for free at last.fm/api/account/create, then paste the key and shared secret here.</string>
