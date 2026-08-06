@@ -69,7 +69,7 @@ class SearchFragment : BaseFragment(null) {
         savedInstanceState: Bundle?,
     ): View? {
         // Inflate the layout for this fragment
-        val rootView = inflater.inflate(R.layout.fragment_search, container, false)
+        val rootView = inflater.inflate(R.layout.legacy_fragment_search, container, false)
         val appBarLayout = rootView.findViewById<AppBarLayout>(R.id.appbarlayout)
         val topAppBar = rootView.findViewById<MaterialToolbar>(R.id.topAppBar)
 

@@ -65,7 +65,7 @@ class LibraryFragment : BaseFragment(null), Observer<List<PlaylistWithMediaItem>
         container: ViewGroup?,
         savedInstanceState: Bundle?
     ): View? {
-        val rootView = layoutInflater.inflate(R.layout.fragment_library, container, false)
+        val rootView = layoutInflater.inflate(R.layout.legacy_fragment_library, container, false)
         val topAppBar = rootView.findViewById<MaterialToolbar>(R.id.topAppBar)
         val recyclerView = rootView.findViewById<RecyclerView>(R.id.recyclerview)
 

@@ -55,7 +55,7 @@ class BrowseFragment : BaseFragment(null) {
         container: ViewGroup?,
         savedInstanceState: Bundle?,
     ): View? {
-        val rootView = inflater.inflate(R.layout.fragment_browse, container, false)
+        val rootView = inflater.inflate(R.layout.legacy_fragment_browse, container, false)
         val tabLayout = rootView.findViewById<TabLayout>(R.id.tab_layout)
         val topAppBar = rootView.findViewById<MaterialToolbar>(R.id.topAppBar)
         val viewPager2 = rootView.findViewById<ViewPager2>(R.id.fragment_viewpager)
