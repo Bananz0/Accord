@@ -205,6 +205,8 @@
         Now-playing quality badge. These names match the ones the 1.0-stable build carries, which
         defines them but never shows them - the badge itself is new here.
     -->
+    <string name="no_lyrics">No lyrics for this track</string>
+
     <string name="music_quality_lossless">Lossless</string>
     <string name="music_quality_hires_lossless">Hi-Res Lossless</string>
     <string name="music_quality_dolby_atmos">Dolby Atmos</string>

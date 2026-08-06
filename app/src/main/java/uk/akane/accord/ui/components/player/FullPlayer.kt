@@ -866,7 +866,15 @@ class FullPlayer @JvmOverloads constructor(
                 .filter { !it.content.isNullOrBlank() }
                 .map { LyricsLine(it.startTimestamp ?: 0L, null, it.content, it.translationContent) }
             withContext(Dispatchers.Main) {
-                lyricsViewModel?.setLyrics(Lyrics(mapped))
+                // An empty list renders as a black screen with nothing in it, which reads as a bug
+                // rather than as "this track has no lyrics". Say so instead.
+                lyricsViewModel?.setLyrics(
+                    if (mapped.isEmpty()) {
+                        Lyrics(listOf(LyricsLine(0L, null, context.getString(R.string.no_lyrics), null)))
+                    } else {
+                        Lyrics(mapped)
+                    }
+                )
             }
         }
     }
