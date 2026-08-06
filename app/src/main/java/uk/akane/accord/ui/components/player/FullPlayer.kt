@@ -1514,6 +1514,12 @@ class FullPlayer @JvmOverloads constructor(
 
     override fun onDetachedFromWindow() {
         stopPositionUpdates()
+        removeCallbacks(coverSlideBackstop)
+        coverSlideAnimator?.cancel()
+        coverSlideAnimator = null
+        lyricsViewModel?.release()
+        lyricsViewModel = null
+        lyricsViewAttached = false
         if (isVolumeReceiverRegistered) {
             runCatching { context.unregisterReceiver(volumeChangeReceiver) }
             isVolumeReceiverRegistered = false

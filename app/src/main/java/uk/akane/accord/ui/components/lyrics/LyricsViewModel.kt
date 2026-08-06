@@ -181,8 +181,17 @@ class LyricsViewModel(
         if (apply == null) pendingLyrics = newLyrics else apply(newLyrics)
     }
 
+    /**
+     * Stops following the player and drops every reference to the views.
+     *
+     * The position poll is an endless loop of delays on the main handler, each one holding the
+     * lyrics view - and through it the activity - until it runs. This existed already and nothing
+     * ever called it, so leaving the screen left the whole thing pinned in memory.
+     */
     fun release() {
         scope.cancel()
+        applyPending = null
+        pendingLyrics = null
     }
 
     private fun getCurrentLyricsLineIndex(position: Long): Int {

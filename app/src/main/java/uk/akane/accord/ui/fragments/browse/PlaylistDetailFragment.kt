@@ -40,6 +40,7 @@ import uk.akane.libphonograph.manipulator.ItemManipulator
 import uk.akane.libphonograph.manipulator.PlaylistSerializer
 import java.io.File
 import kotlin.random.Random
+import uk.akane.accord.ui.components.CollectionPopupMenu
 
 class PlaylistDetailFragment : SwitcherPostponeFragment() {
 
@@ -91,6 +92,15 @@ class PlaylistDetailFragment : SwitcherPostponeFragment() {
             activity.fragmentSwitcherView.popBackTopFragmentIfExists()
         }
         navigationBar.attach(contentRecycler, applyTopPadding = false)
+        // The three dots on this screen did nothing whatsoever.
+        navigationBar.setMenuEntries(
+            entries = {
+                CollectionPopupMenu.build(resources, withArtist = false, withAlbum = true)
+            },
+            onClick = { entry ->
+                CollectionPopupMenu.handle(activity, entry, playlistSongs.toList(), headerTitle)
+            },
+        )
 
         concatAdapter = ConcatAdapter(headerAdapter, playlistSongsAdapter, footerAdapter)
         contentRecycler.layoutManager = LinearLayoutManager(requireContext())

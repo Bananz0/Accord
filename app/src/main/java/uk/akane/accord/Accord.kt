@@ -38,6 +38,11 @@ import uk.akane.libphonograph.reader.FlowReader
 import uk.akane.libphonograph.utils.MiscUtils
 import java.io.File
 import java.io.IOException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 /**
  * Upstream Accord's application class.
@@ -54,6 +59,22 @@ open class Accord : Application(), SingletonImageLoader.Factory {
      * directly; this app serves the Jellyfin library alongside the local one, so the screens get
      * the [LibraryReader] interface instead and the composition is decided in [onCreate].
      */
+    /**
+     * Where a library sync runs.
+     *
+     * Owned by the application, not by whichever screen asked. A full Jellyfin sync is minutes
+     * of sequential network work, and on an activity-bound scope the activity is kept alive for
+     * all of it - leaving the app mid-sync leaked the whole screen and every bitmap on it.
+     */
+    private val libraryScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var libraryRefresh: Job? = null
+
+    /** Starts a sync, or returns the one already running rather than starting a second. */
+    fun refreshLibrary(): Job {
+        libraryRefresh?.takeIf { it.isActive }?.let { return it }
+        return libraryScope.launch { reader.refresh() }.also { libraryRefresh = it }
+    }
+
     lateinit var reader: LibraryReader
         private set
 

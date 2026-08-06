@@ -26,6 +26,7 @@ import uk.akane.accord.ui.MainActivity
 import uk.akane.accord.ui.components.NavigationBar
 import uk.akane.cupertino.navigation.SwitcherPostponeFragment
 import kotlin.random.Random
+import uk.akane.accord.ui.components.CollectionPopupMenu
 
 class AlbumDetailFragment : SwitcherPostponeFragment() {
 
@@ -86,6 +87,14 @@ class AlbumDetailFragment : SwitcherPostponeFragment() {
         titleView.text = albumTitle
         artistView.text = albumArtist
         navigationBar.setTitle(albumTitle)
+        // Without this the three dots showed the general screen menu - refresh the library,
+        // open settings - on a screen that is plainly about one album.
+        navigationBar.setMenuEntries(
+            entries = { CollectionPopupMenu.build(resources, withArtist = true) },
+            onClick = { entry ->
+                CollectionPopupMenu.handle(activity, entry, currentTracks, albumTitle)
+            },
+        )
 
         recyclerView.layoutManager = LinearLayoutManager(requireContext())
         recyclerView.adapter = trackAdapter

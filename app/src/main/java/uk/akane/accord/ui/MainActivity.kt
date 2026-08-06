@@ -429,6 +429,29 @@ class MainActivity : AppCompatActivity() {
         fragmentSwitcherView.addFragmentToCurrentStack(SettingsFragment())
     }
 
+    /** Gets the now-playing panel out of the way before a screen is pushed behind it. */
+    fun collapseNowPlaying() {
+        if (::floatingPanelLayout.isInitialized) floatingPanelLayout.collapse()
+    }
+
+    /**
+     * Opens every track in the library whose [key] matches [wanted] - the artist behind
+     * "Go to Artist", the album behind "Go to Album".
+     */
+    fun openMatchingTracks(wanted: String, key: (androidx.media3.common.MediaItem) -> String?) {
+        lifecycleScope.launch {
+            val tracks = reader.songListFlow.first().filter { key(it) == wanted }
+            if (tracks.isEmpty()) return@launch
+            fragmentSwitcherView.addFragmentToCurrentStack(
+                uk.akane.accord.ui.fragments.browse.StationDetailFragment.newInstance(
+                    title = wanted,
+                    subtitle = null,
+                    mediaIds = tracks.map { it.mediaId },
+                )
+            )
+        }
+    }
+
     /** Plays the whole library in a random order, from the screen-level overflow menu. */
     fun shuffleWholeLibrary() {
         lifecycleScope.launch {
@@ -442,12 +465,16 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Asks for a library sync. The work belongs to the application; only the callback is ours,
+     * and it is on this activity's scope so it dies with the screen instead of resurrecting it.
+     */
     fun updateLibrary(then: (() -> Unit)? = null) {
-        CoroutineScope(Dispatchers.Default).launch {
-            reader.refresh()
-            withContext(Dispatchers.Main) {
-                then?.let { it() }
-            }
+        val job = accord.refreshLibrary()
+        if (then == null) return
+        lifecycleScope.launch {
+            job.join()
+            then()
         }
     }
 

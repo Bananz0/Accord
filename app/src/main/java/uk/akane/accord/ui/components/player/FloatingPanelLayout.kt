@@ -405,6 +405,7 @@ class FloatingPanelLayout @JvmOverloads constructor(
      * navigated somewhere else and hung over whatever screen came next.
      */
     fun dismissPopupMenu() {
+        popupEntryClickListener = null
         if (popupHelper.transformFraction == 0F) return
         popupHelper.callUpPopup(
             true,
@@ -444,11 +445,13 @@ class FloatingPanelLayout @JvmOverloads constructor(
 
                 MotionEvent.ACTION_UP -> {
                     val entry = popupHelper.findEntryAt(event.x, event.y)
+                    // Read before dismissing, which clears it.
+                    val listener = popupEntryClickListener
                     if (popupHelper.clearPressedEntry()) invalidate()
                     dismissPopupMenu()
                     // After the dismissal, so the menu is on its way out as the action runs rather
                     // than still covering whatever the action opens.
-                    entry?.let { popupEntryClickListener?.invoke(it) }
+                    entry?.let { listener?.invoke(it) }
                 }
 
                 MotionEvent.ACTION_CANCEL ->
