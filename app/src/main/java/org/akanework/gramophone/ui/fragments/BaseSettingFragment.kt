@@ -25,7 +25,15 @@ abstract class BaseSettingFragment(
         rootView.findViewById<AppBarLayout>(R.id.appbarlayout).enableEdgeToEdgePaddingListener()
         topAppBar.title = getString(str)
         topAppBar.setNavigationOnClickListener {
-            requireActivity().supportFragmentManager.popBackStack()
+            // These screens are now reached from the Accord shell, whose back stack is the
+            // fragment switcher's rather than the activity's. Fall back to the old behaviour for
+            // whatever still hosts them the previous way.
+            val activity = requireActivity()
+            if (activity is uk.akane.accord.ui.MainActivity) {
+                activity.fragmentSwitcherView.popBackTopFragmentIfExists()
+            } else {
+                activity.supportFragmentManager.popBackStack()
+            }
         }
 
         childFragmentManager

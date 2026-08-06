@@ -59,6 +59,13 @@ class HomeFragment: Fragment() {
             insets
         }
 
+        // The header's overflow button is the way into settings; nothing else in the Accord shell
+        // opens them.
+        navigationBar.setOnMenuClickListener {
+            (activity as? MainActivity)?.fragmentSwitcherView
+                ?.addFragmentToCurrentStack(SettingsFragment())
+        }
+
         sectionAdapter = HomeSectionAdapter(
             player = { (activity as? MainActivity)?.getPlayer() },
             onCardClick = { section, card -> openStation(section, card) }
