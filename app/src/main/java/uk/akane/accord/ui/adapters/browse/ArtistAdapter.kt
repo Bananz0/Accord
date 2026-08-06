@@ -36,12 +36,16 @@ class ArtistAdapter(
     private val mainActivity
         get() = fragment.activity as MainActivity
 
+    /** Kept so the search box can re-filter without waiting for the library to emit again. */
+    private var latestSongList: List<MediaItem> = emptyList()
+
     init {
         fragment.viewLifecycleOwner.lifecycleScope.launch {
             fragment.viewLifecycleOwner.repeatOnLifecycle(
                 androidx.lifecycle.Lifecycle.State.STARTED
             ) {
                 mainActivity.reader.songListFlow.collectLatest { songs ->
+                    latestSongList = songs
                     submitFromSongs(songs)
                 }
             }
@@ -81,6 +85,29 @@ class ArtistAdapter(
 
     /** See [SongAdapter.submitMutex] - same race, same reason. */
     private val submitMutex = Mutex()
+
+
+    /**
+     * Narrows the list to what the screen's search box says.
+     *
+     * The box is in the layout on every browse screen and was only ever read on two of them, so
+     * typing on the others did nothing at all.
+     */
+    fun setFilter(query: String) {
+        val next = query.trim()
+        if (next == filter) return
+        filter = next
+        submitFromSongs(latestSongList)
+    }
+
+    private fun String?.matchesFilter(): Boolean {
+        if (filter.isEmpty()) return true
+        return this?.normaliseForFilter()?.contains(filter.normaliseForFilter()) == true
+    }
+
+    private fun String.normaliseForFilter(): String = trim().lowercase()
+
+    private var filter = ""
 
     private fun submitFromSongs(songs: List<MediaItem>) {
         CoroutineScope(Dispatchers.Default).launch { submitMutex.withLock {

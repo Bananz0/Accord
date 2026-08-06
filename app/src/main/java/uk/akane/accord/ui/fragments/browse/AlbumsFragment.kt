@@ -13,6 +13,8 @@ import uk.akane.accord.ui.MainActivity
 import uk.akane.accord.ui.adapters.browse.AlbumAdapter
 import uk.akane.accord.ui.components.NavigationBar
 import uk.akane.cupertino.navigation.SwitcherPostponeFragment
+import android.widget.EditText
+import androidx.core.widget.doAfterTextChanged
 
 class AlbumsFragment : SwitcherPostponeFragment() {
 
@@ -95,6 +97,10 @@ class AlbumsFragment : SwitcherPostponeFragment() {
             }
         })
 
+        // The layout has always carried a search box that nothing read.
+        rootView.findViewById<EditText?>(R.id.search_input)?.doAfterTextChanged {
+            albumAdapter.setFilter(it?.toString().orEmpty())
+        }
         navigationBar.attach(recyclerView)
         navigationBar.setOnReturnClickListener {
             activity.fragmentSwitcherView.popBackTopFragmentIfExists()

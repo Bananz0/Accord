@@ -75,7 +75,10 @@ object TrackSwipeActions {
                 viewHolder: RecyclerView.ViewHolder
             ): Int {
                 // Headers and footers share the list; swiping one would act on a track it is not.
-                return if (trackAt(viewHolder.bindingAdapterPosition) == null) 0
+                // Absolute, not binding: inside a ConcatAdapter the binding position restarts at
+                // zero for each child adapter, so every song looked like row zero and the header
+                // offset took it negative - nothing was ever swipeable.
+                return if (trackAt(viewHolder.absoluteAdapterPosition) == null) 0
                 else super.getSwipeDirs(recyclerView, viewHolder)
             }
 
@@ -86,7 +89,7 @@ object TrackSwipeActions {
             ) = false
 
             override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
-                val position = viewHolder.bindingAdapterPosition
+                val position = viewHolder.absoluteAdapterPosition
                 armed.remove(viewHolder.hashCode())
                 viewHolder.itemView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
                 val item = trackAt(position)

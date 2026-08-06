@@ -14,6 +14,8 @@ import uk.akane.accord.ui.MainActivity
 import uk.akane.accord.ui.adapters.browse.ArtistAdapter
 import uk.akane.accord.ui.components.NavigationBar
 import uk.akane.cupertino.navigation.SwitcherPostponeFragment
+import android.widget.EditText
+import androidx.core.widget.doAfterTextChanged
 
 class ArtistsFragment : SwitcherPostponeFragment() {
 
@@ -77,6 +79,10 @@ class ArtistsFragment : SwitcherPostponeFragment() {
                 (dp * recyclerView.resources.displayMetrics.density).toInt()
         })
 
+        // The layout has always carried a search box that nothing read.
+        rootView.findViewById<EditText?>(R.id.search_input)?.doAfterTextChanged {
+            artistAdapter.setFilter(it?.toString().orEmpty())
+        }
         navigationBar.attach(recyclerView)
         navigationBar.setOnReturnClickListener {
             activity.fragmentSwitcherView.popBackTopFragmentIfExists()

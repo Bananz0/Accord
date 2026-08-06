@@ -121,6 +121,29 @@ class AlbumAdapter(
         val subtitle: TextView? = view.findViewById(R.id.subtitle)
     }
 
+
+    /**
+     * Narrows the list to what the screen's search box says.
+     *
+     * The box is in the layout on every browse screen and was only ever read on two of them, so
+     * typing on the others did nothing at all.
+     */
+    fun setFilter(query: String) {
+        val next = query.trim()
+        if (next == filter) return
+        filter = next
+        submitFromSongs(latestSongList)
+    }
+
+    private fun String?.matchesFilter(): Boolean {
+        if (filter.isEmpty()) return true
+        return this?.normaliseForFilter()?.contains(filter.normaliseForFilter()) == true
+    }
+
+    private fun String.normaliseForFilter(): String = trim().lowercase()
+
+    private var filter = ""
+
     /** See [SongAdapter.submitMutex] - same race, same reason. */
     private val submitMutex = Mutex()
 
@@ -142,6 +165,10 @@ class AlbumAdapter(
             }
 
             val albums = albumMap.entries
+                .filter { (key, _) ->
+                    val parts = key.split("\u0000")
+                    parts.getOrNull(0).matchesFilter() || parts.getOrNull(1).matchesFilter()
+                }
                 .map { (key, tracks) ->
                     val parts = key.split("\u0000")
                     val title = parts.getOrNull(0).orEmpty()
