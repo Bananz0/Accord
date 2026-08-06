@@ -26,7 +26,7 @@ import uk.akane.accord.R
 import uk.akane.accord.logic.dp
 import uk.akane.accord.ui.MainActivity
 import uk.akane.accord.ui.components.NavigationBar
-import uk.akane.cupertino.widget.navigation.SwitcherPostponeFragment
+import uk.akane.cupertino.navigation.SwitcherPostponeFragment
 import uk.akane.libphonograph.items.addDate
 import java.text.SimpleDateFormat
 import java.util.Date

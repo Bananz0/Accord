@@ -17,6 +17,7 @@
 
 package org.akanework.gramophone.ui.fragments
 
+
 import android.annotation.SuppressLint
 import android.os.Bundle
 import android.view.LayoutInflater
@@ -30,7 +31,7 @@ import com.google.android.material.appbar.AppBarLayout
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.tabs.TabLayout
 import com.google.android.material.tabs.TabLayoutMediator
-import org.akanework.gramophone.R
+import uk.akane.accord.R
 import org.akanework.gramophone.logic.applyGeneralMenuItem
 import org.akanework.gramophone.logic.enableEdgeToEdgePaddingListener
 import org.akanework.gramophone.ui.LibraryViewModel

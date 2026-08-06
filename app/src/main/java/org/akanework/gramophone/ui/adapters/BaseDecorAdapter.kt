@@ -17,6 +17,7 @@
 
 package org.akanework.gramophone.ui.adapters
 
+
 import android.content.Context
 import android.view.MenuItem
 import android.view.View
@@ -29,7 +30,7 @@ import androidx.media3.common.Player.REPEAT_MODE_OFF
 import androidx.preference.PreferenceManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.button.MaterialButton
-import org.akanework.gramophone.R
+import uk.akane.accord.R
 import org.akanework.gramophone.logic.ui.CustomSmoothScroller
 import org.akanework.gramophone.logic.ui.ItemHeightHelper
 import org.akanework.gramophone.logic.ui.MyRecyclerView

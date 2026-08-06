@@ -12,7 +12,7 @@ import uk.akane.accord.R
 import uk.akane.accord.ui.MainActivity
 import uk.akane.accord.ui.adapters.browse.AlbumAdapter
 import uk.akane.accord.ui.components.NavigationBar
-import uk.akane.cupertino.widget.navigation.SwitcherPostponeFragment
+import uk.akane.cupertino.navigation.SwitcherPostponeFragment
 
 class AlbumsFragment : SwitcherPostponeFragment() {
 

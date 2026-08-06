@@ -50,7 +50,7 @@ import uk.akane.accord.BuildConfig
 import uk.akane.accord.R
 import uk.akane.accord.logic.utils.CalculationUtils.lerp
 import uk.akane.accord.logic.utils.UiUtils
-import uk.akane.cupertino.widget.utils.AnimationUtils
+import uk.akane.cupertino.utils.AnimationUtils
 import java.io.File
 import java.util.Locale
 import kotlin.math.absoluteValue

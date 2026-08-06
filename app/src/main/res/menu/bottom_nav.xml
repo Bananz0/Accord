@@ -1,23 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-    Item ids are unchanged from this fork's original menu, so MainActivity's navigation handling
-    keeps working as-is; only the icons are swapped for the upstream Accord set.
--->
 <menu xmlns:android="http://schemas.android.com/apk/res/android">
     <item
         android:id="@+id/home"
         android:icon="@drawable/ic_bottom_nav_home"
-        android:title="@string/home" />
+        android:title="@string/bottom_nav_home" />
     <item
         android:id="@+id/browse"
         android:icon="@drawable/ic_bottom_nav_browse"
-        android:title="@string/browse" />
+        android:title="@string/bottom_nav_browse" />
     <item
         android:id="@+id/library"
         android:icon="@drawable/ic_bottom_nav_library"
-        android:title="@string/library" />
+        android:title="@string/bottom_nav_library" />
     <item
         android:id="@+id/search"
         android:icon="@drawable/ic_bottom_nav_search"
-        android:title="@string/search" />
+        android:title="@string/bottom_nav_search" />
 </menu>

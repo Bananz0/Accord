@@ -1,5 +1,6 @@
 package org.akanework.gramophone.ui.adapters
 
+
 import android.content.Context
 import android.view.LayoutInflater
 import android.view.View
@@ -8,7 +9,7 @@ import android.widget.ImageView
 import android.widget.TextView
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.RecyclerView
-import org.akanework.gramophone.R
+import uk.akane.accord.R
 import org.akanework.gramophone.logic.findBaseWrapperFragment
 import org.akanework.gramophone.ui.fragments.BaseFragment
 import org.akanework.gramophone.ui.fragments.LibraryCategorySubFragment

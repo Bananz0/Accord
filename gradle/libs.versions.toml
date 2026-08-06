@@ -10,10 +10,12 @@ androidx-appcompat = "1.7.0"
 androidx-fragment = "1.8.6"
 androidx-annotation = "1.9.1"
 androidx-lifecycle = "2.9.0-alpha12"
-# Held at the version the app already ships. Upstream Accord builds against 1.9.0, and this has to
-# rise to match when its player is ported - the prebuilt lib-decoder-ffmpeg AAR in libs/ is
-# compiled against 1.6.0 and has to be rebuilt at the same time.
-media3 = "1.6.0-rc01"
+# Raised from 1.6.0-rc01 to what upstream Accord builds against: its player calls APIs that only
+# exist from 1.9.0 (Util.putInt24, ShuffleOrder.cloneAndSet, AudioSink.onRoutingChanged, the newer
+# buildAudioSink signature), so the ported code does not compile below it. Note the prebuilt
+# lib-decoder-ffmpeg AAR in libs/ is still compiled against 1.6.0; nothing references it at compile
+# time - ExoPlayer only finds it reflectively - so it wants rebuilding and runtime testing.
+media3 = "1.9.0"
 kotlinx-coroutines = "1.10.2"
 material = "1.13.0-alpha11"
 hiddenapibypass = "6.1"

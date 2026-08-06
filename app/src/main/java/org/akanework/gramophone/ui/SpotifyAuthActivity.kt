@@ -1,5 +1,6 @@
 package org.akanework.gramophone.ui
 
+
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -7,7 +8,7 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.akanework.gramophone.R
+import uk.akane.accord.R
 import org.akanework.gramophone.logic.data.spotify.SpotifyClient
 import org.akanework.gramophone.logic.data.spotify.SpotifyCredentialStore
 

@@ -17,6 +17,7 @@
 
 package org.akanework.gramophone.ui.components
 
+
 import android.content.ComponentName
 import android.content.Context
 import android.content.res.ColorStateList
@@ -60,8 +61,8 @@ import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
-import org.akanework.gramophone.BuildConfig
-import org.akanework.gramophone.R
+import uk.akane.accord.BuildConfig
+import uk.akane.accord.R
 import org.akanework.gramophone.logic.GramophonePlaybackService
 import org.akanework.gramophone.logic.clone
 import org.akanework.gramophone.logic.dpToPx

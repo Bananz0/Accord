@@ -13,7 +13,7 @@ import uk.akane.accord.logic.isEssentialPermissionGranted
 import uk.akane.accord.logic.setCurrentItemInterpolated
 import uk.akane.accord.setupwizard.adapters.SetupWizardViewPagerAdapter
 import uk.akane.accord.ui.MainActivity
-import uk.akane.cupertino.widget.utils.AnimationUtils
+import uk.akane.cupertino.utils.AnimationUtils
 
 class SetupWizardFragment(val onPermissionSuccessCallback: (() -> Unit)) : Fragment() {
 

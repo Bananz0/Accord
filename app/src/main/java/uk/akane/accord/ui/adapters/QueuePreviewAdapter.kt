@@ -14,7 +14,7 @@ import coil3.load
 import uk.akane.accord.R
 import uk.akane.accord.logic.dp
 import uk.akane.accord.ui.components.QueueBlendView
-import uk.akane.cupertino.widget.utils.AnimationUtils.FASTEST_DURATION
+import uk.akane.cupertino.utils.AnimationUtils.FASTEST_DURATION
 import java.util.Collections
 import kotlinx.coroutines.*
 

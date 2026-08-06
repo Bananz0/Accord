@@ -38,8 +38,8 @@ import uk.akane.accord.ui.fragments.HomeFragment
 import uk.akane.accord.ui.fragments.LibraryFragment
 import uk.akane.accord.ui.fragments.SearchFragment
 import uk.akane.accord.ui.viewmodels.MediaControllerViewModel
-import uk.akane.cupertino.widget.navigation.FragmentSwitcherView
-import uk.akane.cupertino.widget.utils.AnimationUtils
+import uk.akane.cupertino.navigation.FragmentSwitcherView
+import uk.akane.cupertino.utils.AnimationUtils
 
 class MainActivity : AppCompatActivity() {
     companion object {

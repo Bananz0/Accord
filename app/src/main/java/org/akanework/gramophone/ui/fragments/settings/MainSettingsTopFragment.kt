@@ -17,9 +17,10 @@
 
 package org.akanework.gramophone.ui.fragments.settings
 
+
 import android.os.Bundle
 import androidx.preference.Preference
-import org.akanework.gramophone.R
+import uk.akane.accord.R
 import org.akanework.gramophone.ui.MainActivity
 import org.akanework.gramophone.ui.fragments.AboutFragment
 import org.akanework.gramophone.ui.fragments.BasePreferenceFragment

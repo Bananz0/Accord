@@ -1,5 +1,6 @@
 package org.akanework.gramophone.ui.adapters
 
+
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -9,7 +10,7 @@ import androidx.core.content.ContextCompat
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.recyclerview.widget.RecyclerView
-import org.akanework.gramophone.R
+import uk.akane.accord.R
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinLibraryLoader
 import org.akanework.gramophone.logic.resourceUri
 import org.akanework.gramophone.logic.utils.MediaStoreUtils

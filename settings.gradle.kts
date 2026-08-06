@@ -39,10 +39,5 @@ project(":Cupertino").projectDir = file("Cupertino/Cupertino")
 //   hificore      - hidden-API AudioTrack access behind the audio format readout, plus reflective
 //                   audio effects. Builds a small native library; the USB-audio half upstream
 //                   leaves commented out is not built.
-//   misc:*        - the audio effect forwarding stubs hificore links against.
-include(":libPhonograph", ":hificore", ":misc:audiofxfwd", ":misc:audiofxstub")
-
-// misc:alacdecoder is present in the tree but deliberately not built yet: it calls Util.putInt24,
-// which media3 only grew in 1.9.0, and this app is still on 1.6.0-rc01 because the prebuilt
-// lib-decoder-ffmpeg AAR in libs/ is compiled against that. Include it in the same change that
-// raises media3 and rebuilds that AAR, alongside the Accord player it feeds.
+//   misc:*        - the ALAC renderer and the audio effect forwarding stubs hificore links against.
+include(":libPhonograph", ":hificore", ":misc:audiofxfwd", ":misc:audiofxstub", ":misc:alacdecoder")

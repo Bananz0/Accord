@@ -17,6 +17,7 @@
 
 package org.akanework.gramophone.ui.adapters
 
+
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.viewModels
@@ -29,7 +30,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.akanework.gramophone.R
+import uk.akane.accord.R
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinDownloadManager
 import org.akanework.gramophone.logic.findBaseWrapperFragment
 import org.akanework.gramophone.ui.LibraryViewModel

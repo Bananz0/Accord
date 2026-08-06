@@ -17,6 +17,7 @@
 
 package org.akanework.gramophone.ui.fragments
 
+
 import android.os.Bundle
 import android.util.Log
 import android.view.LayoutInflater
@@ -32,7 +33,7 @@ import android.widget.ImageView
 import androidx.core.view.updateLayoutParams
 import coil3.load
 import com.google.android.material.card.MaterialCardView
-import org.akanework.gramophone.R
+import uk.akane.accord.R
 import org.akanework.gramophone.logic.enableEdgeToEdgePaddingListener
 import org.akanework.gramophone.logic.ui.MyRecyclerView
 import org.akanework.gramophone.logic.utils.MediaStoreUtils

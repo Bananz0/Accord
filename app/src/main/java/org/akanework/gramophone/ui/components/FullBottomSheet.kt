@@ -1,5 +1,6 @@
 package org.akanework.gramophone.ui.components
 
+
 import android.animation.ObjectAnimator
 import android.animation.PropertyValuesHolder
 import android.animation.ValueAnimator
@@ -98,7 +99,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.akanework.gramophone.R
+import uk.akane.accord.R
 import org.akanework.gramophone.logic.GramophonePlaybackService
 import org.akanework.gramophone.logic.animateText
 import org.akanework.gramophone.logic.checkIfNegativeOrNullOrMaxedOut

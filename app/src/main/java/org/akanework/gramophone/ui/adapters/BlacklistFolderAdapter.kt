@@ -1,5 +1,6 @@
 package org.akanework.gramophone.ui.adapters
 
+
 import android.content.SharedPreferences
 import android.view.View
 import android.view.ViewGroup
@@ -8,7 +9,7 @@ import androidx.core.content.edit
 import androidx.fragment.app.Fragment
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.checkbox.MaterialCheckBox
-import org.akanework.gramophone.R
+import uk.akane.accord.R
 import org.akanework.gramophone.logic.getStringSetStrict
 import org.akanework.gramophone.logic.ui.MyRecyclerView
 

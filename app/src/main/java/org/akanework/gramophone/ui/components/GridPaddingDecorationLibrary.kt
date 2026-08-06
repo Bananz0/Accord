@@ -1,12 +1,13 @@
 package org.akanework.gramophone.ui.components
 
+
 import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Rect
 import android.view.View
 import androidx.recyclerview.widget.ConcatAdapter
 import androidx.recyclerview.widget.RecyclerView
-import org.akanework.gramophone.R
+import uk.akane.accord.R
 
 class GridPaddingDecorationLibrary(context: Context) : RecyclerView.ItemDecoration() {
     private var mPadding = context.resources.getDimensionPixelSize(R.dimen.grid_card_side_padding)

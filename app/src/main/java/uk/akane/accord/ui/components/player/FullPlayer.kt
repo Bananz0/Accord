@@ -57,7 +57,7 @@ import uk.akane.accord.ui.adapters.QueueItem
 import uk.akane.accord.ui.adapters.browse.PlaylistAdapter
 import uk.akane.accord.ui.components.FadingVerticalEdgeLayout
 import uk.akane.accord.ui.components.lyrics.LyricsViewModel
-import uk.akane.cupertino.widget.OverlayTextView
+import uk.akane.cupertino.widget.text.OverlayTextView
 import uk.akane.cupertino.widget.button.AnimatedVectorButton
 import uk.akane.cupertino.widget.button.OverlayBackgroundButton
 import uk.akane.cupertino.widget.button.OverlayButton
@@ -69,9 +69,9 @@ import uk.akane.cupertino.widget.image.OverlayHintView
 import uk.akane.cupertino.widget.image.SimpleImageView
 import uk.akane.cupertino.widget.slider.OverlaySlider
 import uk.akane.cupertino.widget.special.BlendView
-import uk.akane.cupertino.widget.utils.AnimationUtils
-import uk.akane.cupertino.widget.utils.AnimationUtils.LONG_DURATION
-import uk.akane.cupertino.widget.utils.AnimationUtils.MID_DURATION
+import uk.akane.cupertino.utils.AnimationUtils
+import uk.akane.cupertino.utils.AnimationUtils.LONG_DURATION
+import uk.akane.cupertino.utils.AnimationUtils.MID_DURATION
 
 class FullPlayer @JvmOverloads constructor(
     context: Context,
@@ -275,7 +275,7 @@ class FullPlayer @JvmOverloads constructor(
                 volumeUpdateAnimator?.cancel()
             }
 
-            override fun onValueChanged(slider: OverlaySlider, value: Float, fromUser: Boolean) {
+            override fun onValueChanged(slider: OverlaySlider, value: Float, fromUser: Boolean, fromMomentum: Boolean) {
                 if (!fromUser) return
                 setDeviceVolume(value.toInt())
             }
@@ -301,7 +301,7 @@ class FullPlayer @JvmOverloads constructor(
                 stopPositionUpdates()
             }
 
-            override fun onValueChanged(slider: OverlaySlider, value: Float, fromUser: Boolean) {
+            override fun onValueChanged(slider: OverlaySlider, value: Float, fromUser: Boolean, fromMomentum: Boolean) {
                 if (!fromUser) return
                 val duration = resolveDurationMs() ?: return
                 updateProgressTexts(value.toLong(), duration)

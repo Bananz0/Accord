@@ -17,12 +17,13 @@
 
 package org.akanework.gramophone.ui.fragments
 
+
 import android.os.Bundle
 import android.view.View
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import com.google.android.material.transition.MaterialSharedAxis
-import org.akanework.gramophone.R
+import uk.akane.accord.R
 import org.akanework.gramophone.ui.MainActivity
 
 /**

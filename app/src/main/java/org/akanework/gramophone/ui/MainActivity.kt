@@ -17,6 +17,7 @@
 
 package org.akanework.gramophone.ui
 
+
 import android.app.NotificationManager
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -49,7 +50,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
-import org.akanework.gramophone.R
+import uk.akane.accord.R
 import org.akanework.gramophone.logic.enableEdgeToEdgeProperly
 import org.akanework.gramophone.logic.postAtFrontOfQueueAsync
 import org.akanework.gramophone.logic.data.db.AppDatabase

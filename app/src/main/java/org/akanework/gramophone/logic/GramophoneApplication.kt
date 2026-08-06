@@ -17,6 +17,7 @@
 
 package org.akanework.gramophone.logic
 
+
 import android.app.Application
 import android.app.NotificationManager
 import android.content.Intent
@@ -46,7 +47,7 @@ import coil3.request.NullRequestDataException
 import coil3.request.allowHardware
 import coil3.size.pxOrElse
 import coil3.util.Logger
-import org.akanework.gramophone.BuildConfig
+import uk.akane.accord.BuildConfig
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinClientHolder
 import org.akanework.gramophone.ui.BugHandlerActivity
 import java.io.File

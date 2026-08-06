@@ -17,6 +17,7 @@
 
 package org.akanework.gramophone.ui.fragments
 
+
 import android.content.res.Configuration
 import android.os.Bundle
 import android.view.LayoutInflater
@@ -30,7 +31,7 @@ import androidx.recyclerview.widget.GridLayoutManager.SpanSizeLookup
 import com.google.android.material.appbar.AppBarLayout
 import com.google.android.material.appbar.MaterialToolbar
 import me.zhanghai.android.fastscroll.PopupTextProvider
-import org.akanework.gramophone.R
+import uk.akane.accord.R
 import org.akanework.gramophone.logic.enableEdgeToEdgePaddingListener
 import org.akanework.gramophone.logic.ui.DefaultItemHeightHelper
 import org.akanework.gramophone.logic.ui.MyRecyclerView

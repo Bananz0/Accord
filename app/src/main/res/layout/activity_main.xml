@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.coordinatorlayout.widget.CoordinatorLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/main"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/surfaceColor"
+    tools:context=".ui.MainActivity">
+
+    <com.google.android.material.card.MaterialCardView
+        android:id="@+id/shrink_container"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_gravity="bottom"
+        style="?materialCardViewFilledStyle"
+        app:cardBackgroundColor="@color/surfaceColor"
+        app:cardCornerRadius="@dimen/shrink_container_default_radius"
+        app:cardElevation="0dp">
+
+        <uk.akane.cupertino.navigation.FragmentSwitcherView
+            android:id="@+id/switcher"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            />
+
+        <com.google.android.material.bottomnavigation.BottomNavigationView
+            android:id="@+id/bottom_nav"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom"
+            app:menu="@menu/bottom_nav"
+            style="@style/BottomNavigation.BottomNavigationView"
+            app:itemIconSize="32dp"
+            android:background="@drawable/shape_bottom_nav" />
+
+    </com.google.android.material.card.MaterialCardView>
+
+    <uk.akane.accord.ui.components.player.FloatingPanelLayout
+        android:id="@+id/floating"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_gravity="bottom"
+        />
+
+</androidx.coordinatorlayout.widget.CoordinatorLayout>

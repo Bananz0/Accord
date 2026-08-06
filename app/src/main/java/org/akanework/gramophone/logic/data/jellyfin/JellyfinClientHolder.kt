@@ -1,9 +1,10 @@
 package org.akanework.gramophone.logic.data.jellyfin
 
+
 import android.content.Context
 import android.os.Build
 import okhttp3.OkHttpClient
-import org.akanework.gramophone.BuildConfig
+import uk.akane.accord.BuildConfig
 import org.jellyfin.sdk.Jellyfin
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.HttpClientOptions

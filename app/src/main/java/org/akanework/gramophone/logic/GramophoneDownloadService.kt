@@ -1,5 +1,6 @@
 package org.akanework.gramophone.logic
 
+
 import android.app.Notification
 import android.app.PendingIntent
 import android.content.Intent
@@ -13,7 +14,7 @@ import androidx.media3.exoplayer.offline.DownloadManager
 import androidx.media3.exoplayer.offline.DownloadService
 import androidx.media3.exoplayer.scheduler.PlatformScheduler
 import androidx.media3.exoplayer.scheduler.Scheduler
-import org.akanework.gramophone.R
+import uk.akane.accord.R
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinDownloadManager
 import org.akanework.gramophone.ui.MainActivity
 

@@ -17,7 +17,7 @@ android {
         throw IllegalArgumentException("releaseType must not contain \"")
     }
 
-    namespace = "org.akanework.gramophone"
+    namespace = "uk.akane.accord"
     compileSdk = 36
     buildToolsVersion = "36.0.0"
     ndkVersion = "28.0.13004108"
@@ -26,6 +26,18 @@ android {
         generateLocaleConfig = true
     }
 
+    // Upstream Accord does not build against media3 as published: it substitutes a fork
+    // (nift4/media, branch accord) that adds 20-bit PCM encodings, Format.getBitDepth,
+    // AudioSink.onRoutingChanged, an extra buildAudioSink parameter and several MediaSession
+    // notification options. Its playback engine calls all of that, so these files cannot compile on
+    // the released 1.9.0 artifacts.
+    //
+    // They are held out of the build rather than deleted because this app keeps its own playback
+    // stack - the one that already knows how to stream and cache from Jellyfin - and the Accord UI
+    // is being pointed at that instead. They stay in the tree as the reference for anyone who later
+    // wants the fork's bit-perfect output badly enough to take on an NDK source build of media3.
+    // (applied to the Kotlin compile tasks below - android.sourceSets excludes only reach javac)
+
     buildFeatures {
         buildConfig = true
     }
@@ -33,6 +45,9 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = false
+            // hificore links dlfunc as a prefab package and re-exports the .so, while the dlfunc
+            // AAR ships the same library itself, so both reach the merge with identical copies.
+            pickFirsts += "lib/*/libdlfunc.so"
         }
         dex {
             useLegacyPackaging = false
@@ -192,6 +207,20 @@ kotlin {
     }
 }
 
+tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+    exclude(
+        "uk/akane/accord/logic/services/PlaybackService.kt",
+        "uk/akane/accord/logic/player/AudioFormatDetector.kt",
+        "uk/akane/accord/logic/player/PostAmpAudioSink.kt",
+        "uk/akane/accord/logic/player/exoplayer/GramophoneRenderFactory.kt",
+        // These two only fall out of the above: AfFormatTracker reads AudioFormatDetector, and
+        // MediaButtonReceiver reads PlaybackService's notification constants. Both come back when
+        // the Accord UI is pointed at this app's playback service.
+        "uk/akane/accord/logic/player/AfFormatTracker.kt",
+        "uk/akane/accord/logic/utils/MediaButtonReceiver.kt",
+    )
+}
+
 ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
 }
@@ -203,7 +232,7 @@ configurations.configureEach {
 }
 
 dependencies {
-    val media3Version = "1.6.0-rc01"
+    val media3Version = "1.9.0"
     val roomVersion = "2.7.0-rc02"
     val jellyfinSdkVersion = "1.8.12"
     val slf4jVersion = "2.0.18"
@@ -244,6 +273,14 @@ dependencies {
     implementation(projects.recyclerview)
     // Apple-style widget library the upstream Accord UI is built on.
     implementation(projects.cupertino)
+    // The library model (Album/Artist/Playlist, MediaStore readers) the ported Accord screens are
+    // written against, and the hidden-API AudioTrack access behind the audio format readout.
+    implementation(projects.libPhonograph)
+    implementation(projects.hificore)
+    // ALAC playback renderer, wired up by Accord's GramophoneRenderFactory.
+    implementation(projects.misc.alacdecoder)
+    // Accord's output switcher reads the active route through MediaRouter.
+    implementation("androidx.mediarouter:mediarouter:1.8.1")
     implementation(libs.hiddenapibypass)
     // Spring physics for the iOS-style rubber-band overscroll.
     implementation("androidx.dynamicanimation:dynamicanimation:1.0.0")

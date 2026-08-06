@@ -20,7 +20,7 @@ import uk.akane.accord.R
 import uk.akane.accord.logic.dp
 import uk.akane.accord.logic.floatAnimator
 import uk.akane.accord.logic.sp
-import uk.akane.cupertino.widget.utils.AnimationUtils
+import uk.akane.cupertino.utils.AnimationUtils
 import kotlin.math.abs
 import kotlin.math.roundToInt
 

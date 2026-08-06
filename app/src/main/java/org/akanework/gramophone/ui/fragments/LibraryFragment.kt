@@ -1,5 +1,6 @@
 package org.akanework.gramophone.ui.fragments
 
+
 import android.annotation.SuppressLint
 import android.content.res.Configuration
 import android.net.Uri
@@ -19,7 +20,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.akanework.gramophone.R
+import uk.akane.accord.R
 import org.akanework.gramophone.logic.applyGeneralMenuItem
 import org.akanework.gramophone.logic.data.db.entity.PlaylistWithMediaItem
 import org.akanework.gramophone.logic.enableEdgeToEdgePaddingListener
