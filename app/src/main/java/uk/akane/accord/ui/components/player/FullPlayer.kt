@@ -43,6 +43,19 @@ import coil3.request.ImageRequest
 import coil3.request.allowHardware
 import coil3.size.Scale
 import coil3.toBitmap
+import android.widget.TextView
+import androidx.media3.common.Tracks
+import org.akanework.gramophone.logic.utils.AudioQuality
+import androidx.media3.session.SessionResult
+import com.google.common.util.concurrent.Futures
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.akanework.gramophone.logic.GramophonePlaybackService
+import org.akanework.gramophone.logic.getLyrics
+import uk.akane.accord.ui.components.lyrics.Lyrics
+import uk.akane.accord.ui.components.lyrics.LyricsLine
 import uk.akane.accord.R
 import uk.akane.accord.logic.dp
 import uk.akane.accord.logic.inverseLerp
@@ -109,6 +122,7 @@ class FullPlayer @JvmOverloads constructor(
     private var previousButton: AnimatedVectorButton
     private var nextButton: AnimatedVectorButton
     private var ellipsisButton: OverlayBackgroundButton
+    private var qualityBadge: TextView
 
     private var fullPlayerToolbar: FullPlayerToolbar
     private var queueContainer: View
@@ -178,6 +192,7 @@ class FullPlayer @JvmOverloads constructor(
         captionOverlayButton = findViewById(R.id.caption)
         starTransformButton = findViewById(R.id.star)
         ellipsisButton = findViewById(R.id.ellipsis)
+        qualityBadge = findViewById(R.id.quality_badge)
         controllerButton = findViewById(R.id.main_control_btn)
         previousButton = findViewById(R.id.backward_btn)
         nextButton = findViewById(R.id.forward_btn)
@@ -239,7 +254,7 @@ class FullPlayer @JvmOverloads constructor(
 
         fadingEdgeLayout.visibility = GONE
         queueContainer.visibility = INVISIBLE
-        lyricsViewModel = LyricsViewModel(context)
+        lyricsViewModel = LyricsViewModel(context) { instance?.currentPosition ?: 0L }
 
         lyricsBtn.setOnClickListener {
             fadingEdgeLayout.visibility = VISIBLE
@@ -362,6 +377,16 @@ class FullPlayer @JvmOverloads constructor(
             startSystemMediaControl()
         }
 
+        // The service resolves lyrics off the main thread and announces the result with this
+        // command once it has them, which for a Jellyfin lookup is well after the track started.
+        activity.controllerViewModel.customCommandListeners.addCallback(activity.lifecycle) {
+                _, command, _ ->
+            if (command.customAction == GramophonePlaybackService.SERVICE_GET_LYRICS) {
+                refreshLyrics()
+            }
+            Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+        }
+
         activity.controllerViewModel.addControllerCallback(activity.lifecycle) { _, _ ->
             firstTime = true
             instance?.addListener(this@FullPlayer)
@@ -376,6 +401,8 @@ class FullPlayer @JvmOverloads constructor(
                 Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED
             )
             onMediaMetadataChanged(instance?.mediaMetadata ?: MediaMetadata.EMPTY)
+            instance?.currentTracks?.let { onTracksChanged(it) }
+            refreshLyrics()
             updateVolumeSlider()
             firstTime = false
         }
@@ -820,11 +847,50 @@ class FullPlayer @JvmOverloads constructor(
 
     private var lastDisposable: Disposable? = null
 
+    /**
+     * The badge describes the format the player selected, which is only known once the tracks for
+     * the new item have been read - hence here rather than on the media item transition.
+     */
+    /**
+     * Pulls the lyrics the playback service resolved for the current track - embedded tags, a
+     * matching .lrc, or the Jellyfin server - and hands them to the lyrics view. The service does
+     * the resolving off the main thread and announces a result with this same command, so this runs
+     * both on transition and when that announcement arrives.
+     */
+    private fun refreshLyrics() {
+        val controller = instance ?: return
+        CoroutineScope(Dispatchers.Default).launch {
+            val resolved = runCatching { controller.getLyrics() }.getOrNull()
+            val mapped = resolved.orEmpty()
+                // The service prepends an empty element as a lead-in; it has no text to show.
+                .filter { !it.content.isNullOrBlank() }
+                .map { LyricsLine(it.startTimestamp ?: 0L, null, it.content, it.translationContent) }
+            withContext(Dispatchers.Main) {
+                lyricsViewModel?.setLyrics(Lyrics(mapped))
+            }
+        }
+    }
+
+    override fun onTracksChanged(tracks: Tracks) {
+        val quality = AudioQuality.of(tracks)
+        if (quality == null) {
+            qualityBadge.visibility = GONE
+        } else {
+            qualityBadge.setText(quality.label)
+            qualityBadge.visibility = VISIBLE
+        }
+    }
+
     override fun onMediaItemTransition(
         mediaItem: MediaItem?,
         reason: Int
     ) {
         fullPlayerToolbar.onMediaItemTransition(mediaItem, reason)
+        // Hide until the new item's tracks arrive, so the previous track's badge does not linger
+        // over a different song.
+        qualityBadge.visibility = GONE
+        lyricsViewModel?.setLyrics(Lyrics.Empty)
+        refreshLyrics()
         if (instance?.mediaItemCount != 0) {
             lastDisposable?.dispose()
             lastDisposable = null
