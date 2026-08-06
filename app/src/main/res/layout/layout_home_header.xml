@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The home screen's masthead - heading and the banner - as the first row of the feed rather than
+    as fixed furniture above it. Pinned, it left the rows a sliver of screen to scroll inside; as a
+    row it scrolls away with everything else.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical">
+
+    <TextView
+        android:id="@+id/title"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/home_recommendations_title"
+        android:textColor="@color/onSurfaceColor"
+        android:fontFamily="@font/inter_bold"
+        android:textSize="22sp"
+        android:layout_marginTop="14dp"
+        android:layout_marginStart="22dp"
+        android:includeFontPadding="false" />
+
+    <TextView
+        android:id="@+id/subtitle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/recommendations"
+        android:textColor="@color/onSurfaceColorInactive"
+        android:layout_marginStart="22dp"
+        android:textSize="15sp"
+        android:includeFontPadding="false" />
+
+    <uk.akane.accord.ui.components.BannerView
+        android:id="@+id/banner"
+        android:layout_width="276dp"
+        android:layout_height="360dp"
+        android:layout_marginStart="22dp"
+        android:layout_marginTop="8dp"
+        app:videoSrc="@raw/breeze"
+        app:placeholder="@drawable/breeze_preview" />
+
+</LinearLayout>

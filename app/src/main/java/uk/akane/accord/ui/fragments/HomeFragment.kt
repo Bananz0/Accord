@@ -23,12 +23,19 @@ import org.akanework.gramophone.ui.home.HomeSectionAdapter
 import uk.akane.accord.Accord
 import uk.akane.accord.R
 import uk.akane.accord.ui.MainActivity
+import androidx.recyclerview.widget.ConcatAdapter
+import org.akanework.gramophone.ui.home.HomeCard
+import uk.akane.accord.ui.fragments.browse.StationDetailFragment
 import uk.akane.accord.ui.components.NavigationBar
 
 class HomeFragment: Fragment() {
     private lateinit var navigationBar: NavigationBar
-    private lateinit var subtitle: TextView
     private lateinit var sectionAdapter: HomeSectionAdapter
+    private lateinit var headerAdapter: HeaderAdapter
+
+    /** Bound when the header row is created, which is after the fragment's view. */
+    private var subtitle: TextView? = null
+    private var subtitleText: CharSequence? = null
 
     /** Fetched once per view, and folded back into the feed on every later rebuild. */
     private var similarSection: HomeSection? = null
@@ -40,7 +47,6 @@ class HomeFragment: Fragment() {
     ): View? {
         val rootView = inflater.inflate(R.layout.fragment_home, container, false)
         navigationBar = rootView.findViewById(R.id.navigation_bar)
-        subtitle = rootView.findViewById(R.id.subtitle)
 
         ViewCompat.setOnApplyWindowInsetsListener(navigationBar) { v, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
@@ -53,10 +59,14 @@ class HomeFragment: Fragment() {
             insets
         }
 
-        sectionAdapter = HomeSectionAdapter { (activity as? MainActivity)?.getPlayer() }
+        sectionAdapter = HomeSectionAdapter(
+            player = { (activity as? MainActivity)?.getPlayer() },
+            onCardClick = { section, card -> openStation(section, card) }
+        )
+        headerAdapter = HeaderAdapter { subtitle = it }
         rootView.findViewById<RecyclerView>(R.id.home_sections).apply {
             layoutManager = LinearLayoutManager(context)
-            adapter = sectionAdapter
+            adapter = ConcatAdapter(headerAdapter, sectionAdapter)
         }
 
         observeLibrarySync()
@@ -74,12 +84,13 @@ class HomeFragment: Fragment() {
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 jellyfin.syncProgress.collect { progress ->
-                    subtitle.text = when {
+                    subtitleText = when {
                         progress == null -> getString(R.string.recommendations)
                         progress.second > 0 ->
                             getString(R.string.sync_progress, progress.first, progress.second)
                         else -> getString(R.string.sync_in_progress)
                     }
+                    subtitle?.text = subtitleText
                 }
             }
         }
@@ -120,6 +131,43 @@ class HomeFragment: Fragment() {
             if (!isAdded) return@launch
             similarSection = section
             sectionAdapter.submit(withSimilar(sectionAdapter.currentSections()))
+        }
+    }
+
+    /** Opens a station as its own screen instead of hijacking playback on a single tap. */
+    private fun openStation(section: HomeSection, card: HomeCard) {
+        val activity = activity as? MainActivity ?: return
+        activity.fragmentSwitcherView.addFragmentToCurrentStack(
+            StationDetailFragment.newInstance(
+                title = section.title,
+                subtitle = section.subtitle ?: card.title,
+                mediaIds = card.songs.map { it.mediaId }
+            )
+        )
+    }
+
+    /**
+     * The masthead as the feed's first row, so it scrolls with everything else. It hands its
+     * subtitle back because that view doubles as the library sync indicator.
+     */
+    private inner class HeaderAdapter(
+        private val onSubtitleBound: (TextView) -> Unit
+    ) : RecyclerView.Adapter<HeaderAdapter.ViewHolder>() {
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) = ViewHolder(
+            LayoutInflater.from(parent.context)
+                .inflate(R.layout.layout_home_header, parent, false)
+        )
+
+        override fun getItemCount(): Int = 1
+
+        override fun onBindViewHolder(holder: ViewHolder, position: Int) {
+            onSubtitleBound(holder.subtitle)
+            subtitleText?.let { holder.subtitle.text = it }
+        }
+
+        inner class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
+            val subtitle: TextView = view.findViewById(R.id.subtitle)
         }
     }
 

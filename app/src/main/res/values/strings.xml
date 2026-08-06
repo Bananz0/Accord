@@ -265,6 +265,8 @@
     <string name="blur_lyrics">Blur lyrics</string>
     <string name="blur_lyrics_summary">Enable blur with lyrics (May impact performance)</string>
     <string name="mix_most_played">Most played</string>
+    <string name="mix_daily_shuffle">Daily shuffle</string>
+    <string name="mix_daily_shuffle_subtitle">A different pick every day</string>
     <string name="mix_favourites">Your favourites</string>
     <string name="mix_recently_added">Recently added</string>
     <string name="settings_sync_on_startup">Sync library on startup</string>

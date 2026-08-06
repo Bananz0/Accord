@@ -26,7 +26,13 @@ class HomeSectionAdapter(
      * The controller to play a tapped card through. Passed as a lookup rather than an activity so
      * the same feed serves the old screens and the Accord ones, whose activities share no type.
      */
-    private val player: () -> MediaController?
+    private val player: () -> MediaController?,
+    /**
+     * What a tapped card should do. Null plays it straight away, which is what the old screens did;
+     * the Accord home passes a handler that opens the station instead, so there is somewhere to see
+     * the tracks and pick a starting point.
+     */
+    private val onCardClick: ((HomeSection, HomeCard) -> Unit)? = null
 ) : RecyclerView.Adapter<HomeSectionAdapter.ViewHolder>() {
 
     private val sections = mutableListOf<HomeSection>()
@@ -58,7 +64,7 @@ class HomeSectionAdapter(
         holder.subtitle.text = section.subtitle
         holder.subtitle.visibility =
             if (section.subtitle.isNullOrBlank()) View.GONE else View.VISIBLE
-        holder.items.adapter = CardAdapter(section.cards)
+        holder.items.adapter = CardAdapter(section)
     }
 
     /** What is currently on screen, for callers that need to re-submit with an extra row folded in. */
@@ -72,8 +78,10 @@ class HomeSectionAdapter(
     }
 
     private inner class CardAdapter(
-        private val cards: List<HomeCard>
+        private val section: HomeSection
     ) : RecyclerView.Adapter<CardAdapter.CardViewHolder>() {
+
+        private val cards = section.cards
 
         inner class CardViewHolder(view: View) : RecyclerView.ViewHolder(view) {
             val cover: ImageView = view.findViewById(R.id.cover)
@@ -99,10 +107,15 @@ class HomeSectionAdapter(
                 if (card.subtitle.isNullOrBlank()) View.GONE else View.VISIBLE
             holder.itemView.setOnClickListener {
                 if (card.songs.isEmpty()) return@setOnClickListener
-                player()?.apply {
-                    setMediaItems(card.songs, card.startIndex, C.TIME_UNSET)
-                    prepare()
-                    play()
+                val handler = onCardClick
+                if (handler != null) {
+                    handler(section, card)
+                } else {
+                    player()?.apply {
+                        setMediaItems(card.songs, card.startIndex, C.TIME_UNSET)
+                        prepare()
+                        play()
+                    }
                 }
             }
         }
