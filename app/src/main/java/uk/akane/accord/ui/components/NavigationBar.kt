@@ -850,10 +850,24 @@ class NavigationBar @JvmOverloads constructor(
         returnButtonPressed = false
         returnClickListener = null
         menuClickListener = null
+        avatarClickListener = null
+        avatarPressed = false
+        dismissOwnPopup()
         super.onDetachedFromWindow()
     }
 
+    /**
+     * The popup is drawn by the floating panel, not by this view, so navigating away left it on
+     * screen over whatever came next. Closed whenever the bar that opened it goes away or is hidden.
+     */
+    private fun dismissOwnPopup() {
+        if (!menuButtonChecked) return
+        (activity.findViewById<FloatingPanelLayout>(R.id.floating))?.dismissPopupMenu()
+        menuButtonChecked = false
+    }
+
     fun onVisibilityChangedFromFragment(isHidden: Boolean) {
+        if (isHidden) dismissOwnPopup()
         if (!isHidden) {
             refreshRenderNode()
             post { syncScrollWithTarget() }

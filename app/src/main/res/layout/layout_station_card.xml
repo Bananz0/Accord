@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    A station card: generated colour field, the Accord mark watermarked in the corner, and the
+    station's name on a frosted strip along the bottom - the shape the 1.0-stable build uses for its
+    "Made for you" row.
+-->
+<com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="276dp"
+    android:layout_height="360dp"
+    android:layout_marginEnd="12dp"
+    android:clickable="true"
+    android:focusable="true"
+    app:cardCornerRadius="18dp"
+    app:cardElevation="0dp"
+    app:strokeWidth="0dp">
+
+    <uk.akane.accord.ui.components.StationArtView
+        android:id="@+id/station_art"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <ImageView
+        android:id="@+id/station_mark"
+        android:layout_width="34dp"
+        android:layout_height="34dp"
+        android:layout_gravity="top|end"
+        android:layout_margin="18dp"
+        android:alpha="0.55"
+        android:importantForAccessibility="no"
+        android:src="@drawable/ic_accord_monochrome"
+        app:tint="@android:color/white" />
+
+    <TextView
+        android:id="@+id/station_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:background="#33FFFFFF"
+        android:fontFamily="@font/inter_regular"
+        android:gravity="center"
+        android:includeFontPadding="false"
+        android:paddingVertical="18dp"
+        android:textColor="@android:color/white"
+        android:textSize="17sp"
+        tools:text="Daily shuffle" />
+
+</com.google.android.material.card.MaterialCardView>

@@ -23,14 +23,16 @@ object PlayerPopupMenu {
                 R.drawable.ic_trash,
                 R.string.popup_delete_from_library
             )
-            .addMenuEntry(resources, R.drawable.ic_square, R.string.popup_add_to_a_playlist)
+            // Upstream leaves every entry below on ic_square, a placeholder box, so the menu came up
+            // with a column of empty squares. These are the closest real icons the app already has.
+            .addMenuEntry(resources, R.drawable.ic_playlist, R.string.popup_add_to_a_playlist)
             .addSpacer()
-            .addMenuEntry(resources, R.drawable.ic_square, R.string.popup_share_song)
-            .addMenuEntry(resources, R.drawable.ic_square, R.string.popup_share_lyrics)
-            .addMenuEntry(resources, R.drawable.ic_square, R.string.popup_go_to_album)
-            .addMenuEntry(resources, R.drawable.ic_square, R.string.popup_create_station)
+            .addMenuEntry(resources, R.drawable.ic_note, R.string.popup_share_song)
+            .addMenuEntry(resources, R.drawable.ic_quote, R.string.popup_share_lyrics)
+            .addMenuEntry(resources, R.drawable.ic_album, R.string.popup_go_to_album)
+            .addMenuEntry(resources, R.drawable.ic_airplay_radio, R.string.popup_create_station)
             .addSpacer()
-            .addMenuEntry(resources, R.drawable.ic_square, R.string.popup_undo_favorite)
+            .addMenuEntry(resources, R.drawable.ic_favourite, R.string.popup_undo_favorite)
             .build()
     }
 

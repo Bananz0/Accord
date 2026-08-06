@@ -19,12 +19,19 @@ import kotlin.random.Random
  * the library actually contains - somebody who has never favourited anything gets a different set
  * of rows to somebody with years of play counts, instead of an empty shelf.
  */
+/**
+ * How a section is presented. Stations are the large generated-artwork cards the 1.0-stable build
+ * shows under "Made for you"; everything else is the usual row of album artwork.
+ */
+enum class HomeSectionStyle { ROW, STATION }
+
 data class HomeSection(
     val id: String,
     val title: String,
     /** The line under the title, naming what is in the row. Spotify uses this heavily. */
     val subtitle: String? = null,
     val cards: List<HomeCard>,
+    val style: HomeSectionStyle = HomeSectionStyle.ROW,
 )
 
 data class HomeCard(
@@ -63,14 +70,76 @@ object HomeFeed {
         if (library.isEmpty()) return emptyList()
 
         return buildList {
+            madeForYou(context, library)?.let(::add)
             jumpBackIn(context, library)?.let(::add)
-            dailyShuffle(context, library)?.let(::add)
-            mostPlayed(context, library)?.let(::add)
             topMixes(context, artists)?.let(::add)
-            daylist(context, library)?.let(::add)
-            recentlyAdded(context, library)?.let(::add)
-            favourites(context, library)?.let(::add)
         }
+    }
+
+    /**
+     * The stations row - one card per mix, drawn with generated artwork rather than a song's cover.
+     *
+     * These used to be separate rows of album art, which made four different ideas look like one
+     * long shelf of the same albums. As stations they are distinguishable at a glance and each one
+     * is a mix rather than a list of records.
+     */
+    private fun madeForYou(context: Context, library: List<MediaItem>): HomeSection? {
+        val stations = buildList {
+            stationDailyShuffle(context, library)?.let(::add)
+            stationMostPlayed(context, library)?.let(::add)
+            stationFavourites(context, library)?.let(::add)
+            stationRecentlyAdded(context, library)?.let(::add)
+            stationDaylist(context, library)?.let(::add)
+        }
+        if (stations.isEmpty()) return null
+        return HomeSection(
+            id = "made_for_you",
+            title = context.getString(R.string.home_made_for_you),
+            subtitle = context.getString(R.string.home_made_for_you_subtitle),
+            cards = stations,
+            style = HomeSectionStyle.STATION,
+        )
+    }
+
+    /** A station card carries the whole mix; the artwork is generated from its title. */
+    private fun station(title: String, songs: List<MediaItem>): HomeCard? {
+        if (songs.size < 5) return null
+        return HomeCard(title = title, subtitle = null, cover = null, songs = songs)
+    }
+
+    private fun stationDailyShuffle(context: Context, library: List<MediaItem>): HomeCard? {
+        val calendar = Calendar.getInstance()
+        val seed = calendar.get(Calendar.YEAR) * 1000L + calendar.get(Calendar.DAY_OF_YEAR)
+        return station(
+            context.getString(R.string.mix_daily_shuffle),
+            library.shuffled(Random(seed)).take(MIX_SIZE)
+        )
+    }
+
+    private fun stationMostPlayed(context: Context, library: List<MediaItem>): HomeCard? = station(
+        context.getString(R.string.mix_most_played),
+        library.filter { it.playCount() > 0 }
+            .sortedByDescending { it.playCount() }
+            .take(MIX_SIZE)
+    )
+
+    private fun stationFavourites(context: Context, library: List<MediaItem>): HomeCard? = station(
+        context.getString(R.string.mix_favourites),
+        library.filter { it.isFavourite() }.shuffled().take(MIX_SIZE)
+    )
+
+    private fun stationRecentlyAdded(context: Context, library: List<MediaItem>): HomeCard? =
+        station(
+            context.getString(R.string.mix_recently_added),
+            library.sortedByDescending { it.addDate() }.take(MIX_SIZE)
+        )
+
+    private fun stationDaylist(context: Context, library: List<MediaItem>): HomeCard? {
+        val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+        return station(
+            timeOfDayLabel(context, hour),
+            library.shuffled(Random(hour.toLong())).take(MIX_SIZE)
+        )
     }
 
     /**
