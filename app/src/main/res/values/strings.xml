@@ -742,6 +742,22 @@
     <string name="no_song_playing">Nothing is playing</string>
     <string name="output_device">Audio output</string>
 
+    <!-- Setup wizard: the services beyond the library. -->
+    <string name="setup_services_title">A few extras</string>
+    <string name="setup_services_desc">All optional. Accord works with just your Jellyfin server — these add to it.</string>
+    <string name="setup_services_connect">Connect</string>
+    <string name="setup_services_connected">Connected</string>
+    <string name="setup_services_note">You can set any of these up later in Settings, and Spotify sign-in lives there too.</string>
+    <string name="setup_services_lidarr_desc">Request music you do not have yet</string>
+    <string name="setup_services_lidarr_ready">Ready to take requests</string>
+    <string name="setup_services_lidarr_address_hint">Address, e.g. http://192.168.1.10:8686</string>
+    <string name="setup_services_lidarr_key_hint">API key</string>
+    <string name="setup_services_lastfm_desc">Scrobble what you listen to</string>
+    <string name="setup_services_lastfm_ready">Keys saved — link your account in Settings</string>
+    <string name="setup_services_lastfm_key_hint">API key</string>
+    <string name="setup_services_lastfm_secret_hint">Shared secret</string>
+    <string name="setup_services_lastfm_help">Create an API account at last.fm/api and paste the two values here.</string>
+
     <!-- Playlist management. -->
     <string name="playlist_rename">Rename</string>
     <string name="playlist_rename_confirm">Rename</string>
