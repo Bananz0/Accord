@@ -12,6 +12,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import coil3.load
 import uk.akane.accord.R
+import uk.akane.accord.ui.components.StationArtView
 import org.akanework.gramophone.logic.ui.coolCrossfade
 import androidx.media3.session.MediaController
 
@@ -82,29 +83,52 @@ class HomeSectionAdapter(
     ) : RecyclerView.Adapter<CardAdapter.CardViewHolder>() {
 
         private val cards = section.cards
+        private val isStation = section.style == HomeSectionStyle.STATION
 
         inner class CardViewHolder(view: View) : RecyclerView.ViewHolder(view) {
-            val cover: ImageView = view.findViewById(R.id.cover)
-            val title: TextView = view.findViewById(R.id.title)
-            val subtitle: TextView = view.findViewById(R.id.subtitle)
+            val cover: ImageView? = view.findViewById(R.id.cover)
+            val title: TextView = view.findViewById(
+                if (isStation) R.id.station_title else R.id.title
+            )
+            val subtitle: TextView? = view.findViewById(R.id.subtitle)
+            val art: StationArtView? = view.findViewById(R.id.station_art)
         }
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) = CardViewHolder(
-            LayoutInflater.from(parent.context)
-                .inflate(R.layout.homepage_recommend_card, parent, false)
+            LayoutInflater.from(parent.context).inflate(
+                if (isStation) R.layout.layout_station_card
+                else R.layout.homepage_recommend_card,
+                parent,
+                false
+            )
         )
 
         override fun getItemCount(): Int = cards.size
 
+        /**
+         * Rows share one RecycledViewPool, which keys on view type. Station and album cards inflate
+         * different layouts, so leaving both on the default type let a station card be handed to a
+         * row section - "For fans of" came up drawn as stations.
+         */
+        override fun getItemViewType(position: Int): Int =
+            if (isStation) VIEW_TYPE_STATION else VIEW_TYPE_CARD
+
         override fun onBindViewHolder(holder: CardViewHolder, position: Int) {
             val card = cards[position]
-            // No error()/placeholder(): Coil3 has no Int overloads, so a drawable id silently binds
-            // to kotlin.error() and throws at runtime. The layout's own src is the fallback.
-            holder.cover.load(card.cover) { coolCrossfade(true) }
             holder.title.text = card.title
-            holder.subtitle.text = card.subtitle
-            holder.subtitle.visibility =
-                if (card.subtitle.isNullOrBlank()) View.GONE else View.VISIBLE
+            if (isStation) {
+                // Artwork is generated from the station's name, so it is stable per station and
+                // different between them without needing a cover to borrow.
+                holder.art?.bind(card.title)
+            } else {
+                // No error()/placeholder(): Coil3 has no Int overloads, so a drawable id silently
+                // binds to kotlin.error() and throws at runtime. The layout's own src is the
+                // fallback.
+                holder.cover?.load(card.cover) { coolCrossfade(true) }
+                holder.subtitle?.text = card.subtitle
+                holder.subtitle?.visibility =
+                    if (card.subtitle.isNullOrBlank()) View.GONE else View.VISIBLE
+            }
             holder.itemView.setOnClickListener {
                 if (card.songs.isEmpty()) return@setOnClickListener
                 val handler = onCardClick
@@ -125,6 +149,11 @@ class HomeSectionAdapter(
      * Sections are identified by a stable id, so a rebuild that only changes a row's contents
      * rebinds that row instead of dropping the whole feed and scrolling back to the top.
      */
+    private companion object {
+        const val VIEW_TYPE_CARD = 0
+        const val VIEW_TYPE_STATION = 1
+    }
+
     private class SectionDiff(
         private val old: List<HomeSection>,
         private val new: List<HomeSection>,

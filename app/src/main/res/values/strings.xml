@@ -399,6 +399,7 @@
     <string name="spotify_error_no_browser">No browser available to sign in with.</string>
 
     <string name="home_made_for_you">Made for you</string>
+    <string name="home_made_for_you_subtitle">Mixes built from your library</string>
     <string name="home_jump_back_in">Jump back in</string>
     <string name="home_top_mixes">Your top mixes</string>
     <string name="home_top_mixes_subtitle">Built from the artists you play most</string>

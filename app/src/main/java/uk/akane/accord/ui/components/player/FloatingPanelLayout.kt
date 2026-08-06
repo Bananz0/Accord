@@ -395,6 +395,23 @@ class FloatingPanelLayout @JvmOverloads constructor(
         return popupHelper.transformFraction == 1F
     }
 
+    /**
+     * Closes the popup menu if one is open.
+     *
+     * Upstream only ever dismisses it by tapping outside, so it stayed on screen while the app
+     * navigated somewhere else and hung over whatever screen came next.
+     */
+    fun dismissPopupMenu() {
+        if (popupHelper.transformFraction == 0F) return
+        popupHelper.callUpPopup(
+            true,
+            null,
+            invalidate = { invalidate() },
+            doOnStart = { fullScreenView.freeze() },
+            doOnEnd = { fullScreenView.unfreeze() }
+        )
+    }
+
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (popupHelper.transformFraction == 1F &&
