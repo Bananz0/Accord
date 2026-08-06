@@ -48,13 +48,23 @@ object HomeFeed {
     private const val ROW_SIZE = 12
     private const val MIX_SIZE = 50
 
-    fun build(context: Context, viewModel: LibraryViewModel): List<HomeSection> {
-        val library = viewModel.mediaItemList.value.orEmpty()
+    /**
+     * The only thing the feed needs from an artist. Stated here so the feed does not have to pick
+     * between this app's library model and libPhonograph's - the two describe the same thing with
+     * no common supertype, and the feed is now built for both the old screens and the Accord ones.
+     */
+    data class ArtistInput(val title: String?, val songList: List<MediaItem>)
+
+    fun build(
+        context: Context,
+        library: List<MediaItem>,
+        artists: List<ArtistInput>
+    ): List<HomeSection> {
         if (library.isEmpty()) return emptyList()
 
         return buildList {
             jumpBackIn(context, library)?.let(::add)
-            topMixes(context, viewModel)?.let(::add)
+            topMixes(context, artists)?.let(::add)
             daylist(context, library)?.let(::add)
             recentlyAdded(context, library)?.let(::add)
             favourites(context, library)?.let(::add)
@@ -94,8 +104,8 @@ object HomeFeed {
      * Ranked by total play count rather than track count, so a heavily played EP outranks an
      * untouched discography that happens to be large.
      */
-    private fun topMixes(context: Context, viewModel: LibraryViewModel): HomeSection? {
-        val artists = viewModel.artistItemList.value.orEmpty()
+    private fun topMixes(context: Context, allArtists: List<ArtistInput>): HomeSection? {
+        val artists = allArtists
             .filter { artist -> artist.songList.any { it.playCount() > 0 } }
             .sortedByDescending { artist -> artist.songList.sumOf { it.playCount() } }
             .take(ROW_SIZE)
@@ -226,12 +236,11 @@ object HomeFeed {
      */
     suspend fun similarArtistSection(
         context: Context,
-        viewModel: LibraryViewModel,
+        artists: List<ArtistInput>,
     ): HomeSection? {
         val store = LastFmCredentialStore(context)
         if (!store.hasApplicationCredentials()) return null
 
-        val artists = viewModel.artistItemList.value.orEmpty()
         if (artists.isEmpty()) return null
 
         val seed = artists

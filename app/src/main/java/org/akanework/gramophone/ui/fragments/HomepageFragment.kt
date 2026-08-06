@@ -59,7 +59,7 @@ class HomepageFragment : BaseFragment(null) {
         val nestedScrollView = rootView.findViewById<NestedScrollView>(R.id.nested)
         val sectionsView = rootView.findViewById<RecyclerView>(R.id.home_sections)
 
-        sectionAdapter = HomeSectionAdapter(requireActivity() as MainActivity)
+        sectionAdapter = HomeSectionAdapter { (requireActivity() as MainActivity).getPlayer() }
 
         appBarLayout = rootView.findViewById(R.id.appbarlayout)
         appBarLayout.enableEdgeToEdgePaddingListener()
@@ -120,7 +120,11 @@ class HomepageFragment : BaseFragment(null) {
     private fun rebuildFeed() {
         viewLifecycleOwner.lifecycleScope.launch {
             val sections = withContext(Dispatchers.Default) {
-                HomeFeed.build(requireContext(), libraryViewModel)
+                HomeFeed.build(
+                    requireContext(),
+                    libraryViewModel.mediaItemList.value.orEmpty(),
+                    libraryViewModel.artistInputs()
+                )
             }
             if (!isAdded) return@launch
             sectionAdapter.submit(withSimilar(sections))
@@ -137,7 +141,7 @@ class HomepageFragment : BaseFragment(null) {
         if (similarSection != null) return
         viewLifecycleOwner.lifecycleScope.launch {
             val section = withContext(Dispatchers.IO) {
-                HomeFeed.similarArtistSection(requireContext(), libraryViewModel)
+                HomeFeed.similarArtistSection(requireContext(), libraryViewModel.artistInputs())
             } ?: return@launch
             if (!isAdded) return@launch
             similarSection = section
@@ -196,3 +200,7 @@ class HomepageFragment : BaseFragment(null) {
     }
 
 }
+
+/** Adapts this app's artist model to the shape [HomeFeed] asks for. */
+private fun org.akanework.gramophone.ui.LibraryViewModel.artistInputs() =
+    artistItemList.value.orEmpty().map { HomeFeed.ArtistInput(it.title, it.songList) }

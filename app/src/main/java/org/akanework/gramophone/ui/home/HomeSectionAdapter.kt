@@ -13,7 +13,7 @@ import androidx.recyclerview.widget.RecyclerView
 import coil3.load
 import uk.akane.accord.R
 import org.akanework.gramophone.logic.ui.coolCrossfade
-import org.akanework.gramophone.ui.MainActivity
+import androidx.media3.session.MediaController
 
 /**
  * The vertical list of home rows.
@@ -22,7 +22,11 @@ import org.akanework.gramophone.ui.MainActivity
  * scrolling past several of them does not inflate a fresh set of cards for each.
  */
 class HomeSectionAdapter(
-    private val mainActivity: MainActivity
+    /**
+     * The controller to play a tapped card through. Passed as a lookup rather than an activity so
+     * the same feed serves the old screens and the Accord ones, whose activities share no type.
+     */
+    private val player: () -> MediaController?
 ) : RecyclerView.Adapter<HomeSectionAdapter.ViewHolder>() {
 
     private val sections = mutableListOf<HomeSection>()
@@ -56,6 +60,9 @@ class HomeSectionAdapter(
             if (section.subtitle.isNullOrBlank()) View.GONE else View.VISIBLE
         holder.items.adapter = CardAdapter(section.cards)
     }
+
+    /** What is currently on screen, for callers that need to re-submit with an extra row folded in. */
+    fun currentSections(): List<HomeSection> = sections.toList()
 
     fun submit(newSections: List<HomeSection>) {
         val diff = DiffUtil.calculateDiff(SectionDiff(sections.toList(), newSections))
@@ -92,7 +99,7 @@ class HomeSectionAdapter(
                 if (card.subtitle.isNullOrBlank()) View.GONE else View.VISIBLE
             holder.itemView.setOnClickListener {
                 if (card.songs.isEmpty()) return@setOnClickListener
-                mainActivity.getPlayer()?.apply {
+                player()?.apply {
                     setMediaItems(card.songs, card.startIndex, C.TIME_UNSET)
                     prepare()
                     play()
