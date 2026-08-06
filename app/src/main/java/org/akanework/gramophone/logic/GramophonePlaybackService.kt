@@ -411,8 +411,9 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
             controller?.currentPosition ?: lastReportedPositionMs,
             playedToEnd = false
         )
-        // Important: this must happen before sending stop() as that changes state ENDED -> IDLE
-        lastPlayedManager.save()
+        // Important: this must happen before sending stop() as that changes state ENDED -> IDLE.
+        // Immediately, not debounced: nothing will be around to run a delayed save.
+        lastPlayedManager.saveNow()
         mediaSession!!.player.stop()
         broadcastAudioSessionClose()
         controller!!.release()
@@ -713,6 +714,10 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
     override fun onTimelineChanged(timeline: Timeline, reason: Int) {
         super.onTimelineChanged(timeline, reason)
         if (reason == Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED) {
+            // The one thing that makes the stored queue stale. Everything else - skipping, pausing,
+            // seeking - only moves the position, and re-encoding thousands of tracks to record that
+            // is what made a large queue crawl.
+            lastPlayedManager.markQueueDirty()
             shuffleFactory?.let {
                 applyShuffleSeed(false, it)
                 shuffleFactory = null

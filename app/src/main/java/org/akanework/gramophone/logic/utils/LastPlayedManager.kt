@@ -39,6 +39,8 @@ import uk.akane.accord.BuildConfig
 import org.akanework.gramophone.logic.use
 import org.akanework.gramophone.logic.utils.exoplayer.EndedWorkaroundPlayer
 import java.nio.charset.StandardCharsets
+import android.os.Handler
+import android.os.Looper
 
 @OptIn(UnstableApi::class)
 class LastPlayedManager(context: Context,
@@ -54,10 +56,33 @@ class LastPlayedManager(context: Context,
          * 1: media id and path moved from raw to base64.
          */
         private const val LAST_PLAYED_FORMAT = 1
+
+        /** Long enough to swallow a burst of skips, short enough to survive being killed. */
+        private const val SAVE_DEBOUNCE_MS = 1200L
     }
 
     var allowSavingState = true
     private val prefs by lazy { context.getSharedPreferences("LastPlayedManager", 0) }
+
+    private val saveHandler = Handler(Looper.getMainLooper())
+
+    /**
+     * Whether the queue itself has changed since it was last written out.
+     *
+     * Skipping to the next track changes the index and nothing else, but the queue was being
+     * walked, re-encoded and rewritten in full every time - on a queue of several thousand
+     * tracks that is seconds of work per press, most of it before the UI can respond. The
+     * items are only re-encoded when something actually changed them; a skip writes the
+     * position and stops.
+     */
+    private var queueDirty = true
+
+    /** Called by the service when the playlist is replaced or reordered. */
+    fun markQueueDirty() {
+        queueDirty = true
+    }
+
+    private val saveRunnable = Runnable { performSave() }
 
     private fun dumpPlaylist(): MediaItemsWithStartPosition {
         val items = mutableListOf<MediaItem>()
@@ -77,7 +102,30 @@ class LastPlayedManager(context: Context,
         }
     }
 
+    /**
+     * Schedules a save.
+     *
+     * Coalesced, because this is called on every track change and every play/pause: holding
+     * down next through a queue otherwise starts one full save per press, and they queue up
+     * behind each other. Anything that must not be lost calls [saveNow].
+     */
     fun save() {
+        if (!allowSavingState) {
+            Log.i(TAG, "skipped save")
+            return
+        }
+        saveHandler.removeCallbacks(saveRunnable)
+        saveHandler.postDelayed(saveRunnable, SAVE_DEBOUNCE_MS)
+    }
+
+    /** Writes immediately - for shutdown, where a debounced save would never run. */
+    fun saveNow() {
+        if (!allowSavingState) return
+        saveHandler.removeCallbacks(saveRunnable)
+        performSave()
+    }
+
+    private fun performSave() {
         if (!allowSavingState) {
             Log.i(TAG, "skipped save")
             return
@@ -85,7 +133,11 @@ class LastPlayedManager(context: Context,
         if (BuildConfig.DEBUG) {
             Log.d(TAG, "dumping playlist...")
         }
-        val data = dumpPlaylist()
+        // Only walked when the queue actually changed; see [queueDirty].
+        val items = if (queueDirty) dumpPlaylist().mediaItems else null
+        queueDirty = false
+        val startIndex = controller.currentMediaItemIndex
+        val startPosition = controller.currentPosition
         val repeatMode = controller.repeatMode
         val shuffleModeEnabled = controller.shuffleModeEnabled
         val playbackParameters = controller.playbackParameters
@@ -93,11 +145,11 @@ class LastPlayedManager(context: Context,
         val ended = controller.playbackState == Player.STATE_ENDED
         CoroutineScope(Dispatchers.Default).launch {
             if (BuildConfig.DEBUG) {
-                Log.d(TAG, "saving playlist (${data.mediaItems.size} items, repeat $repeatMode, " +
+                Log.d(TAG, "saving playlist (${items?.size ?: -1} items, repeat $repeatMode, " +
                         "shuffle $shuffleModeEnabled, ended $ended)...")
             }
-            val lastPlayed = PrefsListUtils.dump(
-                data.mediaItems.map {
+            val lastPlayed = items?.let { list -> PrefsListUtils.dump(
+                list.map {
                     val b = SafeDelimitedStringConcat(":")
                     // add new entries at the bottom and remember they are null for upgrade path
                     // Base64, not raw. A media id is not guaranteed to avoid the ':' delimiter -
@@ -136,12 +188,17 @@ class LastPlayedManager(context: Context,
                     b.writeLong(it.mediaMetadata.extras?.getLong("ModifiedDate"))
                     b.toString()
                 })
+            }
             prefs.edit {
-                putStringSet("last_played_lst", lastPlayed.first)
-                putInt("last_played_format", LAST_PLAYED_FORMAT)
-                putString("last_played_grp", lastPlayed.second)
-                putInt("last_played_idx", data.startIndex)
-                putLong("last_played_pos", data.startPositionMs)
+                // Absent when the queue is unchanged - the stored one is still correct, and
+                // rewriting several thousand entries to say so is the whole cost being avoided.
+                lastPlayed?.let {
+                    putStringSet("last_played_lst", it.first)
+                    putInt("last_played_format", LAST_PLAYED_FORMAT)
+                    putString("last_played_grp", it.second)
+                }
+                putInt("last_played_idx", startIndex)
+                putLong("last_played_pos", startPosition)
                 putInt("repeat_mode", repeatMode)
                 putBoolean("shuffle", shuffleModeEnabled)
                 putString("shuffle_persist", persistent?.toString())
