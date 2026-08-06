@@ -741,6 +741,18 @@
     <string name="popup_favorite">Favorite</string>
     <string name="no_song_playing">Nothing is playing</string>
     <string name="output_device">Audio output</string>
+
+    <!-- Jellyfin profile picture. -->
+    <string name="settings_profile_picture">Profile picture</string>
+    <string name="settings_profile_picture_set">Using your Jellyfin picture</string>
+    <string name="settings_profile_picture_none">Not set</string>
+    <string name="settings_profile_picture_choose">Choose a picture</string>
+    <string name="settings_profile_picture_remove">Remove picture</string>
+    <string name="settings_profile_picture_signed_out">Sign in to Jellyfin first</string>
+    <string name="settings_profile_picture_unreadable">That file could not be read as an image</string>
+    <string name="settings_profile_picture_updated">Profile picture updated</string>
+    <string name="settings_profile_picture_removed">Profile picture removed</string>
+    <string name="settings_profile_picture_failed">The server would not accept that change</string>
     <string name="station_from_song">%1$s Station</string>
     <string name="share_song_text">%1$s — %2$s</string>
     <string name="share_lyrics_none">This track has no lyrics to share</string>

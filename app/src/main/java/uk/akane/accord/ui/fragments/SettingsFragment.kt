@@ -1,17 +1,29 @@
 package uk.akane.accord.ui.fragments
 
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.ImageDecoder
+import android.net.Uri
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
+import android.widget.Toast
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.widget.NestedScrollView
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.lifecycleScope
 import androidx.preference.PreferenceManager
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinCredentialStore
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinUserImage
 import org.akanework.gramophone.ui.JellyfinLoginActivity
 import org.akanework.gramophone.ui.fragments.settings.AppearanceSettingsFragment
 import org.akanework.gramophone.ui.fragments.settings.AudioSettingsFragment
@@ -27,6 +39,7 @@ import uk.akane.accord.R
 import uk.akane.accord.ui.MainActivity
 import uk.akane.accord.ui.components.NavigationBar
 import uk.akane.accord.ui.components.SettingsListBuilder
+import java.io.ByteArrayOutputStream
 
 /**
  * Settings, in the shape the 1.0-stable build uses - sectioned cards rather than the old preference
@@ -77,6 +90,112 @@ class SettingsFragment : Fragment() {
         mainActivity.fragmentSwitcherView.addFragmentToCurrentStack(fragment)
     }
 
+    /**
+     * The photo picker. Registered as a field because a launcher has to exist before the fragment
+     * reaches RESUMED, which rules out creating one when the row is tapped.
+     *
+     * PickVisualMedia rather than an open-document intent: it needs no storage permission at all, so
+     * choosing a profile picture never asks for access to the whole gallery.
+     */
+    private val profilePicturePicker = registerForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) { uri -> if (uri != null) uploadProfilePicture(uri) }
+
+    private fun showProfilePictureOptions() {
+        val context = requireContext()
+        if (!JellyfinCredentialStore.hasStoredSession(context)) {
+            toast(getString(R.string.settings_profile_picture_signed_out))
+            return
+        }
+        val hasPicture = JellyfinUserImage.urlFlow.value != null
+        val options = buildList {
+            add(getString(R.string.settings_profile_picture_choose))
+            if (hasPicture) add(getString(R.string.settings_profile_picture_remove))
+        }
+        MaterialAlertDialogBuilder(context)
+            .setTitle(R.string.settings_profile_picture)
+            .setItems(options.toTypedArray()) { _, which ->
+                if (which == 0) {
+                    profilePicturePicker.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
+                } else {
+                    removeProfilePicture()
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    /**
+     * Scales the chosen image down and sends it.
+     *
+     * The scaling is not cosmetic. Jellyfin stores the picture as given and hands it back unchanged
+     * whatever size a client asks for, so a full-resolution photo becomes a multi-megabyte download
+     * for every client that shows an avatar, forever.
+     */
+    private fun uploadProfilePicture(uri: Uri) {
+        val context = requireContext().applicationContext
+        viewLifecycleOwner.lifecycleScope.launch {
+            val bytes = withContext(Dispatchers.IO) { scaleForUpload(context, uri) }
+            if (bytes == null) {
+                toast(getString(R.string.settings_profile_picture_unreadable))
+                return@launch
+            }
+            val ok = withContext(Dispatchers.IO) {
+                JellyfinUserImage.upload(bytes, JellyfinUserImage.UPLOAD_MEDIA_TYPE)
+            }
+            toast(
+                getString(
+                    if (ok) R.string.settings_profile_picture_updated
+                    else R.string.settings_profile_picture_failed
+                )
+            )
+            if (ok && isAdded) builder.build(sections())
+        }
+    }
+
+    private fun removeProfilePicture() {
+        viewLifecycleOwner.lifecycleScope.launch {
+            val ok = withContext(Dispatchers.IO) { JellyfinUserImage.remove() }
+            toast(
+                getString(
+                    if (ok) R.string.settings_profile_picture_removed
+                    else R.string.settings_profile_picture_failed
+                )
+            )
+            if (ok && isAdded) builder.build(sections())
+        }
+    }
+
+    /** Decodes [uri] no larger than needed and re-encodes it as JPEG. Null if it is not an image. */
+    private fun scaleForUpload(context: android.content.Context, uri: Uri): ByteArray? =
+        runCatching {
+            val source = ImageDecoder.createSource(context.contentResolver, uri)
+            val bitmap = ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
+                val longestEdge = maxOf(info.size.width, info.size.height)
+                if (longestEdge > JellyfinUserImage.MAX_EDGE_PX) {
+                    val scale = JellyfinUserImage.MAX_EDGE_PX.toFloat() / longestEdge
+                    decoder.setTargetSize(
+                        (info.size.width * scale).toInt().coerceAtLeast(1),
+                        (info.size.height * scale).toInt().coerceAtLeast(1)
+                    )
+                }
+                // The upload is re-encoded, so a software bitmap is required - a hardware one has no
+                // pixels this process can read.
+                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+            }
+            ByteArrayOutputStream().use { out ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, JellyfinUserImage.UPLOAD_QUALITY, out)
+                bitmap.recycle()
+                out.toByteArray()
+            }
+        }.getOrNull()
+
+    private fun toast(message: String) {
+        Toast.makeText(requireContext(), message, Toast.LENGTH_SHORT).show()
+    }
+
     private fun sections(): List<SettingsListBuilder.Section> {
         val context = requireContext()
         val prefs = PreferenceManager.getDefaultSharedPreferences(context)
@@ -95,6 +214,16 @@ class SettingsFragment : Fragment() {
                     ) {
                         startActivity(Intent(context, JellyfinLoginActivity::class.java))
                     },
+                    SettingsListBuilder.Row.Navigation(
+                        title = getString(R.string.settings_profile_picture),
+                        summary = getString(
+                            if (JellyfinUserImage.urlFlow.value != null) {
+                                R.string.settings_profile_picture_set
+                            } else {
+                                R.string.settings_profile_picture_none
+                            }
+                        )
+                    ) { showProfilePictureOptions() },
                     SettingsListBuilder.Row.Toggle(
                         title = getString(R.string.settings_sync_on_startup),
                         checked = prefs.getBoolean("sync_on_startup", false)

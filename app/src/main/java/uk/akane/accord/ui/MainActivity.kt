@@ -41,6 +41,8 @@ import uk.akane.accord.ui.fragments.SearchFragment
 import uk.akane.accord.ui.viewmodels.MediaControllerViewModel
 import uk.akane.cupertino.navigation.FragmentSwitcherView
 import uk.akane.cupertino.utils.AnimationUtils
+import androidx.lifecycle.lifecycleScope
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinUserImage
 
 class MainActivity : AppCompatActivity() {
     companion object {
@@ -84,6 +86,11 @@ class MainActivity : AppCompatActivity() {
         controllerViewModel.addControllerCallback(lifecycle) { controller, controllerLifecycle ->
             ready = true
         }
+
+        // The navigation bar on every screen draws the signed-in user's Jellyfin picture, so it is
+        // fetched once here rather than by each bar. Off the main thread: it opens the credential
+        // store and asks the server.
+        lifecycleScope.launch(Dispatchers.IO) { JellyfinUserImage.refresh() }
 
         setContentView(R.layout.activity_main)
 

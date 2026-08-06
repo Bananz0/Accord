@@ -2,6 +2,8 @@ package uk.akane.accord.ui.components
 
 import android.animation.ValueAnimator
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Path
 import android.graphics.BlendMode
 import android.graphics.Canvas
 import android.graphics.Color
@@ -27,7 +29,17 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.findViewTreeLifecycleOwner
+import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.RecyclerView
+import coil3.imageLoader
+import coil3.request.Disposable
+import coil3.request.ImageRequest
+import coil3.request.allowHardware
+import coil3.toBitmap
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinUserImage
 import uk.akane.accord.R
 import uk.akane.accord.logic.dp
 import uk.akane.accord.logic.inverseLerp
@@ -56,6 +68,16 @@ class NavigationBar @JvmOverloads constructor(
 
     private val avatarColor = accentColor
     private val avatarDrawable = ResourcesCompat.getDrawable(resources, R.drawable.ic_person_navigation_bar, null)!!
+
+    /**
+     * The signed-in user's Jellyfin picture, drawn in place of the glyph once it arrives. Null until
+     * then, and whenever the user has no picture set.
+     */
+    private var avatarBitmap: Bitmap? = null
+    private var avatarRequest: Disposable? = null
+    private val avatarPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { isFilterBitmap = true }
+    private val avatarClipPath = Path()
+    private var avatarJob: Job? = null
 
     private val ellipsisBackgroundColor = resources.getColor(R.color.navigationBarEllipsisBackground, null)
     private val ellipsisBackgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = ellipsisBackgroundColor }
@@ -445,11 +467,42 @@ class NavigationBar @JvmOverloads constructor(
             // be tapped. Recording them here is what lets it open anything.
             avatarBounds.set(drawableLeft, drawableTop, drawableRight, drawableBottom)
 
-            avatarDrawable.setTint(avatarColor)
-            if (avatarColor != accent) {
-                avatarDrawable.setTint(accent)
+            val picture = avatarBitmap
+            if (picture != null) {
+                // Clipped to a circle rather than drawn square: Jellyfin accepts any aspect ratio,
+                // and the glyph this replaces is round, so a raw photo would be the one square thing
+                // in the bar.
+                val saved = canvas.save()
+                avatarClipPath.reset()
+                avatarClipPath.addOval(avatarBounds, Path.Direction.CW)
+                canvas.clipPath(avatarClipPath)
+                // centerCrop: fill the circle from the shorter edge and let the longer one overflow,
+                // so a portrait photo is not squashed into a square.
+                val scale = maxOf(
+                    avatarBounds.width() / picture.width,
+                    avatarBounds.height() / picture.height
+                )
+                val drawWidth = picture.width * scale
+                val drawHeight = picture.height * scale
+                canvas.drawBitmap(
+                    picture,
+                    null,
+                    RectF(
+                        avatarBounds.centerX() - drawWidth / 2f,
+                        avatarBounds.centerY() - drawHeight / 2f,
+                        avatarBounds.centerX() + drawWidth / 2f,
+                        avatarBounds.centerY() + drawHeight / 2f,
+                    ),
+                    avatarPaint
+                )
+                canvas.restoreToCount(saved)
+            } else {
+                avatarDrawable.setTint(avatarColor)
+                if (avatarColor != accent) {
+                    avatarDrawable.setTint(accent)
+                }
+                avatarDrawable.draw(canvas)
             }
-            avatarDrawable.draw(canvas)
         }
 
         if (shouldDrawAddButton) {
@@ -842,7 +895,59 @@ class NavigationBar @JvmOverloads constructor(
         refreshRenderNode()
     }
 
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        observeAvatar()
+    }
+
+    /**
+     * Follows the signed-in user's picture for as long as this bar is on screen.
+     *
+     * Every screen has its own bar, so this is per-view rather than set once from the activity - and
+     * changing the picture in settings then reaches all of them without any of them being told.
+     */
+    private fun observeAvatar() {
+        val owner = findViewTreeLifecycleOwner() ?: return
+        avatarJob?.cancel()
+        avatarJob = owner.lifecycleScope.launch {
+            JellyfinUserImage.urlFlow.collectLatest { url ->
+                avatarRequest?.dispose()
+                avatarRequest = null
+                if (url == null) {
+                    avatarBitmap = null
+                    invalidate()
+                    return@collectLatest
+                }
+                // Sized to the bar, not to the file. Jellyfin hands back the original - a picture
+                // uploaded from a desktop can be several megabytes - and decoding that at full size
+                // to draw it at 32dp would be most of a screen's memory for one glyph.
+                val target = EXPANDED_MENU_ITEM_SIZE.dp.px.toInt().coerceAtLeast(1)
+                avatarRequest = context.imageLoader.enqueue(
+                    ImageRequest.Builder(context)
+                        .data(url)
+                        .size(target)
+                        .allowHardware(false)
+                        .target(
+                            onSuccess = { image ->
+                                avatarBitmap = image.toBitmap()
+                                invalidate()
+                            },
+                            onError = {
+                                avatarBitmap = null
+                                invalidate()
+                            }
+                        )
+                        .build()
+                )
+            }
+        }
+    }
+
     override fun onDetachedFromWindow() {
+        avatarJob?.cancel()
+        avatarJob = null
+        avatarRequest?.dispose()
+        avatarRequest = null
         menuButtonAnimator?.cancel()
         menuButtonAnimator = null
         menuButtonChecked = false

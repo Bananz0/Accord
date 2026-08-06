@@ -36,6 +36,7 @@ import kotlinx.coroutines.withContext
 import uk.akane.accord.R
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinClientHolder
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinPlugins
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinUserImage
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.exception.ApiClientException
 import org.jellyfin.sdk.api.client.exception.InvalidStatusException
@@ -399,6 +400,9 @@ class JellyfinLoginActivity : AppCompatActivity() {
             )
             JellyfinClientHolder.invalidate()
             JellyfinPlugins.invalidate()
+            // The signed-in user's picture is what the navigation bar draws, so it has to be known
+            // before the first screen that has one is shown.
+            JellyfinUserImage.refresh()
             LoginResult.Success
         }
     } catch (e: TimeoutException) {
