@@ -741,6 +741,8 @@
     <string name="popup_favorite">Favorite</string>
     <string name="no_song_playing">Nothing is playing</string>
     <string name="output_device">Audio output</string>
+    <string name="autoplay_on">Infinity play on — similar music keeps going</string>
+    <string name="autoplay_off">Infinity play off</string>
 
     <!-- Jellyfin profile picture. -->
     <string name="settings_profile_picture">Profile picture</string>

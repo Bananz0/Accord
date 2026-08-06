@@ -49,6 +49,8 @@ import uk.akane.accord.ui.MainActivity
 import uk.akane.accord.ui.components.player.FloatingPanelLayout
 import uk.akane.accord.ui.components.player.PlayerPopupMenu
 import uk.akane.cupertino.utils.AnimationUtils
+import uk.akane.cupertino.popup.PopupHelper
+import uk.akane.cupertino.popup.showPopupMenuFromAnchorRect
 
 class NavigationBar @JvmOverloads constructor(
     context: Context,
@@ -779,7 +781,7 @@ class NavigationBar @JvmOverloads constructor(
                 addButtonPressed = true
                 return true
             }
-            if (avatarClickListener != null && avatarBounds.contains(ev.x, ev.y)) {
+            if (shouldDrawAvatar() && avatarBounds.contains(ev.x, ev.y)) {
                 return true
             }
             if (menuButtonBounds.contains(ev.x, ev.y)) {
@@ -800,7 +802,7 @@ class NavigationBar @JvmOverloads constructor(
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                if (avatarClickListener != null && avatarBounds.contains(event.x, event.y)) {
+                if (shouldDrawAvatar() && avatarBounds.contains(event.x, event.y)) {
                     avatarPressed = true
                     return true
                 }
@@ -820,7 +822,7 @@ class NavigationBar @JvmOverloads constructor(
             }
             MotionEvent.ACTION_UP -> {
                 if (avatarPressed && avatarBounds.contains(event.x, event.y)) {
-                    avatarClickListener?.invoke()
+                    (avatarClickListener ?: { openSettings() }).invoke()
                     performClick()
                 }
                 avatarPressed = false
@@ -956,6 +958,8 @@ class NavigationBar @JvmOverloads constructor(
         returnClickListener = null
         menuClickListener = null
         avatarClickListener = null
+        menuEntries = null
+        menuEntryClickListener = null
         avatarPressed = false
         dismissOwnPopup()
         super.onDetachedFromWindow()
@@ -1018,19 +1022,50 @@ class NavigationBar @JvmOverloads constructor(
         }
     }
 
+    /**
+     * The avatar is drawn on every screen that has no return button, so it has to do something
+     * on every one of them. Settings is where an account and its preferences live; a screen may
+     * still override it with [setOnAvatarClickListener].
+     */
+    /** The avatar occupies the slot the return button would otherwise take. */
+    private fun shouldDrawAvatar() = !shouldDrawReturnButton
+
+    private fun openSettings() {
+        activity.openSettings()
+    }
+
+    /** Entries for this screen's overflow menu, or null to use the general one. */
+    private var menuEntries: (() -> PopupHelper.PopupEntries)? = null
+    private var menuEntryClickListener: ((PopupHelper.PopupEntry) -> Unit)? = null
+
+    /** Lets a screen put its own entries behind the three dots. */
+    fun setMenuEntries(
+        entries: () -> PopupHelper.PopupEntries,
+        onClick: (PopupHelper.PopupEntry) -> Unit,
+    ) {
+        menuEntries = entries
+        menuEntryClickListener = onClick
+    }
+
     private fun showDefaultMenu() {
         if (menuButtonBounds.isEmpty) return
         val popupHost = activity.findViewById<FloatingPanelLayout>(R.id.floating)
         val backgroundView = activity.findViewById<View>(R.id.shrink_container)
-        PlayerPopupMenu.show(
-            host = popupHost,
+        val entries = menuEntries?.invoke() ?: ScreenPopupMenu.build(resources)
+        val onEntry: (PopupHelper.PopupEntry) -> Unit = menuEntryClickListener
+            ?: { entry -> ScreenPopupMenu.handle(activity, entry) }
+        popupHost.showPopupMenuFromAnchorRect(
+            entries = entries,
             anchorView = this,
             anchorRect = menuButtonBounds,
             showBelow = true,
-            backgroundView = backgroundView
-        ) {
-            setMenuButtonChecked(false)
-        }
+            alignToRight = true,
+            anchorOffsetY = 12.dp.px.toInt(),
+            belowGapPx = 8.dp.px.toInt(),
+            backgroundView = backgroundView,
+            onDismiss = { setMenuButtonChecked(false) },
+            onEntryClick = onEntry,
+        )
         setMenuButtonChecked(true)
     }
 

@@ -66,36 +66,70 @@ object AudioOutput {
     }
 
     /**
-     * Picks the glyph. Earbuds are told apart from over-ear headphones by name, because Android
-     * reports both as BLUETOOTH_A2DP and nothing in [AudioDeviceInfo] distinguishes them.
+     * Picks the glyph.
+     *
+     * Type first, name second. The type is what Android is sure about - a car head unit and a wired
+     * headset are never in doubt - while earbuds and over-ear headphones are both reported as
+     * BLUETOOTH_A2DP with nothing to tell them apart, so for those the product name is the only
+     * signal there is.
+     *
+     * Bluetooth device class is deliberately not consulted. It is self-reported and routinely wrong:
+     * the speaker paired to the phone this was built against announces itself as a wearable headset.
+     *
+     * To use a real product image for a particular device - a manufacturer's own artwork, which this
+     * repo does not ship - add it to [NAMED_DEVICES] rather than anywhere else.
      */
     @DrawableRes
     private fun iconFor(device: AudioDeviceInfo, name: String?): Int {
         val lowered = name?.lowercase().orEmpty()
-        return when {
-            EARBUD_NAMES.any { lowered.contains(it) } -> R.drawable.ic_output_earbuds
-            device.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
-                    device.type == AudioDeviceInfo.TYPE_BLE_HEADSET ||
-                    device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> R.drawable.ic_headphones
+        NAMED_DEVICES.firstOrNull { (needles, _) -> needles.any { lowered.contains(it) } }
+            ?.let { return it.second }
 
-            device.type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
-                    device.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
-                    device.type == AudioDeviceInfo.TYPE_USB_HEADSET -> R.drawable.ic_headphones
+        return when (device.type) {
+            AudioDeviceInfo.TYPE_WIRED_HEADSET,
+            AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+            AudioDeviceInfo.TYPE_USB_HEADSET,
+            AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> R.drawable.ic_headphones
 
-            device.type == AudioDeviceInfo.TYPE_BLE_SPEAKER ||
-                    device.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> R.drawable.ic_airplay_radio
+            AudioDeviceInfo.TYPE_BLE_SPEAKER,
+            AudioDeviceInfo.TYPE_DOCK -> R.drawable.ic_output_speaker
+
+            // Nothing distinguishes headphones from a speaker here, and the name did not either.
+            // Headphones is the likelier answer for something paired to a phone for music.
+            AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+            AudioDeviceInfo.TYPE_BLE_HEADSET -> R.drawable.ic_headphones
 
             else -> R.drawable.ic_airplay_radio
         }
     }
 
     /**
-     * Names that mean earbuds rather than headphones. Bluetooth gives a product name and nothing
-     * else, so this is the only signal there is; anything unmatched falls back to the headphone
-     * glyph, which is wrong-looking rather than wrong.
+     * Product names worth recognising, most specific first.
+     *
+     * Bluetooth hands over a product name and little else, so this is where a device becomes a
+     * particular kind of thing rather than "some audio device". Matching is a substring of the
+     * lowercased name, so "Glen's Buds3 Pro" matches "buds".
      */
-    private val EARBUD_NAMES = listOf(
-        "buds", "airpods", "earbuds", "earphone", "pods", "freebuds", "liberty", "elite",
+    private val NAMED_DEVICES: List<Pair<List<String>, Int>> = listOf(
+        // Cars announce themselves by head-unit or manufacturer name far more often than by type.
+        listOf(
+            "car", "auto", "sync", "uconnect", "mylink", "carplay", "kenwood", "pioneer", "alpine",
+        ) to R.drawable.ic_output_car,
+        // Earbuds. Covers the families that actually turn up: Samsung, Apple, Google, Sony, Huawei,
+        // Anker, Jabra, Nothing, Beats.
+        listOf(
+            "buds", "airpods", "earbud", "earphone", "pods", "freebuds", "liberty", "elite",
+            "wf-", "nothing ear", "ear (", "studio buds", "earfun", "jaybird",
+        ) to R.drawable.ic_output_earbuds,
+        // Over-ear and on-ear.
+        listOf(
+            "headphone", "headset", "wh-", "quietcomfort", "momentum", "airpods max", "hd ",
+            "beats studio", "solo", "bose", "sennheiser",
+        ) to R.drawable.ic_headphones,
+        listOf(
+            "speaker", "soundbar", "boombox", "flip", "charge", "pulse", "sonos", "homepod",
+            "w-king", "megaboom", "wonderboom",
+        ) to R.drawable.ic_output_speaker,
     )
 
     private val PRIORITY = listOf(
@@ -106,6 +140,7 @@ object AudioOutput {
         AudioDeviceInfo.TYPE_WIRED_HEADSET,
         AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
         AudioDeviceInfo.TYPE_BLE_SPEAKER,
+        AudioDeviceInfo.TYPE_DOCK,
         AudioDeviceInfo.TYPE_BUILTIN_SPEAKER,
     )
 

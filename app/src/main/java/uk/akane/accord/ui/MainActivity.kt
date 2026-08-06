@@ -43,6 +43,12 @@ import uk.akane.cupertino.navigation.FragmentSwitcherView
 import uk.akane.cupertino.utils.AnimationUtils
 import androidx.lifecycle.lifecycleScope
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinUserImage
+import android.media.AudioManager
+import android.view.KeyEvent
+import androidx.core.content.ContextCompat
+import androidx.media3.common.C
+import kotlinx.coroutines.flow.first
+import uk.akane.accord.ui.fragments.SettingsFragment
 
 class MainActivity : AppCompatActivity() {
     companion object {
@@ -71,8 +77,44 @@ class MainActivity : AppCompatActivity() {
     private var isHandlingNowPlayingBack: Boolean = false
     private var nowPlayingBackStartFraction: Float = 0F
 
+    /**
+     * Swallows the system volume panel while the now-playing screen is open.
+     *
+     * That screen has a volume slider of its own, and the system's overlay lands on top of it - two
+     * bars for one thing. The volume itself still changes, and the player's slider follows it
+     * through the broadcast it already listens for. Collapsed, the keys behave normally.
+     */
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (isVolumeKey(keyCode) && isNowPlayingOpen()) {
+            ContextCompat.getSystemService(this, AudioManager::class.java)?.adjustStreamVolume(
+                AudioManager.STREAM_MUSIC,
+                if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) AudioManager.ADJUST_RAISE
+                else AudioManager.ADJUST_LOWER,
+                // No FLAG_SHOW_UI: that flag is the overlay.
+                0
+            )
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    /** Consumed as well, or the system handles the release and shows the panel anyway. */
+    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+        if (isVolumeKey(keyCode) && isNowPlayingOpen()) return true
+        return super.onKeyUp(keyCode, event)
+    }
+
+    private fun isVolumeKey(keyCode: Int) =
+        keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
+
+    private fun isNowPlayingOpen() =
+        ::floatingPanelLayout.isInitialized && floatingPanelLayout.slideFraction > 0F
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // So the hardware keys act on music rather than on the ringer when nothing is playing yet.
+        volumeControlStream = AudioManager.STREAM_MUSIC
 
         UiUtils.init(this)
 
@@ -379,6 +421,24 @@ class MainActivity : AppCompatActivity() {
             containerCardView.translationY = animatedValue
             shrinkContainer(1f - animatedValue / screenHeight, DESIRED_BOTTOM_SHEET_DISPLAY_RATIO)
             shrinkFloatingPanel(1f - animatedValue / screenHeight, DESIRED_BOTTOM_SHEET_DISPLAY_RATIO)
+        }
+    }
+
+    /** Opens settings, from the profile control on whichever screen is showing. */
+    fun openSettings() {
+        fragmentSwitcherView.addFragmentToCurrentStack(SettingsFragment())
+    }
+
+    /** Plays the whole library in a random order, from the screen-level overflow menu. */
+    fun shuffleWholeLibrary() {
+        lifecycleScope.launch {
+            val library = reader.songListFlow.first()
+            if (library.isEmpty()) return@launch
+            getPlayer()?.apply {
+                setMediaItems(library.shuffled(), 0, C.TIME_UNSET)
+                prepare()
+                play()
+            }
         }
     }
 

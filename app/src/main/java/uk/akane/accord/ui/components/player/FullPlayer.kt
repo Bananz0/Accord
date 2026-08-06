@@ -66,7 +66,9 @@ import androidx.media3.session.SessionCommand
 import org.akanework.gramophone.logic.utils.MediaStoreUtils
 import android.media.AudioDeviceCallback
 import android.view.ViewConfiguration
+import android.view.animation.AccelerateInterpolator
 import android.view.animation.DecelerateInterpolator
+import android.view.animation.LinearInterpolator
 import android.widget.ImageView
 import org.akanework.gramophone.logic.utils.AudioOutput
 import kotlin.math.abs
@@ -99,6 +101,13 @@ import uk.akane.cupertino.widget.special.BlendView
 import uk.akane.cupertino.utils.AnimationUtils
 import uk.akane.cupertino.utils.AnimationUtils.LONG_DURATION
 import uk.akane.cupertino.utils.AnimationUtils.MID_DURATION
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.view.animation.Interpolator
+import android.view.animation.PathInterpolator
+import androidx.preference.PreferenceManager
+import kotlinx.coroutines.flow.first
+import org.akanework.gramophone.logic.data.AutoplayQueue
 
 class FullPlayer @JvmOverloads constructor(
     context: Context,
@@ -164,7 +173,46 @@ class FullPlayer @JvmOverloads constructor(
     private var isUserVolumeScrubbing = false
     private var coverBaseScale = 1F
     private var coverBaseTranslationX = 0F
-    private var coverSwipeRestingTranslationX: Float? = null
+    /**
+     * How far the artwork is displaced from where it belongs, by a drag or a track change.
+     *
+     * Kept as an offset rather than by writing translationX directly, so it composes with the
+     * paused-state shrink and the panel's slide transform instead of racing them. Suppressing
+     * those during a slide and snapping at the end is what made the movement finish with a jolt.
+     */
+    private var coverSlideOffsetX = 0F
+    private var coverSlideAnimator: ValueAnimator? = null
+
+    /** Puts the cover back if a requested skip turned out not to happen. */
+    private val coverSlideBackstop = Runnable {
+        if (!coverSlideInFlight && pendingCoverSlide != SLIDE_NONE) {
+            pendingCoverSlide = SLIDE_NONE
+            animateCoverOffset(0F, COVER_SWIPE_SETTLE_MS, settleInterpolator)
+        }
+    }
+    /** Where the artwork sits when nothing is moving it; see [updateCoverTransform]. */
+    private var coverRestingTranslationX = 0F
+    /** Which way the artwork should travel on the next track change, or [SLIDE_NONE]. */
+    private var pendingCoverSlide = SLIDE_NONE
+    /**
+     * True from the moment the outgoing artwork starts moving until the incoming one has landed.
+     *
+     * While it is set, nothing else may write the cover's translationX. The paused-state shrink and
+     * the panel's slide transform both do so whenever playback state changes - which is exactly what
+     * a track change causes - and their writes landing mid-animation is what made the movement
+     * stutter.
+     */
+    private var coverSlideInFlight = false
+    private var coverSlideOutDone = false
+    private var coverSlideArtReady = false
+    /**
+     * The incoming artwork, held back until the outgoing cover has left.
+     *
+     * Cached artwork arrives within a frame or two, so applying it as soon as it loads meant the
+     * cover that slid away was already showing the *new* track - the old one never left, and the
+     * same picture slid out and back in.
+     */
+    private var pendingCoverDrawable: android.graphics.drawable.Drawable? = null
     private var slideFraction = 0F
     private var coverBaseTranslationY = 0F
     private var coverPauseScale = 1F
@@ -413,6 +461,22 @@ class FullPlayer @JvmOverloads constructor(
             listOverlayButton.toggle()
         }
 
+        queueAutoplayButton.isChecked = isAutoplayEnabled()
+        queueAutoplayButton.setOnClickListener {
+            val enabled = !isAutoplayEnabled()
+            PreferenceManager.getDefaultSharedPreferences(context)
+                .edit().putBoolean(PREF_AUTOPLAY, enabled).apply()
+            queueAutoplayButton.isChecked = enabled
+            Toast.makeText(
+                context,
+                if (enabled) R.string.autoplay_on else R.string.autoplay_off,
+                Toast.LENGTH_SHORT
+            ).show()
+            // Turning it on with a queue already near its end should not require waiting for
+            // another track to finish first.
+            if (enabled) topUpQueueIfNeeded()
+        }
+
         queueRepeatButton.setOnClickListener {
             val controller = instance ?: return@setOnClickListener
             val nextRepeatMode = when (controller.repeatMode) {
@@ -471,9 +535,11 @@ class FullPlayer @JvmOverloads constructor(
         }
 
         previousButton.setOnClickListener {
+            pendingCoverSlide = SLIDE_PREVIOUS
             instance?.seekToPrevious()
         }
         nextButton.setOnClickListener {
+            pendingCoverSlide = SLIDE_NEXT
             instance?.seekToNext()
         }
 
@@ -725,7 +791,8 @@ class FullPlayer @JvmOverloads constructor(
     private fun animateCoverChange(fraction: Float) {
         coverBaseTranslationX = lerp(0f, finalTranslationX, fraction)
         coverBaseTranslationY = lerp(0f, finalTranslationY, fraction)
-        coverSimpleImageView.translationX = coverBaseTranslationX
+        coverRestingTranslationX = coverBaseTranslationX
+        applyCoverTranslation()
         coverSimpleImageView.translationY = coverBaseTranslationY
         coverSimpleImageView.pivotX = 0F
         coverSimpleImageView.pivotY = 0F
@@ -1028,27 +1095,38 @@ class FullPlayer @JvmOverloads constructor(
      * something that should come away in your hand.
      */
     override fun onCoverSwipeMove(dx: Float) {
-        // Captured on the first move rather than read from coverBaseTranslationX: the resting
-        // position also carries the offset the paused-state shrink applies, and starting from the
-        // base would make the cover jump the moment a swipe began while paused.
-        val resting = coverSwipeRestingTranslationX
-            ?: coverSimpleImageView.translationX.also { coverSwipeRestingTranslationX = it }
-        coverSimpleImageView.translationX = resting + dx * COVER_SWIPE_FOLLOW
+        coverSlideAnimator?.cancel()
+        coverSlideAnimator = null
+        coverSlideOffsetX = dx * COVER_SWIPE_FOLLOW
+        applyCoverTranslation()
     }
 
     override fun onCoverSwipeEnd(dx: Float) {
-        val resting = coverSwipeRestingTranslationX ?: coverSimpleImageView.translationX
-        coverSwipeRestingTranslationX = null
         if (abs(dx) > coverSimpleImageView.width * COVER_SWIPE_THRESHOLD) {
-            // Dragging the current cover away to the left brings on the next track, matching how
-            // every carousel on the platform reads.
-            if (dx < 0) instance?.seekToNext() else instance?.seekToPrevious()
+            // Dragging the current cover away to the left brings on the next track, matching
+            // how every carousel on the platform reads. The cover is not sent home here - the
+            // track change does that, carrying it the rest of the way out and bringing the new
+            // one in.
+            val player = instance
+            val forwards = dx < 0
+            // At the end of the queue seekToNext does nothing, so no track change arrives and
+            // nothing would ever bring the cover back - it sat where the finger left it.
+            val willMove = if (forwards) {
+                player?.hasNextMediaItem() == true
+            } else {
+                player?.hasPreviousMediaItem() == true || (player?.currentPosition ?: 0L) > 0L
+            }
+            if (willMove) {
+                pendingCoverSlide = if (forwards) SLIDE_NEXT else SLIDE_PREVIOUS
+                if (forwards) player?.seekToNext() else player?.seekToPrevious()
+                // A backstop for the cases the check above cannot see - a repeat mode changing
+                // under us, or a queue emptied while the finger was down.
+                postDelayed(coverSlideBackstop, COVER_SLIDE_BACKSTOP_MS)
+                return
+            }
         }
-        coverSimpleImageView.animate()
-            .translationX(resting)
-            .setDuration(COVER_SWIPE_SETTLE_MS)
-            .setInterpolator(DecelerateInterpolator())
-            .start()
+        // Not far enough to count. Back where it was.
+        animateCoverOffset(0F, COVER_SWIPE_SETTLE_MS, settleInterpolator)
     }
 
     /**
@@ -1086,6 +1164,10 @@ class FullPlayer @JvmOverloads constructor(
         if (instance?.mediaItemCount != 0) {
             lastDisposable?.dispose()
             lastDisposable = null
+            // A track that ended on its own is still going forwards, so it gets the same movement
+            // as pressing next; only the very first item appears without travelling.
+            if (pendingCoverSlide == SLIDE_NONE && !firstTime) pendingCoverSlide = SLIDE_NEXT
+            startCoverSlideOut()
             loadCoverForImageView()
 
             titleTextView.setTextAnimation(
@@ -1098,6 +1180,7 @@ class FullPlayer @JvmOverloads constructor(
             )
             updateProgressDisplay()
             syncFavoriteButtonsForCurrentItem()
+            topUpQueueIfNeeded()
         } else {
             lastDisposable?.dispose()
             lastDisposable = null
@@ -1105,6 +1188,132 @@ class FullPlayer @JvmOverloads constructor(
             updateFavoriteButtons(false)
         }
     }
+
+    /**
+     * Carries the outgoing artwork off the side it is leaving by.
+     *
+     * Deliberately not tied to the artwork finishing loading: the cover has to start moving the
+     * instant the track changes, or a slow network makes the player look stuck.
+     */
+    private fun startCoverSlideOut() {
+        if (pendingCoverSlide == SLIDE_NONE) return
+        coverSlideInFlight = true
+        coverSlideOutDone = false
+        coverSlideArtReady = false
+
+        val target = -pendingCoverSlide * coverSlideDistance()
+        // A swipe has already carried the cover part of the way, so the rest of the journey is
+        // shorter and has to take proportionally less time. At a fixed duration the cover
+        // visibly changed speed the instant the finger left it.
+        val remaining = abs(target - coverSlideOffsetX)
+        val duration = (COVER_SLIDE_OUT_MS * (remaining / coverSlideDistance()))
+            .toLong()
+            .coerceIn(COVER_SLIDE_MIN_MS, COVER_SLIDE_OUT_MS)
+
+        // Linear, not accelerating: a swipe hands over at speed, and easing in from a moving
+        // finger reads as the cover briefly slowing down before it leaves.
+        animateCoverOffset(target, duration, LinearInterpolator()) {
+            coverSlideOutDone = true
+            slideCoverInIfReady()
+        }
+    }
+
+    /**
+     * Puts the new artwork everywhere it belongs.
+     *
+     * Everything except the large cover takes it at once - the blended background and the collapsed
+     * bar should follow the track immediately. The large cover waits until it has finished leaving.
+     */
+    private fun applyCover(
+        drawable: android.graphics.drawable.Drawable?,
+        bitmap: android.graphics.Bitmap?
+    ) {
+        blendView.setImageBitmap(bitmap)
+        fullPlayerToolbar.setImageViewCover(drawable)
+        floatingPanelLayout.transitionImageView?.setImageDrawable(drawable)
+        floatingPanelLayout.setPreviewCover(drawable)
+        if (coverSlideInFlight) {
+            pendingCoverDrawable = drawable
+            onCoverArtReady()
+        } else {
+            coverSimpleImageView.setImageDrawable(drawable)
+        }
+    }
+
+    private fun isAutoplayEnabled() =
+        PreferenceManager.getDefaultSharedPreferences(context)
+            .getBoolean(PREF_AUTOPLAY, false)
+
+    /**
+     * Adds more music when the queue is running out and infinity play is on.
+     *
+     * Runs on every track change rather than only at the very end, so the queue is topped up
+     * before the gap is audible. Choosing the tracks touches the network, so it happens off the
+     * main thread; adding them has to be back on it, because the controller allows nothing else.
+     */
+    private fun topUpQueueIfNeeded() {
+        if (!isAutoplayEnabled()) return
+        val player = instance ?: return
+        val remaining = player.mediaItemCount - 1 - player.currentMediaItemIndex
+        if (remaining > AutoplayQueue.TOP_UP_THRESHOLD) return
+
+        val seed = player.currentMediaItem
+        val queued = buildSet {
+            for (index in 0 until player.mediaItemCount) {
+                add(player.getMediaItemAt(index).mediaId)
+            }
+        }
+        val appContext = context.applicationContext
+        CoroutineScope(Dispatchers.Main).launch {
+            val library = activity.reader.songListFlow.first()
+            val batch = withContext(Dispatchers.IO) {
+                AutoplayQueue.nextBatch(appContext, seed, library, queued)
+            }
+            if (batch.isNotEmpty()) instance?.addMediaItems(batch)
+        }
+    }
+
+    /** Called when the new artwork is available. */
+    private fun onCoverArtReady() {
+        if (!coverSlideInFlight) return
+        coverSlideArtReady = true
+        slideCoverInIfReady()
+    }
+
+    /**
+     * Brings the incoming artwork in from the opposite side.
+     *
+     * Waits for both the outgoing movement to finish and the new artwork to exist. Cached artwork
+     * arrives in a few milliseconds, and starting the return before the cover had left teleported it
+     * across the screen mid-flight.
+     */
+    private fun slideCoverInIfReady() {
+        if (!coverSlideOutDone || !coverSlideArtReady) return
+        val direction = pendingCoverSlide
+        pendingCoverSlide = SLIDE_NONE
+        if (direction == SLIDE_NONE) {
+            coverSlideInFlight = false
+            return
+        }
+        // Swapped now, out of sight, so the cover that comes back is the new track's.
+        pendingCoverDrawable?.let { coverSimpleImageView.setImageDrawable(it) }
+        pendingCoverDrawable = null
+        coverSlideOffsetX = direction * coverSlideDistance()
+        applyCoverTranslation()
+        // Ends at exactly zero displacement, so nothing is left to correct and there is no snap.
+        animateCoverOffset(0F, COVER_SLIDE_IN_MS, settleInterpolator) {
+            coverSlideInFlight = false
+        }
+    }
+
+    /**
+     * Leaves quickly and settles softly, so the arrival reads as a landing rather than a stop.
+     */
+    private val settleInterpolator = PathInterpolator(0.17F, 0.89F, 0.32F, 1F)
+
+    /** Far enough that the cover is clear of the screen rather than parked at its own edge. */
+    private fun coverSlideDistance(): Float =
+        (coverSimpleImageView.width + 48.dp.px).coerceAtLeast(1F)
 
     private fun loadCoverForImageView() {
         if (lastDisposable != null) {
@@ -1125,19 +1334,9 @@ class FullPlayer @JvmOverloads constructor(
                     size(coverSimpleImageView.width, coverSimpleImageView.height)
                     scale(Scale.FILL)
                     target(onSuccess = {
-                        val drawable = it.asDrawable(context.resources)
-                        blendView.setImageBitmap(it.toBitmap())
-                        coverSimpleImageView.setImageDrawable(drawable)
-                        fullPlayerToolbar.setImageViewCover(drawable)
-                        floatingPanelLayout.transitionImageView?.setImageDrawable(drawable)
-                        floatingPanelLayout.setPreviewCover(drawable)
+                        applyCover(it.asDrawable(context.resources), it.toBitmap())
                     }, onError = {
-                        val drawable = it?.asDrawable(context.resources)
-                        blendView.setImageBitmap(it?.toBitmap())
-                        coverSimpleImageView.setImageDrawable(drawable)
-                        fullPlayerToolbar.setImageViewCover(drawable)
-                        floatingPanelLayout.transitionImageView?.setImageDrawable(drawable)
-                        floatingPanelLayout.setPreviewCover(drawable)
+                        applyCover(it?.asDrawable(context.resources), it?.toBitmap())
                     }) // do not react to onStart() which sets placeholder
                     allowHardware(coverSimpleImageView.isHardwareAccelerated)
                 }.build()
@@ -1250,8 +1449,46 @@ class FullPlayer @JvmOverloads constructor(
             coverSimpleImageView.width * coverBaseScale * (1f - effectivePauseScale) / 2f
         val pauseOffsetY =
             coverSimpleImageView.height * coverBaseScale * (1f - effectivePauseScale) / 2f
-        coverSimpleImageView.translationX = coverBaseTranslationX + pauseOffsetX
+        // The resting position is always recorded, even mid-slide, because that is where the
+        // incoming artwork has to come to a stop.
+        coverRestingTranslationX = coverBaseTranslationX + pauseOffsetX
+        applyCoverTranslation()
         coverSimpleImageView.translationY = coverBaseTranslationY + pauseOffsetY
+    }
+
+    /** The one place the cover's horizontal position is written. */
+    private fun applyCoverTranslation() {
+        coverSimpleImageView.translationX = coverRestingTranslationX + coverSlideOffsetX
+    }
+
+    /**
+     * Animates the displacement to [target].
+     *
+     * A value animator rather than ViewPropertyAnimator: the offset has to be readable every
+     * frame so the paused-state shrink can keep adjusting the resting position underneath it.
+     */
+    private fun animateCoverOffset(
+        target: Float,
+        duration: Long,
+        interpolator: Interpolator,
+        onEnd: (() -> Unit)? = null,
+    ) {
+        coverSlideAnimator?.cancel()
+        coverSlideAnimator = ValueAnimator.ofFloat(coverSlideOffsetX, target).apply {
+            this.duration = duration
+            this.interpolator = interpolator
+            addUpdateListener {
+                coverSlideOffsetX = it.animatedValue as Float
+                applyCoverTranslation()
+            }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    coverSlideAnimator = null
+                    onEnd?.invoke()
+                }
+            })
+            start()
+        }
     }
 
     private fun syncTransitionCoverScale() {
@@ -1363,5 +1600,16 @@ class FullPlayer @JvmOverloads constructor(
         private const val COVER_SWIPE_FOLLOW = 0.5F
         private const val COVER_SWIPE_THRESHOLD = 0.25F
         private const val COVER_SWIPE_SETTLE_MS = 220L
+
+        /** Which way the artwork travels on a track change. */
+        private const val SLIDE_NONE = 0
+        private const val SLIDE_NEXT = 1
+        private const val SLIDE_PREVIOUS = -1
+        private const val COVER_SLIDE_OUT_MS = 180L
+        private const val COVER_SLIDE_IN_MS = 260L
+        private const val COVER_SLIDE_MIN_MS = 70L
+        private const val COVER_SLIDE_BACKSTOP_MS = 400L
+
+        private const val PREF_AUTOPLAY = "autoplay_similar"
     }
 }

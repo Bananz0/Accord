@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    A generic pair of earbuds - a rounded head with a stem below it, twice. Drawn here rather than
-    lifted from a manufacturer's app so the build carries no third-party artwork; AudioOutput.iconFor
-    picks a device-specific asset by name where one exists.
+    Stemmed earbuds - AirPods, Galaxy Buds3 Pro. Drawn here rather than lifted from a manufacturer's
+    app so the build carries no third-party product artwork; AudioOutput picks between this and the
+    stemless shape by device name.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
@@ -10,20 +10,20 @@
     android:viewportWidth="24"
     android:viewportHeight="24">
 
-    <!-- Left bud. -->
+    <!-- Left bud: the housing that sits in the ear, and a short stem below it. -->
     <path
         android:fillColor="#FFFFFFFF"
-        android:pathData="M3.7,6.5a3.3,3.3 0 1,0 6.6,0a3.3,3.3 0 1,0 -6.6,0Z" />
+        android:pathData="M3.2,7.2a3.8,3.8 0 1,0 7.6,0a3.8,3.8 0 1,0 -7.6,0Z" />
     <path
         android:fillColor="#FFFFFFFF"
-        android:pathData="M5.9,6.5L8.1,6.5L8.1,18.4A1.1,1.1 0 0,1 5.9,18.4Z" />
+        android:pathData="M5.7,9.6h2.6v6.6a1.3,1.3 0 0,1 -2.6,0Z" />
 
     <!-- Right bud. -->
     <path
         android:fillColor="#FFFFFFFF"
-        android:pathData="M13.7,6.5a3.3,3.3 0 1,0 6.6,0a3.3,3.3 0 1,0 -6.6,0Z" />
+        android:pathData="M13.2,7.2a3.8,3.8 0 1,0 7.6,0a3.8,3.8 0 1,0 -7.6,0Z" />
     <path
         android:fillColor="#FFFFFFFF"
-        android:pathData="M15.9,6.5L18.1,6.5L18.1,18.4A1.1,1.1 0 0,1 15.9,18.4Z" />
+        android:pathData="M15.7,9.6h2.6v6.6a1.3,1.3 0 0,1 -2.6,0Z" />
 
 </vector>
