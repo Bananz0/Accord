@@ -97,6 +97,7 @@ import org.akanework.gramophone.logic.utils.exoplayer.GramophoneRenderFactory
 // they tapped belonged to the screen they had left.
 import uk.akane.accord.ui.MainActivity
 import kotlin.random.Random
+import org.akanework.gramophone.logic.data.jellyfin.QueuePrefetcher
 
 
 /**
@@ -123,6 +124,9 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         const val SERVICE_SET_TIMER = "set_timer"
         const val SERVICE_QUERY_TIMER = "query_timer"
         const val SERVICE_GET_LYRICS = "get_lyrics"
+
+        /** How many tracks past the current one are warmed; see QueuePrefetcher. */
+        private const val PREFETCH_LOOKAHEAD = 5
         const val SERVICE_GET_SESSION = "get_session"
         const val SERVICE_TIMER_CHANGED = "changed_timer"
 
@@ -620,6 +624,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
     override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
         lyrics = null
         lastPlayedManager.save()
+        prefetchUpcoming()
         // Close out the previous track before opening the new one, so the server sees a clean
         // start/stop pair rather than two overlapping sessions.
         reportedMediaId?.let { previous ->
@@ -638,6 +643,24 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
             reporter.reportStart(it, 0L, controller?.isPlaying != true)
         }
         scrobbler.onTrackStarted(mediaItem, System.currentTimeMillis() / 1000)
+    }
+
+    /**
+     * Warms the next few tracks so the following skip does not wait on the network.
+     *
+     * Lives here rather than in the player UI: the queue advances whether or not anyone is looking
+     * at it, and the point is for the track after this one to be ready before it is asked for.
+     */
+    private fun prefetchUpcoming() {
+        val player = controller ?: return
+        val upcoming = buildList {
+            var index = player.currentMediaItemIndex + 1
+            while (index < player.mediaItemCount && size < PREFETCH_LOOKAHEAD) {
+                add(player.getMediaItemAt(index))
+                index++
+            }
+        }
+        QueuePrefetcher.prefetch(this, upcoming, imageLoader)
     }
 
     override fun onIsPlayingChanged(isPlaying: Boolean) {

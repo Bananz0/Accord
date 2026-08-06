@@ -39,6 +39,9 @@ class SearchResultsAdapter(
         LayoutInflater.from(parent.context).inflate(R.layout.layout_song_item, parent, false)
     )
 
+    /** What row [position] is showing, for the swipe actions. */
+    fun itemAt(position: Int): MediaItem? = items.getOrNull(position)
+
     override fun getItemCount(): Int = items.size
 
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {

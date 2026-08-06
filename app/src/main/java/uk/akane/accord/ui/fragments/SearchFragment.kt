@@ -39,6 +39,7 @@ import uk.akane.accord.ui.adapters.SearchAdapter
 import uk.akane.accord.ui.components.NavigationBar
 import uk.akane.cupertino.widget.fadOutAnimation
 import uk.akane.cupertino.utils.AnimationUtils
+import uk.akane.accord.ui.components.TrackSwipeActions
 
 class SearchFragment: Fragment() {
     private lateinit var navigationBar: NavigationBar
@@ -133,6 +134,12 @@ class SearchFragment: Fragment() {
         resultsAdapter = SearchResultsAdapter { (activity as? MainActivity)?.getPlayer() }
         searchResults.layoutManager = LinearLayoutManager(requireContext())
         searchResults.adapter = resultsAdapter
+        // Same gesture as every other list: right queues it, left downloads it.
+        TrackSwipeActions.attach(
+            recyclerView = searchResults,
+            activity = requireActivity() as MainActivity,
+            trackAt = { index -> resultsAdapter.itemAt(index) },
+        )
 
         observeLibrary()
         searchInputDetail.doAfterTextChanged { runQuery(it?.toString().orEmpty()) }

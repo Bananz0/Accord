@@ -183,6 +183,14 @@ class FullPlayer @JvmOverloads constructor(
     private var coverSlideOffsetX = 0F
     private var coverSlideAnimator: ValueAnimator? = null
 
+    /** Brings the cover back even if the artwork has not arrived; see [startCoverSlideOut]. */
+    private val coverSlideInDeadline = Runnable {
+        if (coverSlideInFlight && !coverSlideArtReady) {
+            coverSlideArtReady = true
+            slideCoverInIfReady()
+        }
+    }
+
     /** Puts the cover back if a requested skip turned out not to happen. */
     private val coverSlideBackstop = Runnable {
         if (!coverSlideInFlight && pendingCoverSlide != SLIDE_NONE) {
@@ -1216,6 +1224,11 @@ class FullPlayer @JvmOverloads constructor(
             coverSlideOutDone = true
             slideCoverInIfReady()
         }
+        // The artwork is not going to be waited for indefinitely. On a shuffled library the
+        // next cover is never cached, so waiting meant the screen sat empty for a network
+        // round trip every time - which is the pause people describe as the app hanging.
+        removeCallbacks(coverSlideInDeadline)
+        postDelayed(coverSlideInDeadline, COVER_ART_WAIT_MS)
     }
 
     /**
@@ -1232,10 +1245,13 @@ class FullPlayer @JvmOverloads constructor(
         fullPlayerToolbar.setImageViewCover(drawable)
         floatingPanelLayout.transitionImageView?.setImageDrawable(drawable)
         floatingPanelLayout.setPreviewCover(drawable)
-        if (coverSlideInFlight) {
+        if (coverSlideInFlight && !coverSlideArtReady) {
+            // Still on its way out, or waiting to come back - hold it until it is out of sight.
             pendingCoverDrawable = drawable
             onCoverArtReady()
         } else {
+            // Either nothing is moving, or the cover came back before the artwork did and is
+            // showing the placeholder; either way it belongs on screen now.
             coverSimpleImageView.setImageDrawable(drawable)
         }
     }
@@ -1295,8 +1311,18 @@ class FullPlayer @JvmOverloads constructor(
             coverSlideInFlight = false
             return
         }
-        // Swapped now, out of sight, so the cover that comes back is the new track's.
-        pendingCoverDrawable?.let { coverSimpleImageView.setImageDrawable(it) }
+        removeCallbacks(coverSlideInDeadline)
+        // Swapped now, out of sight, so the cover that comes back is the new track's. When it
+        // has not loaded yet the placeholder comes back instead and the real artwork appears
+        // in place a moment later - far better than an empty screen while the network answers.
+        val incoming = pendingCoverDrawable
+        if (incoming != null) {
+            coverSimpleImageView.setImageDrawable(incoming)
+        } else {
+            coverSimpleImageView.setImageDrawable(
+                AppCompatResources.getDrawable(context, R.drawable.default_cover)
+            )
+        }
         pendingCoverDrawable = null
         coverSlideOffsetX = direction * coverSlideDistance()
         applyCoverTranslation()
@@ -1515,6 +1541,7 @@ class FullPlayer @JvmOverloads constructor(
     override fun onDetachedFromWindow() {
         stopPositionUpdates()
         removeCallbacks(coverSlideBackstop)
+        removeCallbacks(coverSlideInDeadline)
         coverSlideAnimator?.cancel()
         coverSlideAnimator = null
         lyricsViewModel?.release()
@@ -1615,6 +1642,9 @@ class FullPlayer @JvmOverloads constructor(
         private const val COVER_SLIDE_IN_MS = 260L
         private const val COVER_SLIDE_MIN_MS = 70L
         private const val COVER_SLIDE_BACKSTOP_MS = 400L
+
+        /** The longest the cover stays off screen waiting for artwork to load. */
+        private const val COVER_ART_WAIT_MS = 90L
 
         private const val PREF_AUTOPLAY = "autoplay_similar"
     }
