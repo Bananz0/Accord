@@ -201,6 +201,8 @@
         text is kept as the zh-rCN translation.
     -->
     <string name="home_recommendations_title">Handpicked for you</string>
+    <string name="sync_in_progress">Syncing library…</string>
+    <string name="sync_progress">Syncing library… %1$d of %2$d</string>
     <string name="new_songs">New songs</string>
     <string name="recently_played">Recently played</string>
     <string name="main_developers">Main developers</string>

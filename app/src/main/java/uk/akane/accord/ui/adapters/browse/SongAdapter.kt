@@ -17,6 +17,8 @@ import coil3.request.crossfade
 import com.google.android.material.button.MaterialButton
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -140,8 +142,16 @@ class SongAdapter(
         }
     }
 
+    /**
+     * Serialises submissions. Upstream diffs against the adapter's own mutable list from a
+     * background thread, which is safe only while emissions are rare - MediaStore changing is. This
+     * app's library arrives from Jellyfin and MediaStore both, so two submissions can overlap, and
+     * the second cleared the list the first was still diffing: IndexOutOfBounds inside DiffUtil.
+     */
+    private val submitMutex = Mutex()
+
     private fun submitList(newList: List<MediaItem>) {
-        CoroutineScope(Dispatchers.Default).launch {
+        CoroutineScope(Dispatchers.Default).launch { submitMutex.withLock {
             val grouped = newList
                 .groupBy { it.mediaMetadata.title?.firstOrNull()?.uppercaseChar() ?: '#' }
                 .toSortedMap()
@@ -158,7 +168,10 @@ class SongAdapter(
                 })
             }
 
-            val diffResult = DiffUtil.calculateDiff(GenreDiffCallback(list, items))
+            // Snapshot on the main thread: copying the live list from here would race the clear
+            // below, and diffing against it directly is what crashed.
+            val oldSnapshot = withContext(Dispatchers.Main) { list.toList() }
+            val diffResult = DiffUtil.calculateDiff(GenreDiffCallback(oldSnapshot, items))
 
             withContext(Dispatchers.Main) {
                 list.clear()
@@ -170,7 +183,7 @@ class SongAdapter(
                 diffResult.dispatchUpdatesTo(this@SongAdapter)
                 recyclerView.post { onContentLoaded.invoke() }
             }
-        }
+        } }
     }
 
     class GenreDiffCallback(

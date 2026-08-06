@@ -46,6 +46,14 @@ class LastPlayedManager(context: Context,
 
     companion object {
         private const val TAG = "LastPlayedManager"
+
+        /**
+         * Bump when the encoding of a saved queue entry changes. Saved state is only a cache of the
+         * last queue, so a mismatch discards it rather than trying to migrate.
+         *
+         * 1: media id and path moved from raw to base64.
+         */
+        private const val LAST_PLAYED_FORMAT = 1
     }
 
     var allowSavingState = true
@@ -92,7 +100,11 @@ class LastPlayedManager(context: Context,
                 data.mediaItems.map {
                     val b = SafeDelimitedStringConcat(":")
                     // add new entries at the bottom and remember they are null for upgrade path
-                    b.writeStringUnsafe(it.mediaId)
+                    // Base64, not raw. A media id is not guaranteed to avoid the ':' delimiter -
+                    // anything URL-shaped contains one - and writing it raw threw
+                    // IllegalArgumentException from a background coroutine, taking the process
+                    // down every time a queue was saved.
+                    b.writeStringSafe(it.mediaId)
                     b.writeUri(it.localConfiguration?.uri)
                     b.writeStringSafe(it.localConfiguration?.mimeType)
                     b.writeStringSafe(it.mediaMetadata.title)
@@ -119,12 +131,14 @@ class LastPlayedManager(context: Context,
                     b.writeStringSafe(it.mediaMetadata.extras?.getString("Author"))
                     b.writeInt(it.mediaMetadata.extras?.getInt("CdTrackNumber"))
                     b.writeLong(it.mediaMetadata.extras?.getLong("Duration"))
-                    b.writeStringUnsafe(it.mediaMetadata.extras?.getString("Path"))
+                    // Same hazard as the media id: a Jellyfin item's path is a URL.
+                    b.writeStringSafe(it.mediaMetadata.extras?.getString("Path"))
                     b.writeLong(it.mediaMetadata.extras?.getLong("ModifiedDate"))
                     b.toString()
                 })
             prefs.edit {
                 putStringSet("last_played_lst", lastPlayed.first)
+                putInt("last_played_format", LAST_PLAYED_FORMAT)
                 putString("last_played_grp", lastPlayed.second)
                 putInt("last_played_idx", data.startIndex)
                 putLong("last_played_pos", data.startPositionMs)
@@ -151,6 +165,14 @@ class LastPlayedManager(context: Context,
                 throw e
             }
             try {
+                // The media id moved from raw to base64, so anything written by an older build
+                // would decode into nonsense rather than fail loudly. Queue state is only a cache,
+                // so a format change just discards it.
+                if (prefs.getInt("last_played_format", 0) != LAST_PLAYED_FORMAT) {
+                    prefs.edit().putInt("last_played_format", LAST_PLAYED_FORMAT).apply()
+                    runCallback(callback, seed) { null }
+                    return@launch
+                }
                 val lastPlayedLst = prefs.getStringSet("last_played_lst", null)
                 val lastPlayedGrp = prefs.getString("last_played_grp", null)
                 val lastPlayedIdx = prefs.getInt("last_played_idx", 0)
@@ -170,7 +192,7 @@ class LastPlayedManager(context: Context,
                     PrefsListUtils.parse(lastPlayedLst, lastPlayedGrp)
                         .map {
                             val b = SafeDelimitedStringDecat(":", it)
-                            val mediaId = b.readStringUnsafe()
+                            val mediaId = b.readStringSafe()
                             val uri = b.readUri()
                             val mimeType = b.readStringSafe()
                             val title = b.readStringSafe()
@@ -197,7 +219,7 @@ class LastPlayedManager(context: Context,
                             val author = b.readStringSafe()
                             val cdTrackNumber = b.readInt()
                             val duration = b.readLong()
-                            val path = b.readStringUnsafe()
+                            val path = b.readStringSafe()
                             val modifiedDate = b.readLong()
                             MediaItem.Builder()
                                 .setUri(uri)
