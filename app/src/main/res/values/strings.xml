@@ -195,6 +195,12 @@
     <string name="daily_shuffle">Daily shuffle</string>
     <string name="genre_shuffle">Genre shuffle</string>
     <string name="recommendations">Recommendations</string>
+    <!--
+        Upstream hardcodes the home header in Simplified Chinese straight into fragment_home.xml, so
+        it read as Chinese on an English device. Same wording, moved into resources; the original
+        text is kept as the zh-rCN translation.
+    -->
+    <string name="home_recommendations_title">Handpicked for you</string>
     <string name="new_songs">New songs</string>
     <string name="recently_played">Recently played</string>
     <string name="main_developers">Main developers</string>

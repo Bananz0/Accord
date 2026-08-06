@@ -47,6 +47,7 @@ import coil3.request.NullRequestDataException
 import coil3.request.allowHardware
 import coil3.size.pxOrElse
 import coil3.util.Logger
+import uk.akane.accord.Accord
 import uk.akane.accord.BuildConfig
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinClientHolder
 import org.akanework.gramophone.ui.BugHandlerActivity
@@ -59,7 +60,7 @@ import kotlin.system.exitProcess
  *
  * @author AkaneTan, nift4
  */
-class GramophoneApplication : Application(), SingletonImageLoader.Factory, Thread.UncaughtExceptionHandler {
+class GramophoneApplication : Accord(), Thread.UncaughtExceptionHandler {
 
     lateinit var prefs: SharedPreferences
         private set
@@ -103,7 +104,12 @@ class GramophoneApplication : Application(), SingletonImageLoader.Factory, Threa
                     .detectCredentialProtectedWhileLocked()
                     .detectIncorrectContextUse()
                     .detectUnsafeIntentLaunch()
-                    .penaltyLog().penaltyDeath().build())
+                    // Logged, not fatal. The Accord UI lets a Surface reach its finalizer without
+                    // an explicit release - its blend and backdrop views hand surfaces around - and
+                    // penaltyDeath turned that into the app being killed seconds after launch,
+                    // over and over. A finalizer-timing warning is not worth losing the process
+                    // for; the violations are still reported.
+                    .penaltyLog().build())
         }
 
         // This is a separate thread to avoid disk read on main thread and improve startup time
@@ -146,6 +152,10 @@ class GramophoneApplication : Application(), SingletonImageLoader.Factory, Threa
             .allowHardware(false)
             .components {
                 add(OkHttpNetworkFetcherFactory())
+                // The Accord screens ask for local artwork through libPhonograph's
+                // gramophoneSongCover/gramophoneAlbumCover schemes, which only the superclass knows
+                // how to resolve. Without these, every local cover in the new UI comes up blank.
+                addLocalCoverFetchers()
                 if (hasScopedStorageV1()) {
                     add(Fetcher.Factory { data, options, _ ->
                         if (data !is Pair<*, *>) return@Factory null

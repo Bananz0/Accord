@@ -15,7 +15,18 @@ import uk.akane.accord.setupwizard.adapters.SetupWizardViewPagerAdapter
 import uk.akane.accord.ui.MainActivity
 import uk.akane.cupertino.utils.AnimationUtils
 
-class SetupWizardFragment(val onPermissionSuccessCallback: (() -> Unit)) : Fragment() {
+/**
+ * Upstream takes the success callback as a constructor argument, which leaves the fragment without
+ * the no-argument constructor FragmentManager needs to restore it. Any recreation while the wizard
+ * is on screen - a rotation, a theme switch, the process coming back - then dies with
+ * "could not find Fragment constructor" before the activity has finished starting.
+ *
+ * The callback is resolved from the host activity instead, so it survives being recreated.
+ */
+class SetupWizardFragment : Fragment() {
+
+    val onPermissionSuccessCallback: () -> Unit
+        get() = { (activity as? MainActivity)?.updateLibrary() }
 
     private lateinit var viewPager2: ViewPager2
     private lateinit var viewPagerAdapter: SetupWizardViewPagerAdapter

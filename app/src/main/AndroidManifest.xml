@@ -18,6 +18,25 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!--
+        Local library access. This fork had dropped these when it moved to a Jellyfin-backed
+        library, but the Accord screens read the local library through libPhonograph, and its setup
+        wizard blocks on READ_MEDIA_AUDIO - without it the app never gets past the permission page.
+        Local files and the Jellyfin library are meant to coexist, so these come back.
+    -->
+    <!-- Read music files (Android 13 and later) (includes .lrc and thumbnails) -->
+    <uses-permission
+        android:name="android.permission.READ_MEDIA_AUDIO"
+        android:minSdkVersion="33" />
+    <!-- Read cover files, never requested by the UI but honoured for users who grant it -->
+    <uses-permission
+        android:name="android.permission.READ_MEDIA_IMAGES"
+        android:minSdkVersion="33"
+        tools:ignore="PhotoAndVideoPolicy" />
+    <uses-permission
+        android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED"
+        android:minSdkVersion="34" />
+
     <application
         android:name="org.akanework.gramophone.logic.GramophoneApplication"
         android:allowBackup="true"
@@ -97,12 +116,21 @@
             android:label="@string/jellyfin_login_title"
             android:windowSoftInputMode="adjustResize" />
 
+        <!--
+            The launcher is now Accord's own activity: a shrinking card holding a Cupertino
+            FragmentSwitcherView, with the player as a floating panel over it, in place of the
+            bottom-sheet-and-BottomNavigationView shell below. It declares
+            enableOnBackInvokedCallback because it drives predictive back itself, both to collapse
+            the now-playing panel and to run the switcher's back transition; the application element
+            still opts out for the older screens.
+        -->
         <activity
-            android:name="org.akanework.gramophone.ui.MainActivity"
+            android:name="uk.akane.accord.ui.MainActivity"
+            android:enableOnBackInvokedCallback="true"
             android:exported="true"
             android:launchMode="singleTop"
-            android:theme="@style/Theme.Splash"
-            android:windowSoftInputMode="adjustPan">
+            android:theme="@style/Theme.Accord.Splash"
+            android:windowSoftInputMode="adjustNothing">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <action android:name="android.intent.action.MUSIC_PLAYER" />
@@ -112,6 +140,17 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+
+        <!--
+            Kept registered but no longer the entry point, so the screens that have not been ported
+            across yet can still be reached while the port finishes. Goes away with the old UI.
+        -->
+        <activity
+            android:name="org.akanework.gramophone.ui.MainActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.Splash"
+            android:windowSoftInputMode="adjustPan" />
 
         <receiver
             android:name="androidx.media3.session.MediaButtonReceiver"

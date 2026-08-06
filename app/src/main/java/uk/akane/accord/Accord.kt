@@ -7,6 +7,7 @@ import android.provider.MediaStore
 import android.util.Log
 import android.util.Size
 import android.webkit.MimeTypeMap
+import coil3.ComponentRegistry
 import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.SingletonImageLoader
@@ -34,7 +35,15 @@ import uk.akane.libphonograph.utils.MiscUtils
 import java.io.File
 import java.io.IOException
 
-class Accord : Application(), SingletonImageLoader.Factory {
+/**
+ * Upstream Accord's application class.
+ *
+ * Left open, and with its cover fetchers and Coil logger split out, so this fork's
+ * [org.akanework.gramophone.logic.GramophoneApplication] can extend it: the Accord screens reach
+ * for `application as Accord` to get [reader], while everything this fork adds on top - Jellyfin,
+ * the crash handler, the network artwork cache - keeps living in the subclass.
+ */
+open class Accord : Application(), SingletonImageLoader.Factory {
 
     lateinit var reader: FlowReader
         private set
@@ -74,7 +83,19 @@ class Accord : Application(), SingletonImageLoader.Factory {
     override fun newImageLoader(context: PlatformContext): ImageLoader {
         return ImageLoader.Builder(context)
             .diskCache(null)
-            .components {
+            .components { addLocalCoverFetchers() }
+            .applyCoilLogging()
+            .build()
+    }
+
+    /**
+     * Registers the two fetchers that resolve MediaStore-backed cover art: `gramophoneSongCover`
+     * for a song's embedded artwork and `gramophoneAlbumCover` for an album's. Both schemes are
+     * minted by libPhonograph, so any subclass building its own [ImageLoader] has to add these or
+     * local artwork silently stops loading.
+     */
+    protected fun ComponentRegistry.Builder.addLocalCoverFetchers() {
+        run {
                 add(Fetcher.Factory { data, options, _ ->
                     if (data !is Uri) return@Factory null
                     if (data.scheme != "gramophoneSongCover") return@Factory null
@@ -146,8 +167,15 @@ class Accord : Application(), SingletonImageLoader.Factory {
                         )
                     }
                 })
-            }
-            .run {
+        }
+    }
+
+    /**
+     * Verbose Coil logging on debug builds, quiet on release. Kept out of [newImageLoader] so
+     * subclasses that build their own loader get the same behaviour.
+     */
+    protected fun ImageLoader.Builder.applyCoilLogging(): ImageLoader.Builder =
+            run {
                 if (!BuildConfig.DEBUG) this else
                     logger(object : Logger {
                         override var minLevel = Logger.Level.Verbose
@@ -172,6 +200,4 @@ class Accord : Application(), SingletonImageLoader.Factory {
                         }
                     })
             }
-            .build()
-    }
 }
