@@ -8,6 +8,10 @@ import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 import uk.akane.accord.R
 import uk.akane.accord.ui.MainActivity
+import uk.akane.accord.ui.fragments.browse.AlbumsFragment
+import uk.akane.accord.ui.fragments.browse.ArtistsFragment
+import uk.akane.accord.ui.fragments.browse.PlaylistsFragment
+import uk.akane.accord.ui.fragments.RequestsFragment
 import uk.akane.accord.ui.fragments.browse.SongFragment
 
 class BrowseAdapter(
@@ -23,6 +27,8 @@ class BrowseAdapter(
         BrowseListItem.SideAction(context.getString(R.string.browse_by_album), FragmentType.Album),
         BrowseListItem.SideAction(context.getString(R.string.browse_by_artist), FragmentType.Artist),
         BrowseListItem.SideAction(context.getString(R.string.browse_by_genre), FragmentType.Genre),
+        // Music that is not in the library yet: search Lidarr for it, or hand it a shared playlist.
+        BrowseListItem.SideAction(context.getString(R.string.requests_title), FragmentType.Request),
     )
 
     override fun onCreateViewHolder(
@@ -52,12 +58,20 @@ class BrowseAdapter(
         holder.title?.text = browseList[position].title
         if (browseList[position] is BrowseListItem.SideAction) {
             holder.itemView.setOnClickListener {
-                activity.fragmentSwitcherView.addFragmentToCurrentStack(
-                    when((browseList[position] as BrowseListItem.SideAction).fragment) {
-                        FragmentType.Song -> SongFragment()
-                        else -> throw IllegalArgumentException("Unknown fragment type!")
-                    }
-                )
+                // Only Song was wired upstream and everything else threw, so tapping Album, Artist
+                // or Genre crashed the app rather than opening anything.
+                val destination = when (
+                    (browseList[position] as BrowseListItem.SideAction).fragment
+                ) {
+                    FragmentType.Song -> SongFragment()
+                    FragmentType.Album -> AlbumsFragment()
+                    FragmentType.Artist -> ArtistsFragment()
+                    FragmentType.Playlist -> PlaylistsFragment()
+                    FragmentType.Request -> RequestsFragment()
+                    // Genre has no screen of its own yet; the Search tab already lists genres.
+                    else -> null
+                }
+                destination?.let { activity.fragmentSwitcherView.addFragmentToCurrentStack(it) }
             }
             if (position == browseList.size - 1) {
                 holder.divider?.visibility = View.GONE
@@ -92,7 +106,7 @@ class BrowseAdapter(
     }
 
     enum class FragmentType {
-        Song, Album, Artist, Genre, ReleaseDate, Folder, Filesystem, Playlist
+        Song, Album, Artist, Genre, ReleaseDate, Folder, Filesystem, Playlist, Request
     }
 
 }

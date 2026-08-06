@@ -214,6 +214,24 @@
     <string name="settings_section_audio">Audio</string>
     <string name="settings_section_about">About</string>
     <string name="settings_jellyfin_summary">Server and account</string>
+    <!-- Lidarr request screen. -->
+    <string name="requests_title">Request music</string>
+    <string name="requests_search_hint">Search, or paste a playlist link</string>
+    <string name="requests_searching">Searching Lidarr…</string>
+    <string name="requests_reading_link">Reading playlist…</string>
+    <string name="requests_no_results">Nothing found</string>
+    <string name="requests_failed">That did not work</string>
+    <string name="requests_no_lidarr">Set up Lidarr in Settings first</string>
+    <string name="requests_unknown_link">Only Spotify and Deezer playlist links can be read</string>
+    <string name="requests_already_added">Already in Lidarr</string>
+    <string name="requests_sending">Requesting %1$d tracks…</string>
+    <string name="requests_outcome">Requested %1$d, not found %2$d</string>
+    <string name="requests_adding">Adding %1$s…</string>
+    <string name="requests_added">Added %1$s to Lidarr</string>
+    <plurals name="requests_results">
+        <item quantity="one">%d result</item>
+        <item quantity="other">%d results</item>
+    </plurals>
     <string name="song_menu_download">Download</string>
     <string name="song_menu_remove_download">Remove download</string>
     <string name="song_menu_favourite">Favourite</string>
