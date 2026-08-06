@@ -185,4 +185,19 @@
 
     <style name="Theme.Splash" parent="Day.Theme.Splash" />
 
+    <!-- ==== Ported from upstream Accord ==== -->
+    <style name="Base.Theme.Accord" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        
+        
+        <item name="android:colorBackground">@color/surfaceColor</item>
+        <item name="colorAccent">@color/accentColor</item>
+        <item name="android:spotShadowAlpha">0.3</item>
+    </style>
+    <style xmlns:ns0="http://schemas.android.com/tools" name="Theme.Accord.Splash" parent="Theme.SplashScreen.IconBackground">
+        <item name="android:windowBackground">@drawable/ic_launcher_background</item>
+        <item name="postSplashScreenTheme">@style/Theme.Accord</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_anim</item>
+        <item name="android:windowSplashScreenBehavior" ns0:targetApi="tiramisu">icon_preferred</item>
+    </style>
+    <style name="Theme.Accord" parent="Base.Theme.Accord"/>
 </resources>

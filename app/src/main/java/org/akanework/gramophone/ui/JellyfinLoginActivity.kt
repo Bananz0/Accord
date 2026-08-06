@@ -1,5 +1,6 @@
 package org.akanework.gramophone.ui
 
+
 import android.content.Intent
 import android.os.Bundle
 import android.util.Log
@@ -32,7 +33,7 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.akanework.gramophone.R
+import uk.akane.accord.R
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinClientHolder
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.exception.ApiClientException

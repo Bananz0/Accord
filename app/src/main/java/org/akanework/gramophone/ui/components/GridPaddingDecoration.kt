@@ -1,12 +1,13 @@
 package org.akanework.gramophone.ui.components
 
+
 import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Rect
 import android.view.View
 import androidx.recyclerview.widget.ConcatAdapter
 import androidx.recyclerview.widget.RecyclerView
-import org.akanework.gramophone.R
+import uk.akane.accord.R
 import org.akanework.gramophone.ui.adapters.BaseAdapter
 
 class GridPaddingDecoration(context: Context) : RecyclerView.ItemDecoration() {

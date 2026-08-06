@@ -33,7 +33,7 @@ import uk.akane.accord.logic.getFile
 import uk.akane.accord.ui.MainActivity
 import uk.akane.accord.ui.adapters.browse.PlaylistAdapter
 import uk.akane.accord.ui.components.NavigationBar
-import uk.akane.cupertino.widget.navigation.SwitcherPostponeFragment
+import uk.akane.cupertino.navigation.SwitcherPostponeFragment
 import uk.akane.libphonograph.dynamicitem.Favorite
 import uk.akane.libphonograph.items.Playlist
 import uk.akane.libphonograph.manipulator.ItemManipulator

@@ -19,7 +19,7 @@ import androidx.media3.session.SessionResult
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
 import uk.akane.accord.Accord
-import uk.akane.accord.logic.services.PlaybackService
+import org.akanework.gramophone.logic.GramophonePlaybackService
 import uk.akane.accord.logic.utils.LifecycleCallbackListImpl
 import java.util.concurrent.ExecutionException
 
@@ -40,8 +40,11 @@ class MediaControllerViewModel(application: Application) : AndroidViewModel(appl
         get() = connectionListenersImpl.toBaseInterface()
 
     override fun onStart(owner: LifecycleOwner) {
+        // Bound to this app's own playback service rather than the one Accord ships. Ours is the
+        // side that knows how to stream and cache from Jellyfin, and it runs on released media3
+        // instead of the fork Accord's service needs.
         val sessionToken =
-            SessionToken(context, ComponentName(context, PlaybackService::class.java))
+            SessionToken(context, ComponentName(context, GramophonePlaybackService::class.java))
         val lc = LifecycleHost()
         controllerLifecycle = lc
         Log.d("TAG1", "We are creating session")

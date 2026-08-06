@@ -1,11 +1,12 @@
 package org.akanework.gramophone.logic.utils.exoplayer
 
+
 import android.util.Log
 import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
-import org.akanework.gramophone.BuildConfig
+import uk.akane.accord.BuildConfig
 import org.akanework.gramophone.logic.utils.CircularShuffleOrder
 
 

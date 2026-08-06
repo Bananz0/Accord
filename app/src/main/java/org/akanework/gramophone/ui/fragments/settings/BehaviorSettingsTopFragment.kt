@@ -17,6 +17,7 @@
 
 package org.akanework.gramophone.ui.fragments.settings
 
+
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
@@ -25,7 +26,7 @@ import android.widget.Toast
 import androidx.core.net.toUri
 import androidx.preference.Preference
 import androidx.preference.SwitchPreferenceCompat
-import org.akanework.gramophone.R
+import uk.akane.accord.R
 import org.akanework.gramophone.logic.hasScopedStorageWithMediaTypes
 import org.akanework.gramophone.ui.fragments.BasePreferenceFragment
 import org.akanework.gramophone.ui.fragments.BaseSettingFragment

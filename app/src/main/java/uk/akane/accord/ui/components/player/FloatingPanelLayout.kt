@@ -35,11 +35,11 @@ import uk.akane.accord.R
 import uk.akane.accord.logic.dp
 import uk.akane.accord.logic.setOutline
 import uk.akane.accord.logic.utils.CalculationUtils.lerp
-import uk.akane.cupertino.widget.popup.PopupHelper
-import uk.akane.cupertino.widget.popup.PopupMenuHost
+import uk.akane.cupertino.popup.PopupHelper
+import uk.akane.cupertino.popup.PopupMenuHost
 import uk.akane.cupertino.widget.dpToPx
 import uk.akane.cupertino.widget.image.SimpleImageView
-import uk.akane.cupertino.widget.utils.AnimationUtils
+import uk.akane.cupertino.utils.AnimationUtils
 import kotlin.math.absoluteValue
 import kotlin.math.roundToInt
 
@@ -739,7 +739,8 @@ class FloatingPanelLayout @JvmOverloads constructor(
         locationY: Int,
         anchorFromTop: Boolean,
         backgroundView: View?,
-        onDismiss: (() -> Unit)?
+        onDismiss: (() -> Unit)?,
+        onEntryClick: ((PopupHelper.PopupEntry) -> Unit)?
     ) {
         callUpPopup(entries, locationX, locationY, anchorFromTop, backgroundView, onDismiss)
     }

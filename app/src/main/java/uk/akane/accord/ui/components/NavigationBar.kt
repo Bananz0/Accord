@@ -36,7 +36,7 @@ import uk.akane.accord.logic.sp
 import uk.akane.accord.ui.MainActivity
 import uk.akane.accord.ui.components.player.FloatingPanelLayout
 import uk.akane.accord.ui.components.player.PlayerPopupMenu
-import uk.akane.cupertino.widget.utils.AnimationUtils
+import uk.akane.cupertino.utils.AnimationUtils
 
 class NavigationBar @JvmOverloads constructor(
     context: Context,

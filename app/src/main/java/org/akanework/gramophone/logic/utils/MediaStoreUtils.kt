@@ -17,6 +17,7 @@
 
 package org.akanework.gramophone.logic.utils
 
+
 import android.app.RecoverableSecurityException
 import android.content.ContentUris
 import android.content.Context
@@ -41,7 +42,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.parcelize.Parcelize
-import org.akanework.gramophone.R
+import uk.akane.accord.R
 import org.akanework.gramophone.logic.getColumnIndexOrNull
 import org.akanework.gramophone.logic.hasAlbumArtistIdInMediaStore
 import org.akanework.gramophone.logic.hasImagePermission

@@ -24,7 +24,7 @@ import kotlinx.coroutines.launch
 import uk.akane.accord.R
 import uk.akane.accord.ui.MainActivity
 import uk.akane.accord.ui.components.NavigationBar
-import uk.akane.cupertino.widget.navigation.SwitcherPostponeFragment
+import uk.akane.cupertino.navigation.SwitcherPostponeFragment
 import kotlin.random.Random
 
 class AlbumDetailFragment : SwitcherPostponeFragment() {

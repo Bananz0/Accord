@@ -23,7 +23,7 @@ import uk.akane.accord.logic.dp
 import uk.akane.accord.ui.adapters.SearchAdapter
 import uk.akane.accord.ui.components.NavigationBar
 import uk.akane.cupertino.widget.fadOutAnimation
-import uk.akane.cupertino.widget.utils.AnimationUtils
+import uk.akane.cupertino.utils.AnimationUtils
 
 class SearchFragment: Fragment() {
     private lateinit var navigationBar: NavigationBar

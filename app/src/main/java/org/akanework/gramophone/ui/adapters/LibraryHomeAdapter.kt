@@ -1,5 +1,6 @@
 package org.akanework.gramophone.ui.adapters
 
+
 import android.content.Context
 import android.text.Spannable
 import android.text.SpannableString
@@ -15,7 +16,7 @@ import androidx.recyclerview.widget.RecyclerView
 import coil3.load
 import coil3.request.error
 import coil3.request.placeholder
-import org.akanework.gramophone.R
+import uk.akane.accord.R
 import org.akanework.gramophone.logic.dpToPx
 import org.akanework.gramophone.logic.findBaseWrapperFragment
 import org.akanework.gramophone.logic.ui.CenteredImageSpan

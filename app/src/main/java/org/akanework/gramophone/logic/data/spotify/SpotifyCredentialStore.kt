@@ -1,12 +1,13 @@
 package org.akanework.gramophone.logic.data.spotify
 
+
 import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
 import androidx.preference.PreferenceManager
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
-import org.akanework.gramophone.BuildConfig
+import uk.akane.accord.BuildConfig
 
 /**
  * Stores the Spotify app credentials and the user's OAuth tokens.

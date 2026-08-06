@@ -7,11 +7,11 @@
     <string name="home_menu_refresh">刷新</string>
     <string name="category_songs">歌曲</string>
     <string name="category_albums">专辑</string>
-    <string name="category_artists">艺术家</string>
-    <string name="category_genres">艺术流派</string>
+    <string name="category_artists">艺人</string>
+    <string name="category_genres">主题</string>
     <string name="category_playlists">播放列表</string>
     <string name="unknown_artist">未知艺术家</string>
-    <string name="category_dates">发行日期</string>
+    <string name="category_dates">日期</string>
     <string name="follow_system">跟随系统</string>
     <string name="dark">深色</string>
     <string name="light">浅色</string>
@@ -32,7 +32,7 @@
     <string name="go_to_album">专辑..</string>
     <string name="go_to_artist">艺术家..</string>
     <string name="details">详细</string>
-    <string name="shuffle">随机</string>
+    <string name="shuffle">随机播放</string>
     <string name="repeat_mode">循环模式</string>
     <string name="unknown_playlist">未知播放列表</string>
     <string name="settings_category_appearance">外观</string>
@@ -188,4 +188,45 @@
     <string name="app_libraries">代码库</string>
     <string name="blur_lyrics">模糊歌词</string>
     <string name="blur_lyrics_summary">为歌词添加模糊（也许会增加性能消耗）</string>
+
+    <!-- ==== Ported from upstream Accord ==== -->
+    <string name="bottom_nav_search">搜索</string>
+    <string name="bottom_nav_library">资料库</string>
+    <string name="bottom_nav_browse">浏览</string>
+    <string name="bottom_nav_home">主页</string>
+    <string name="default_track">未在播放</string>
+    <string name="btn_continue">继续</string>
+    <string name="welcome_to">欢迎使用</string>
+    <string name="welcome_page_introduction">在您的安卓设备上无广告播放本地歌曲和播放列表，下载音乐离线收听。通过空间音频，感受环绕音效带来的沉浸式体验。</string>
+    <string name="disclaimer">协律是一款自由且脱机使用的应用程序。协律不会将您的任何数据发送至网络，也不会将其用于任何其他用途。协律的源代码已在线发布，并遵循 GPL-3.0 许可证，但某些限制适用。</string>
+    <string name="check_source_code"><a href="https://github.com/AkaneFoundation/Accord"><u>检查源代码 …</u></a></string>
+    <string name="need_permissions">需要权限</string>
+    <string name="permission_title_desc">我们先需要这些权限来正常播放您的音乐。请检查各项的描述。</string>
+    <string name="storage">储存</string>
+    <string name="storage_desc">允许我们访问您的全部播放清单和音乐文件</string>
+    <string name="music">音乐</string>
+    <string name="Album">相册</string>
+    <string name="album_desc">允许我们正确地为您的专辑识别文件封面</string>
+    <string name="album_cover_special_desc">如果没有相册权限，我们只能模糊地读取您的专辑封面。</string>
+    <string name="allow">获取</string>
+    <string name="allowed">已获取</string>
+    <string name="popup_view_credits">查看制作人员</string>
+    <string name="popup_delete_from_library">从资料库中删除</string>
+    <string name="popup_add_to_a_playlist">添加到播放列表…</string>
+    <string name="popup_share_song">分享歌曲…</string>
+    <string name="popup_share_lyrics">分享歌词…</string>
+    <string name="popup_go_to_album">前往专辑</string>
+    <string name="popup_create_station">创建电台</string>
+    <string name="popup_undo_favorite">撤销喜爱</string>
+    <string name="library_head_playlist">播放列表</string>
+    <string name="library_head_artist">艺人</string>
+    <string name="library_head_album">专辑</string>
+    <string name="library_head_song">歌曲</string>
+    <string name="library_head_genre">类型</string>
+    <string name="play">播放</string>
+    <string name="waves_at_max">声波满格</string>
+    <string name="explore_more">探索更多</string>
+    <string name="browse_by_name">按名称浏览</string>
+    <string name="no_tracks_available">无可用歌曲</string>
+    <string name="no_tracks_available_subtitle">Accord 没有在库中发现歌曲。</string>
 </resources>

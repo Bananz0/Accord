@@ -1,5 +1,6 @@
 package org.akanework.gramophone.ui.fragments.settings
 
+
 import android.os.Bundle
 import android.view.View
 import android.widget.TextView
@@ -11,7 +12,7 @@ import com.google.android.material.textfield.TextInputEditText
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.akanework.gramophone.R
+import uk.akane.accord.R
 import org.akanework.gramophone.logic.data.lidarr.LidarrClient
 import org.akanework.gramophone.logic.data.lidarr.LidarrCredentialStore
 import org.akanework.gramophone.ui.fragments.BasePreferenceFragment

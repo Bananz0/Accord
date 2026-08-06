@@ -29,9 +29,31 @@
     <dimen name="mtrl_slider_widget_height" tools:override="true">21dp</dimen>
     <dimen name="mtrl_slider_track_side_padding" tools:override="true">0dp</dimen>
     <dimen name="bottom_sheet_height">56dp</dimen>
-    <dimen name="top_app_bar_height">132dp</dimen>
+    <dimen name="top_app_bar_height">110dp</dimen>
     <dimen name="preview_album_cover_start">24dp</dimen>
     <dimen name="full_cover_elevation">8dp</dimen>
     <dimen name="lyric_extra_line_height">3dp</dimen>
     <item name="top_divider_visibility" format="float" type="dimen">1.0</item>
+
+    <!-- ==== Ported from upstream Accord ==== -->
+    <dimen name="bottom_nav_height_raw">67dp</dimen>
+    <dimen name="bottom_nav_height">100dp</dimen>
+    <dimen name="bottom_nav_item_padding_bottom">8dp</dimen>
+    <dimen name="bottom_nav_item_padding_top">52dp</dimen>
+    <dimen name="preview_player_height">58dp</dimen>
+    <dimen name="splashscreen_icon_size">0dp</dimen>
+    <dimen name="bottom_panel_radius">16dp</dimen>
+    <dimen name="bottom_panel_shadow_radius">32dp</dimen>
+    <dimen name="toolbar_height">58dp</dimen>
+    <dimen name="divider_height_top_app_bar">0.3dp</dimen>
+    <dimen name="toolbar_margin_bottom_offset">29dp</dimen>
+    <dimen name="shrink_container_default_radius">0dp</dimen>
+    <dimen name="tablayout_height">40dp</dimen>
+    <dimen name="tablayout_bottom_margin">8dp</dimen>
+    <dimen name="scroller_width">36dp</dimen>
+    <dimen name="scroller_char_size">12sp</dimen>
+    <dimen name="full_cover_radius">14dp</dimen>
+    <dimen name="preview_player_horizontal_margin">12dp</dimen>
+    <dimen name="standard_side_padding">26.5dp</dimen>
+    <dimen name="bottom_navigation_gradient_height">33dp</dimen>
 </resources>

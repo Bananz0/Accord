@@ -1,5 +1,6 @@
 package org.akanework.gramophone.ui.fragments.settings
 
+
 import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
@@ -12,7 +13,7 @@ import com.google.android.material.textfield.TextInputEditText
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.akanework.gramophone.R
+import uk.akane.accord.R
 import org.akanework.gramophone.logic.data.lidarr.LidarrCredentialStore
 import org.akanework.gramophone.logic.data.lidarr.LidarrRequester
 import org.akanework.gramophone.logic.data.spotify.SpotifyClient

@@ -1,5 +1,6 @@
 package org.akanework.gramophone.ui.fragments
 
+
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
@@ -9,8 +10,8 @@ import androidx.core.widget.NestedScrollView
 import com.google.android.material.appbar.AppBarLayout
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.card.MaterialCardView
-import org.akanework.gramophone.BuildConfig
-import org.akanework.gramophone.R
+import uk.akane.accord.BuildConfig
+import uk.akane.accord.R
 import org.akanework.gramophone.logic.enableEdgeToEdgePaddingListener
 
 class AboutFragment : BaseElevatedFragment(null) {

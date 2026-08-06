@@ -1,5 +1,6 @@
 package org.akanework.gramophone.ui.components
 
+
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
@@ -16,7 +17,7 @@ import android.util.TypedValue
 import android.widget.FrameLayout
 import androidx.core.content.withStyledAttributes
 import androidx.core.view.doOnLayout
-import org.akanework.gramophone.R
+import uk.akane.accord.R
 import kotlin.math.min
 
 class FadingVerticalEdgeLayout @JvmOverloads constructor(

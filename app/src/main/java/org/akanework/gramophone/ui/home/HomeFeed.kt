@@ -1,9 +1,10 @@
 package org.akanework.gramophone.ui.home
 
+
 import android.content.Context
 import android.net.Uri
 import androidx.media3.common.MediaItem
-import org.akanework.gramophone.R
+import uk.akane.accord.R
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinLibraryLoader
 import org.akanework.gramophone.logic.data.lastfm.LastFmClient
 import org.akanework.gramophone.logic.data.lastfm.LastFmCredentialStore

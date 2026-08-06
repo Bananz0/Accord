@@ -1,5 +1,6 @@
 package org.akanework.gramophone.ui.fragments.settings
 
+
 import android.os.Bundle
 import android.text.format.Formatter
 import android.widget.Toast
@@ -9,7 +10,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.akanework.gramophone.R
+import uk.akane.accord.R
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinDownloadManager
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinMediaCache
 import org.akanework.gramophone.ui.fragments.BasePreferenceFragment

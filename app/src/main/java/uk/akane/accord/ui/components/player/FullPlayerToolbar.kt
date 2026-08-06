@@ -15,7 +15,7 @@ import uk.akane.accord.logic.inverseLerp
 import uk.akane.accord.logic.setTextAnimation
 import uk.akane.accord.logic.utils.CalculationUtils.lerp
 import uk.akane.accord.ui.MainActivity
-import uk.akane.cupertino.widget.OverlayTextView
+import uk.akane.cupertino.widget.text.OverlayTextView
 import uk.akane.cupertino.widget.button.OverlayBackgroundButton
 import uk.akane.cupertino.widget.button.StarTransformButton
 import uk.akane.cupertino.widget.image.SimpleImageView

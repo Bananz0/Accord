@@ -1,10 +1,11 @@
 package org.akanework.gramophone.ui.components
 
+
 import android.content.Context
 import android.graphics.Rect
 import android.view.View
 import androidx.recyclerview.widget.RecyclerView
-import org.akanework.gramophone.R
+import uk.akane.accord.R
 
 class LyricPaddingDecoration(context: Context) : RecyclerView.ItemDecoration() {
 

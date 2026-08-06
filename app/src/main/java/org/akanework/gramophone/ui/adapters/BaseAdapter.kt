@@ -17,6 +17,7 @@
 
 package org.akanework.gramophone.ui.adapters
 
+
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.res.Configuration
@@ -49,7 +50,7 @@ import com.google.android.material.button.MaterialButton
 import com.google.android.material.divider.MaterialDivider
 import kotlinx.coroutines.sync.Semaphore
 import me.zhanghai.android.fastscroll.PopupTextProvider
-import org.akanework.gramophone.R
+import uk.akane.accord.R
 import org.akanework.gramophone.logic.getStringStrict
 import org.akanework.gramophone.logic.ui.DefaultItemHeightHelper
 import org.akanework.gramophone.logic.ui.ItemHeightHelper

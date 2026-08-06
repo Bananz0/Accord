@@ -1,5 +1,6 @@
 package org.akanework.gramophone.ui.components
 
+
 import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Bitmap
@@ -33,7 +34,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.akanework.gramophone.R
+import uk.akane.accord.R
 import java.io.FileNotFoundException
 import java.io.InputStream
 import kotlin.math.ceil

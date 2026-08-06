@@ -19,7 +19,7 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application
-        android:name=".logic.GramophoneApplication"
+        android:name="org.akanework.gramophone.logic.GramophoneApplication"
         android:allowBackup="true"
         android:appCategory="audio"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -35,11 +35,11 @@
         tools:targetApi="upside_down_cake">
 
         <activity
-            android:name=".ui.BugHandlerActivity"
+            android:name="org.akanework.gramophone.ui.BugHandlerActivity"
             android:exported="false" />
 
         <service
-            android:name=".logic.GramophonePlaybackService"
+            android:name="org.akanework.gramophone.logic.GramophonePlaybackService"
             android:exported="true"
             android:foregroundServiceType="mediaPlayback"
             tools:ignore="ExportedService">
@@ -55,7 +55,7 @@
             queue work here; media3 starts it through an explicit intent.
         -->
         <service
-            android:name=".logic.GramophoneDownloadService"
+            android:name="org.akanework.gramophone.logic.GramophoneDownloadService"
             android:exported="false"
             android:foregroundServiceType="dataSync">
             <intent-filter>
@@ -76,7 +76,7 @@
             without the PKCE verifier held inside the app.
         -->
         <activity
-            android:name=".ui.SpotifyAuthActivity"
+            android:name="org.akanework.gramophone.ui.SpotifyAuthActivity"
             android:exported="true"
             android:launchMode="singleTask"
             android:noHistory="true"
@@ -92,13 +92,13 @@
         </activity>
 
         <activity
-            android:name=".ui.JellyfinLoginActivity"
+            android:name="org.akanework.gramophone.ui.JellyfinLoginActivity"
             android:exported="false"
             android:label="@string/jellyfin_login_title"
             android:windowSoftInputMode="adjustResize" />
 
         <activity
-            android:name=".ui.MainActivity"
+            android:name="org.akanework.gramophone.ui.MainActivity"
             android:exported="true"
             android:launchMode="singleTop"
             android:theme="@style/Theme.Splash"
