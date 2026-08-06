@@ -22,6 +22,8 @@ import android.content.SharedPreferences
 import android.graphics.Color
 import android.graphics.drawable.Drawable
 import android.os.Bundle
+import android.view.LayoutInflater
+import androidx.appcompat.view.ContextThemeWrapper
 import android.view.View
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toDrawable
@@ -41,6 +43,16 @@ import org.akanework.gramophone.logic.enableEdgeToEdgePaddingListener
  */
 abstract class BasePreferenceFragment : PreferenceFragmentCompat(),
     SharedPreferences.OnSharedPreferenceChangeListener {
+
+    /**
+     * The preference layouts reach for Material3 attributes, which the activity theme used to
+     * supply. The Accord shell that now hosts these screens is themed on MaterialComponents
+     * instead, and inflating a preference row against it died with "Failed to resolve attribute".
+     * Inflating against the old theme keeps these screens working wherever they are hosted.
+     */
+    override fun onGetLayoutInflater(savedInstanceState: Bundle?): LayoutInflater =
+        super.onGetLayoutInflater(savedInstanceState)
+            .cloneInContext(ContextThemeWrapper(requireContext(), R.style.Theme_Gramophone))
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
