@@ -59,9 +59,9 @@ class HomeFragment: Fragment() {
             insets
         }
 
-        // The header's overflow button is the way into settings; nothing else in the Accord shell
-        // opens them.
-        navigationBar.setOnMenuClickListener {
+        // The profile control opens settings - it is where an account and its preferences belong,
+        // and the overflow button keeps its own menu.
+        navigationBar.setOnAvatarClickListener {
             (activity as? MainActivity)?.fragmentSwitcherView
                 ?.addFragmentToCurrentStack(SettingsFragment())
         }

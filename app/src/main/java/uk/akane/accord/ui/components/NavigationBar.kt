@@ -231,6 +231,7 @@ class NavigationBar @JvmOverloads constructor(
         Log.d("TAG", "invalidated! $shouldDrawLargeMenuItem")
         menuButtonBounds.setEmpty()
         addButtonBounds.setEmpty()
+        avatarBounds.setEmpty()
         if (shouldDrawLargeMenuItem) {
             drawMenuItems(canvas)
         }
@@ -440,6 +441,9 @@ class NavigationBar @JvmOverloads constructor(
                 drawableRight.toInt(),
                 drawableBottom.toInt()
             )
+            // Upstream draws the avatar and nothing else - it has no bounds recorded and no way to
+            // be tapped. Recording them here is what lets it open anything.
+            avatarBounds.set(drawableLeft, drawableTop, drawableRight, drawableBottom)
 
             avatarDrawable.setTint(avatarColor)
             if (avatarColor != accent) {
@@ -519,6 +523,8 @@ class NavigationBar @JvmOverloads constructor(
     private var renderNodeHeight = 0
 
     private var targetView: View? = null
+    private var avatarClickListener: (() -> Unit)? = null
+    private var avatarPressed = false
     private var returnClickListener: (() -> Unit)? = null
     private var menuClickListener: (() -> Unit)? = null
     private var addClickListener: (() -> Unit)? = null
@@ -528,6 +534,7 @@ class NavigationBar @JvmOverloads constructor(
     private val returnButtonBounds = RectF()
     private val menuButtonBounds = RectF()
     private val addButtonBounds = RectF()
+    private val avatarBounds = RectF()
     private val returnRowYOffset = RETURN_ROW_Y_OFFSET.dp.px
     private var menuButtonChecked = false
     private var menuButtonTransformFactor = 0F
@@ -535,6 +542,11 @@ class NavigationBar @JvmOverloads constructor(
 
     fun setOnReturnClickListener(listener: (() -> Unit)?) {
         returnClickListener = listener
+    }
+
+    /** The profile control, which upstream draws but never wires to anything. */
+    fun setOnAvatarClickListener(listener: (() -> Unit)?) {
+        avatarClickListener = listener
     }
 
     fun setOnMenuClickListener(listener: (() -> Unit)?) {
@@ -714,6 +726,9 @@ class NavigationBar @JvmOverloads constructor(
                 addButtonPressed = true
                 return true
             }
+            if (avatarClickListener != null && avatarBounds.contains(ev.x, ev.y)) {
+                return true
+            }
             if (menuButtonBounds.contains(ev.x, ev.y)) {
                 menuButtonPressed = true
                 return true
@@ -732,6 +747,10 @@ class NavigationBar @JvmOverloads constructor(
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                if (avatarClickListener != null && avatarBounds.contains(event.x, event.y)) {
+                    avatarPressed = true
+                    return true
+                }
                 if (shouldDrawLargeMenuItem) {
                     addButtonPressed = addButtonBounds.contains(event.x, event.y)
                     if (addButtonPressed) {
@@ -747,6 +766,11 @@ class NavigationBar @JvmOverloads constructor(
                 return returnButtonPressed
             }
             MotionEvent.ACTION_UP -> {
+                if (avatarPressed && avatarBounds.contains(event.x, event.y)) {
+                    avatarClickListener?.invoke()
+                    performClick()
+                }
+                avatarPressed = false
                 if (addButtonPressed && addButtonBounds.contains(event.x, event.y)) {
                     (addClickListener ?: {}).invoke()
                     performClick()
@@ -769,6 +793,7 @@ class NavigationBar @JvmOverloads constructor(
                 returnButtonPressed = false
                 menuButtonPressed = false
                 addButtonPressed = false
+                avatarPressed = false
                 return false
             }
         }

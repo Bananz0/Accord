@@ -207,6 +207,12 @@
     -->
     <!-- Accord settings root. -->
     <string name="settings">Settings</string>
+    <!-- Accord settings, section captions. -->
+    <string name="settings_section_library">Library</string>
+    <string name="settings_section_services">Services</string>
+    <string name="settings_section_appearance">Appearance</string>
+    <string name="settings_section_audio">Audio</string>
+    <string name="settings_section_about">About</string>
     <string name="settings_jellyfin_summary">Server and account</string>
     <string name="no_lyrics">No lyrics for this track</string>
 

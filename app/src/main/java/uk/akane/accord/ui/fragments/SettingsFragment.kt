@@ -6,45 +6,43 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
-import android.widget.TextView
-import androidx.annotation.StringRes
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.widget.NestedScrollView
 import androidx.fragment.app.Fragment
+import androidx.preference.PreferenceManager
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinCredentialStore
 import org.akanework.gramophone.ui.JellyfinLoginActivity
-import org.akanework.gramophone.ui.fragments.settings.BlacklistSettingsFragment
 import org.akanework.gramophone.ui.fragments.settings.AppearanceSettingsFragment
 import org.akanework.gramophone.ui.fragments.settings.AudioSettingsFragment
 import org.akanework.gramophone.ui.fragments.settings.BehaviorSettingsFragment
+import org.akanework.gramophone.ui.fragments.settings.BlacklistSettingsFragment
 import org.akanework.gramophone.ui.fragments.settings.DownloadsSettingsFragment
 import org.akanework.gramophone.ui.fragments.settings.ExperimentalSettingsFragment
 import org.akanework.gramophone.ui.fragments.settings.LidarrSettingsFragment
 import org.akanework.gramophone.ui.fragments.settings.ScrobblingSettingsFragment
 import org.akanework.gramophone.ui.fragments.settings.SpotifySettingsFragment
+import uk.akane.accord.BuildConfig
 import uk.akane.accord.R
 import uk.akane.accord.ui.MainActivity
 import uk.akane.accord.ui.components.NavigationBar
+import uk.akane.accord.ui.components.SettingsListBuilder
 
 /**
- * Settings, reachable again.
+ * Settings, in the shape the 1.0-stable build uses - sectioned cards rather than the old preference
+ * screens - and reachable again.
  *
- * The old shell's settings navigated by adding fragments to a container that only existed in that
- * activity, so once the Accord shell became the entry point every settings screen - Jellyfin,
- * scrobbling, Spotify, Lidarr, downloads - was stranded with no way in. This is a plain list of
- * rows in Accord's navigation that pushes those same screens onto the switcher, so their contents
- * and behaviour are untouched.
+ * The old shell navigated settings by adding fragments to a container that only existed in that
+ * activity, so once the Accord shell became the entry point every settings screen was stranded. The
+ * rows here are declared rather than laid out, so the sections this fork adds - Jellyfin,
+ * scrobbling, Spotify, Lidarr, downloads - sit alongside the rest instead of in a separate world.
  */
 class SettingsFragment : Fragment() {
 
     private val mainActivity
         get() = requireActivity() as MainActivity
 
-    private class Row(
-        @param:StringRes val title: Int,
-        @param:StringRes val summary: Int? = null,
-        val open: (SettingsFragment) -> Unit
-    )
+    private lateinit var builder: SettingsListBuilder
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -64,43 +62,97 @@ class SettingsFragment : Fragment() {
         }
         navigationBar.attach(rootView.findViewById<NestedScrollView>(R.id.scrollContainer))
 
-        val rows = rootView.findViewById<LinearLayout>(R.id.settings_rows)
-        ROWS.forEach { row ->
-            val view = inflater.inflate(R.layout.layout_settings_row, rows, false)
-            view.findViewById<TextView>(R.id.row_title).setText(row.title)
-            row.summary?.let {
-                view.findViewById<TextView>(R.id.row_summary).apply {
-                    setText(it)
-                    visibility = View.VISIBLE
-                }
-            }
-            view.setOnClickListener { row.open(this) }
-            rows.addView(view)
-        }
-
+        builder = SettingsListBuilder(rootView.findViewById<LinearLayout>(R.id.settings_rows))
         return rootView
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Rebuilt here rather than once, so a row's summary - signed in or not - is right again
+        // after coming back from the screen that changed it.
+        builder.build(sections())
     }
 
     private fun push(fragment: Fragment) {
         mainActivity.fragmentSwitcherView.addFragmentToCurrentStack(fragment)
     }
 
-    companion object {
-        private val ROWS = listOf(
-            Row(R.string.jellyfin_login_title, R.string.settings_jellyfin_summary) {
-                it.startActivity(Intent(it.requireContext(), JellyfinLoginActivity::class.java))
-            },
-            Row(R.string.settings_category_appearance) { it.push(AppearanceSettingsFragment()) },
-            Row(R.string.settings_category_behavior) { it.push(BehaviorSettingsFragment()) },
-            Row(R.string.settings_audio) { it.push(AudioSettingsFragment()) },
-            Row(R.string.settings_category_downloads) { it.push(DownloadsSettingsFragment()) },
-            Row(R.string.settings_category_scrobbling) { it.push(ScrobblingSettingsFragment()) },
-            Row(R.string.settings_category_spotify) { it.push(SpotifySettingsFragment()) },
-            Row(R.string.settings_category_lidarr) { it.push(LidarrSettingsFragment()) },
-            Row(R.string.settings_blacklist) { it.push(BlacklistSettingsFragment()) },
-            Row(R.string.settings_experimental_settings) {
-                it.push(ExperimentalSettingsFragment())
-            },
+    private fun sections(): List<SettingsListBuilder.Section> {
+        val context = requireContext()
+        val prefs = PreferenceManager.getDefaultSharedPreferences(context)
+        val jellyfinSignedIn = JellyfinCredentialStore.hasStoredSession(context)
+
+        return listOf(
+            SettingsListBuilder.Section(
+                title = getString(R.string.settings_section_library),
+                rows = listOf(
+                    SettingsListBuilder.Row.Navigation(
+                        title = getString(R.string.jellyfin_login_title),
+                        summary = getString(
+                            if (jellyfinSignedIn) R.string.setup_jellyfin_server_connected
+                            else R.string.setup_jellyfin_account_desc
+                        )
+                    ) {
+                        startActivity(Intent(context, JellyfinLoginActivity::class.java))
+                    },
+                    SettingsListBuilder.Row.Toggle(
+                        title = getString(R.string.settings_sync_on_startup),
+                        checked = prefs.getBoolean("sync_on_startup", false)
+                    ) { prefs.edit().putBoolean("sync_on_startup", it).apply() },
+                    SettingsListBuilder.Row.Navigation(
+                        title = getString(R.string.settings_blacklist)
+                    ) { push(BlacklistSettingsFragment()) },
+                    SettingsListBuilder.Row.Navigation(
+                        title = getString(R.string.settings_category_downloads)
+                    ) { push(DownloadsSettingsFragment()) },
+                ),
+                footer = getString(R.string.settings_sync_on_startup_summary)
+            ),
+            SettingsListBuilder.Section(
+                title = getString(R.string.settings_section_services),
+                rows = listOf(
+                    SettingsListBuilder.Row.Navigation(
+                        title = getString(R.string.settings_category_scrobbling)
+                    ) { push(ScrobblingSettingsFragment()) },
+                    SettingsListBuilder.Row.Navigation(
+                        title = getString(R.string.settings_category_spotify)
+                    ) { push(SpotifySettingsFragment()) },
+                    SettingsListBuilder.Row.Navigation(
+                        title = getString(R.string.settings_category_lidarr)
+                    ) { push(LidarrSettingsFragment()) },
+                )
+            ),
+            SettingsListBuilder.Section(
+                title = getString(R.string.settings_section_appearance),
+                rows = listOf(
+                    SettingsListBuilder.Row.Navigation(
+                        title = getString(R.string.settings_category_appearance)
+                    ) { push(AppearanceSettingsFragment()) },
+                    SettingsListBuilder.Row.Navigation(
+                        title = getString(R.string.settings_category_behavior)
+                    ) { push(BehaviorSettingsFragment()) },
+                )
+            ),
+            SettingsListBuilder.Section(
+                title = getString(R.string.settings_section_audio),
+                rows = listOf(
+                    SettingsListBuilder.Row.Navigation(
+                        title = getString(R.string.settings_audio)
+                    ) { push(AudioSettingsFragment()) },
+                    SettingsListBuilder.Row.Navigation(
+                        title = getString(R.string.settings_experimental_settings)
+                    ) { push(ExperimentalSettingsFragment()) },
+                )
+            ),
+            SettingsListBuilder.Section(
+                title = getString(R.string.settings_section_about),
+                rows = listOf(
+                    SettingsListBuilder.Row.Navigation(
+                        title = getString(R.string.settings_version),
+                        summary = BuildConfig.MY_VERSION_NAME
+                    ) { /* Nothing to open yet. */ },
+                )
+            ),
         )
     }
 }
