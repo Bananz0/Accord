@@ -12,7 +12,13 @@ import kotlin.math.roundToInt
 class LyricsView @JvmOverloads constructor(
     context: Context, attrs: AttributeSet? = null, defStyleAttr: Int = 0
 ) : ViewGroup(context, attrs, defStyleAttr) {
-    val contentPaddingTop = 160.dp.px.roundToInt()
+    /**
+     * Where the first line sits, and where the current line rests once scrolling starts.
+     *
+     * 160dp put the top line most of a thumb below the toolbar with nothing in the gap.
+     * Enough to breathe, not enough to look like the text failed to load.
+     */
+    val contentPaddingTop = 56.dp.px.roundToInt()
 
     /** Set by whoever owns the player, so tapping a line can jump to it. */
     var onSeek: ((Long) -> Unit)? = null

@@ -138,7 +138,13 @@ object LrcUtils {
                     return@let
                 }
                 val lyricLine = line.substring(sequence.last().range.last + 1)
-                    .let { if (trim) it.trim() else it }
+                    // Always trimmed, whatever the setting says. An LRC file routinely puts
+                    // a space after the timestamp; rendered, that indents the first line of
+                    // every verse while the lines it wraps onto sit flush. The setting is
+                    // about dropping empty lines - a different question - and on any device
+                    // where it had already been written as off, leaving this behind it meant
+                    // the indent could never be fixed.
+                    .trim()
                     .let {
                         if ((currentLabel == Label.Voice1 || currentLabel == Label.Voice2) && !it.trim().startsWith("v")) {
                             it.replaceFirst(labelRegexNumberOnly, "")

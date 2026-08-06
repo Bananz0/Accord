@@ -40,6 +40,7 @@ import uk.akane.accord.ui.components.NavigationBar
 import uk.akane.cupertino.widget.fadOutAnimation
 import uk.akane.cupertino.utils.AnimationUtils
 import uk.akane.accord.ui.components.TrackSwipeActions
+import androidx.core.view.updatePadding
 
 class SearchFragment: Fragment() {
     private lateinit var navigationBar: NavigationBar
@@ -138,13 +139,14 @@ class SearchFragment: Fragment() {
         // room for the mini player: the last result sat behind it and sprang back when
         // dragged into view.
         searchResults.clipToPadding = false
-        searchResults.doOnLayout {
-            searchResults.setPadding(
-                searchResults.paddingLeft,
-                searchResults.paddingTop,
-                searchResults.paddingRight,
-                (requireActivity() as MainActivity).bottomHeight,
-            )
+        // Applied straight away rather than on layout: this list lives inside a container that
+        // starts hidden, so a layout-time hook either never ran or ran before the mini player had
+        // a height - which is why the last result stayed underneath it.
+        searchResults.updatePadding(bottom = (requireActivity() as MainActivity).bottomHeight)
+        ViewCompat.setOnApplyWindowInsetsListener(searchResults) { v, insets ->
+            // Recomputed when the insets land, since the mini player sits above the gesture bar.
+            v.updatePadding(bottom = (requireActivity() as MainActivity).bottomHeight)
+            insets
         }
         // Same gesture as every other list: right queues it, left downloads it.
         TrackSwipeActions.attach(

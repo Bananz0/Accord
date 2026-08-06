@@ -284,7 +284,9 @@ class LyricsLineView internal constructor(
         const val NEIGHBOUR_ALPHA = 0.45f
 
         const val ACTIVE_ALPHA = 0.9f
-        const val INACTIVE_ALPHA = 0.2f
+        // Readable, not shouting. At 0.2 the rest of the song disappeared entirely against
+        // a pale album backdrop, which is not the same as being de-emphasised.
+        const val INACTIVE_ALPHA = 0.34f
         const val ACTIVE_SCALE = 1f
         const val INACTIVE_SCALE = 0.96f
         val maxBlurRadius = 8.dp.px
