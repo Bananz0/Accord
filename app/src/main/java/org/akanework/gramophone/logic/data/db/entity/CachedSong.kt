@@ -28,6 +28,9 @@ data class CachedSong(
     val title: String?,
     @ColumnInfo(name = "artist")
     val artist: String?,
+    /** Every track artist from Jellyfin, separated by an ASCII unit separator. */
+    @ColumnInfo(name = "trackArtists")
+    val trackArtists: String?,
     @ColumnInfo(name = "artistId")
     val artistId: Long?,
     @ColumnInfo(name = "album")

@@ -8,7 +8,6 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.CacheWriter
-import androidx.media3.exoplayer.offline.DownloadRequest
 import coil3.ImageLoader
 import coil3.request.ImageRequest
 import kotlinx.coroutines.CoroutineScope
@@ -79,8 +78,8 @@ object QueuePrefetcher {
                 .setUri(uri)
                 .setPosition(0)
                 .setLength(PREFETCH_BYTES)
-                // Same key playback will use, or the warmed bytes would sit under a key nothing reads.
-                .setKey(DownloadRequest.Builder(item.mediaId, uri).build().id)
+                // Leave key unset so Media3 derives the URI key used by ordinary playback and
+                // downloads. A media-id key creates a second, unreachable cache entry.
                 .build()
             CacheWriter(source as? CacheDataSource ?: return, spec, null, null).cache()
         }.onFailure {

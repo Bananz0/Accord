@@ -1,14 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
     A station card: generated colour field, the Accord mark watermarked in the corner, and the
-    station's name on a frosted strip along the bottom - the shape the 1.0-stable build uses for its
-    "Made for you" row.
+    station's name on a frosted strip along the bottom - matched to standard 220dp x 280dp carousel dimensions.
 -->
 <com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
-    android:layout_width="276dp"
-    android:layout_height="360dp"
+    android:layout_width="220dp"
+    android:layout_height="280dp"
     android:layout_marginEnd="12dp"
     android:clickable="true"
     android:focusable="true"
@@ -41,9 +40,9 @@
         android:fontFamily="@font/inter_regular"
         android:gravity="center"
         android:includeFontPadding="false"
-        android:paddingVertical="18dp"
+        android:paddingVertical="14dp"
         android:textColor="@android:color/white"
-        android:textSize="17sp"
+        android:textSize="16sp"
         tools:text="Daily shuffle" />
 
 </com.google.android.material.card.MaterialCardView>

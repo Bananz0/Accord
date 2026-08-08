@@ -15,7 +15,11 @@ import uk.akane.accord.ui.adapters.browse.ArtistAdapter
 import uk.akane.accord.ui.components.NavigationBar
 import uk.akane.cupertino.navigation.SwitcherPostponeFragment
 import android.widget.EditText
+import android.widget.TextView
+import androidx.core.view.doOnLayout
 import androidx.core.widget.doAfterTextChanged
+import uk.akane.accord.ui.components.performPressHaptic
+import uk.akane.cupertino.utils.AnimationUtils
 
 class ArtistsFragment : SwitcherPostponeFragment() {
 
@@ -83,6 +87,54 @@ class ArtistsFragment : SwitcherPostponeFragment() {
         rootView.findViewById<EditText?>(R.id.search_input)?.doAfterTextChanged {
             artistAdapter.setFilter(it?.toString().orEmpty())
         }
+        val modeContainer = rootView.findViewById<View>(R.id.artist_tab_container)
+        val modeIndicator = rootView.findViewById<View>(R.id.artist_tab_indicator)
+        val mainMode = rootView.findViewById<TextView>(R.id.artist_mode_main)
+        val featuredMode = rootView.findViewById<TextView>(R.id.artist_mode_featured)
+        var mainSelected = true
+
+        fun updateModeIndicator(animate: Boolean) {
+            val parent = modeIndicator.parent as View
+            if (parent.width == 0) return
+            val margins = modeIndicator.layoutParams as ViewGroup.MarginLayoutParams
+            val horizontalMargins = margins.leftMargin + margins.rightMargin
+            val segmentWidth = (parent.width - horizontalMargins) / 2
+            if (margins.width != segmentWidth) {
+                margins.width = segmentWidth
+                modeIndicator.layoutParams = margins
+            }
+            val target = if (mainSelected) 0F
+            else (parent.width - segmentWidth - horizontalMargins).toFloat()
+            if (animate) {
+                modeIndicator.animate()
+                    .translationX(target)
+                    .setDuration(AnimationUtils.MID_DURATION)
+                    .setInterpolator(AnimationUtils.easingStandardInterpolator)
+                    .start()
+            } else {
+                modeIndicator.translationX = target
+            }
+            val selected = requireContext().getColor(R.color.onSurfaceColor)
+            val inactive = requireContext().getColor(R.color.onSurfaceColorInactive)
+            mainMode.setTextColor(if (mainSelected) selected else inactive)
+            featuredMode.setTextColor(if (mainSelected) inactive else selected)
+        }
+
+        fun selectMainArtists(selectMain: Boolean) {
+            if (mainSelected == selectMain) return
+            mainSelected = selectMain
+            modeContainer.performPressHaptic()
+            artistAdapter.setDisplayMode(
+                if (selectMain) ArtistAdapter.ArtistKind.PRIMARY
+                else ArtistAdapter.ArtistKind.FEATURED
+            )
+            recyclerView.scrollToPosition(0)
+            updateModeIndicator(true)
+        }
+
+        mainMode.setOnClickListener { selectMainArtists(true) }
+        featuredMode.setOnClickListener { selectMainArtists(false) }
+        modeContainer.doOnLayout { updateModeIndicator(false) }
         navigationBar.attach(recyclerView)
         navigationBar.setOnReturnClickListener {
             activity.fragmentSwitcherView.popBackTopFragmentIfExists()

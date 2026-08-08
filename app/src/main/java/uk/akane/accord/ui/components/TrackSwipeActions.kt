@@ -10,6 +10,9 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.RecyclerView
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinDownloadManager
 import uk.akane.accord.R
 import uk.akane.accord.logic.dp
@@ -17,8 +20,6 @@ import uk.akane.accord.ui.MainActivity
 import android.view.MotionEvent
 import android.view.ViewConfiguration
 import kotlin.math.abs
-import android.view.HapticFeedbackConstants
-import kotlin.math.min
 
 /**
  * Swipe a track row to do the two things worth doing without opening a menu.
@@ -53,22 +54,29 @@ object TrackSwipeActions {
         val corner = 12.dp.px
         val inset = 16.dp.px
 
-        // Tracks which rows have already buzzed, so crossing the threshold reports once per
-        // gesture rather than on every frame past it.
-        val armed = mutableSetOf<Int>()
+        val swipeHaptics = ResistiveSwipeHaptics()
+        var trackedHolder: RecyclerView.ViewHolder? = null
+        var armedDirection = 0
+        var actionDispatched = false
+        var removeAfterRecoil: MediaItem? = null
 
         val callback = object : ItemTouchHelper.SimpleCallback(
             0,
             ItemTouchHelper.LEFT or ItemTouchHelper.RIGHT
         ) {
             /** How far the finger must travel, as a fraction of the row, to mean it. */
-            override fun getSwipeThreshold(viewHolder: RecyclerView.ViewHolder) = 0.30F
+            // Actions never use ItemTouchHelper's "swipe away" completion. Its cancel path is the
+            // one that keeps drawing the reveal while both it and the row recoil to zero.
+            override fun getSwipeThreshold(viewHolder: RecyclerView.ViewHolder) = NEVER_SWIPE_AWAY
 
             /**
              * A flick should not throw the row off the screen. Raising the escape velocity
              * well above the default means the distance decides, not the speed.
              */
-            override fun getSwipeEscapeVelocity(defaultValue: Float) = defaultValue * 8F
+            // A short, decisive flick carries enough momentum to complete the action even when the
+            // finger leaves just before the distance threshold.
+            override fun getSwipeEscapeVelocity(defaultValue: Float) = Float.MAX_VALUE
+            override fun getSwipeVelocityThreshold(defaultValue: Float) = Float.MAX_VALUE
 
             override fun getSwipeDirs(
                 recyclerView: RecyclerView,
@@ -88,26 +96,34 @@ object TrackSwipeActions {
                 target: RecyclerView.ViewHolder
             ) = false
 
+            override fun getAnimationDuration(
+                recyclerView: RecyclerView,
+                animationType: Int,
+                animateDx: Float,
+                animateDy: Float,
+            ): Long = if (animationType == ItemTouchHelper.ANIMATION_TYPE_SWIPE_CANCEL) {
+                SETTLE_MS
+            } else {
+                super.getAnimationDuration(recyclerView, animationType, animateDx, animateDy)
+            }
+
             override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
-                val position = viewHolder.absoluteAdapterPosition
-                armed.remove(viewHolder.hashCode())
-                viewHolder.itemView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
-                val item = trackAt(position)
-                if (item == null) {
-                    recyclerView.adapter?.notifyItemChanged(position)
-                    return
-                }
-                if (direction == ItemTouchHelper.RIGHT) {
-                    addToQueue(activity, item)
-                } else if (onRemove != null) {
-                    onRemove(item)
-                    return
-                } else {
-                    JellyfinDownloadManager.download(activity, listOf(item))
-                    Toast.makeText(activity, R.string.download_started, Toast.LENGTH_SHORT).show()
-                }
-                // The row is still in the list, so it has to be put back where it was.
-                recyclerView.adapter?.notifyItemChanged(position)
+                // Defensive only: the thresholds above make this path unreachable.
+                recyclerView.adapter?.notifyItemChanged(viewHolder.absoluteAdapterPosition)
+            }
+
+            override fun clearView(
+                recyclerView: RecyclerView,
+                viewHolder: RecyclerView.ViewHolder,
+            ) {
+                super.clearView(recyclerView, viewHolder)
+                swipeHaptics.release(viewHolder.itemView)
+                val pendingRemoval = removeAfterRecoil
+                trackedHolder = null
+                armedDirection = 0
+                actionDispatched = false
+                removeAfterRecoil = null
+                pendingRemoval?.let { onRemove?.invoke(it) }
             }
 
             /**
@@ -128,17 +144,54 @@ object TrackSwipeActions {
                 // of the edge: it never leaves, so it always reads as something that will come
                 // back, and the extra travel of the finger is the resistance.
                 val limit = view.width * MAX_TRAVEL
-                val damped = if (dX == 0F) 0F else {
-                    val magnitude = min(abs(dX) * FOLLOW, limit)
-                    if (dX > 0) magnitude else -magnitude
-                }
+                val damped = resistedSwipeDistance(dX, limit, FOLLOW)
 
                 if (actionState == ItemTouchHelper.ACTION_STATE_SWIPE && damped != 0F) {
+                    if (isCurrentlyActive) {
+                        if (trackedHolder !== viewHolder) {
+                            trackedHolder = viewHolder
+                            armedDirection = 0
+                            actionDispatched = false
+                            removeAfterRecoil = null
+                        }
+                        swipeHaptics.update(
+                            view,
+                            dX,
+                            view.width * SWIPE_THRESHOLD,
+                        )
+                        armedDirection = when {
+                            abs(dX) < view.width * SWIPE_THRESHOLD -> 0
+                            dX > 0F -> ItemTouchHelper.RIGHT
+                            else -> ItemTouchHelper.LEFT
+                        }
+                    } else if (!actionDispatched && armedDirection != 0) {
+                        trackAt(viewHolder.absoluteAdapterPosition)?.let { item ->
+                            swipeHaptics.commit(view)
+                            when {
+                                armedDirection == ItemTouchHelper.RIGHT -> addToQueue(activity, item)
+                                onRemove != null -> removeAfterRecoil = item
+                                else -> {
+                                    activity.lifecycleScope.launch(Dispatchers.IO) {
+                                        JellyfinDownloadManager.download(activity, listOf(item))
+                                    }
+                                    Toast.makeText(
+                                        activity,
+                                        R.string.download_started,
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
+                            }
+                        }
+                        actionDispatched = true
+                    }
                     backgroundPaint.color = if (damped > 0) accent else Color.argb(255, 90, 90, 96)
+                    val cover = view.findViewById<android.view.View?>(R.id.cover)
+                    val artworkStart = cover?.left ?: inset.toInt()
                     val bounds = if (damped > 0) {
                         RectF(
-                            view.left.toFloat(), view.top.toFloat(),
-                            view.left + damped, view.bottom.toFloat()
+                            (view.left + artworkStart).toFloat(), view.top.toFloat(),
+                            (view.left + damped).coerceAtLeast(view.left + artworkStart.toFloat()),
+                            view.bottom.toFloat()
                         )
                     } else {
                         RectF(
@@ -150,10 +203,14 @@ object TrackSwipeActions {
 
                     val icon = if (damped > 0) queueIcon else leftIcon
                     icon?.let {
+                        val reveal = (
+                            abs(dX) / (view.width * SWIPE_THRESHOLD)
+                        ).coerceIn(0F, 1F)
+                        it.alpha = (255 * reveal).toInt()
                         val size = 22.dp.px.toInt()
                         val centerY = (view.top + view.bottom) / 2
                         val centerX = if (damped > 0) {
-                            (view.left + inset + size / 2).toInt()
+                            view.left + artworkStart + (cover?.width ?: size) / 2
                         } else {
                             (view.right - inset - size / 2).toInt()
                         }
@@ -163,16 +220,6 @@ object TrackSwipeActions {
                             centerX + size / 2, centerY + size / 2
                         )
                         it.draw(canvas)
-                    }
-
-                    // A tick the moment the swipe is far enough to do something, so the user
-                    // knows they can let go without watching the row.
-                    val key = viewHolder.hashCode()
-                    val past = abs(dX) > view.width * getSwipeThreshold(viewHolder)
-                    if (isCurrentlyActive && past && armed.add(key)) {
-                        view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
-                    } else if (!past) {
-                        armed.remove(key)
                     }
                 }
                 super.onChildDraw(
@@ -201,14 +248,18 @@ object TrackSwipeActions {
         val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG)
         val corner = 12.dp.px
         val inset = 16.dp.px
-        val armed = mutableSetOf<Int>()
+        val swipeHaptics = ResistiveSwipeHaptics()
+        var trackedHolder: RecyclerView.ViewHolder? = null
+        var armedDirection = 0
+        var actionDispatched = false
 
         val callback = object : ItemTouchHelper.SimpleCallback(
             0,
             ItemTouchHelper.LEFT or ItemTouchHelper.RIGHT
         ) {
-            override fun getSwipeThreshold(viewHolder: RecyclerView.ViewHolder) = 0.30F
-            override fun getSwipeEscapeVelocity(defaultValue: Float) = defaultValue * 8F
+            override fun getSwipeThreshold(viewHolder: RecyclerView.ViewHolder) = NEVER_SWIPE_AWAY
+            override fun getSwipeEscapeVelocity(defaultValue: Float) = Float.MAX_VALUE
+            override fun getSwipeVelocityThreshold(defaultValue: Float) = Float.MAX_VALUE
 
             override fun getSwipeDirs(
                 recyclerView: RecyclerView,
@@ -223,12 +274,30 @@ object TrackSwipeActions {
                 target: RecyclerView.ViewHolder
             ) = false
 
+            override fun getAnimationDuration(
+                recyclerView: RecyclerView,
+                animationType: Int,
+                animateDx: Float,
+                animateDy: Float,
+            ): Long = if (animationType == ItemTouchHelper.ANIMATION_TYPE_SWIPE_CANCEL) {
+                SETTLE_MS
+            } else {
+                super.getAnimationDuration(recyclerView, animationType, animateDx, animateDy)
+            }
+
             override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
-                val position = viewHolder.absoluteAdapterPosition
-                armed.remove(viewHolder.hashCode())
-                viewHolder.itemView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
-                if (canSwipe(position)) onRequest(position)
-                recyclerView.adapter?.notifyItemChanged(position)
+                recyclerView.adapter?.notifyItemChanged(viewHolder.absoluteAdapterPosition)
+            }
+
+            override fun clearView(
+                recyclerView: RecyclerView,
+                viewHolder: RecyclerView.ViewHolder,
+            ) {
+                super.clearView(recyclerView, viewHolder)
+                swipeHaptics.release(viewHolder.itemView)
+                trackedHolder = null
+                armedDirection = 0
+                actionDispatched = false
             }
 
             override fun onChildDraw(
@@ -242,16 +311,40 @@ object TrackSwipeActions {
             ) {
                 val view = viewHolder.itemView
                 val limit = view.width * MAX_TRAVEL
-                val damped = if (dX == 0F) 0F else {
-                    val magnitude = min(abs(dX) * FOLLOW, limit)
-                    if (dX > 0) magnitude else -magnitude
-                }
+                val damped = resistedSwipeDistance(dX, limit, FOLLOW)
                 if (actionState == ItemTouchHelper.ACTION_STATE_SWIPE && damped != 0F) {
+                    if (isCurrentlyActive) {
+                        if (trackedHolder !== viewHolder) {
+                            trackedHolder = viewHolder
+                            armedDirection = 0
+                            actionDispatched = false
+                        }
+                        swipeHaptics.update(
+                            view,
+                            dX,
+                            view.width * SWIPE_THRESHOLD,
+                        )
+                        armedDirection = when {
+                            abs(dX) < view.width * SWIPE_THRESHOLD -> 0
+                            dX > 0F -> ItemTouchHelper.RIGHT
+                            else -> ItemTouchHelper.LEFT
+                        }
+                    } else if (!actionDispatched && armedDirection != 0) {
+                        val position = viewHolder.absoluteAdapterPosition
+                        if (canSwipe(position)) {
+                            swipeHaptics.commit(view)
+                            onRequest(position)
+                        }
+                        actionDispatched = true
+                    }
                     backgroundPaint.color = accent
+                    val cover = view.findViewById<android.view.View?>(R.id.cover)
+                    val artworkStart = cover?.left ?: inset.toInt()
                     val bounds = if (damped > 0) {
                         RectF(
-                            view.left.toFloat(), view.top.toFloat(),
-                            view.left + damped, view.bottom.toFloat()
+                            (view.left + artworkStart).toFloat(), view.top.toFloat(),
+                            (view.left + damped).coerceAtLeast(view.left + artworkStart.toFloat()),
+                            view.bottom.toFloat()
                         )
                     } else {
                         RectF(
@@ -261,10 +354,14 @@ object TrackSwipeActions {
                     }
                     canvas.drawRoundRect(bounds, corner, corner, backgroundPaint)
                     icon?.let {
+                        val reveal = (
+                            abs(dX) / (view.width * SWIPE_THRESHOLD)
+                        ).coerceIn(0F, 1F)
+                        it.alpha = (255 * reveal).toInt()
                         val size = 22.dp.px.toInt()
                         val centerY = (view.top + view.bottom) / 2
                         val centerX = if (damped > 0) {
-                            (view.left + inset + size / 2).toInt()
+                            view.left + artworkStart + (cover?.width ?: size) / 2
                         } else {
                             (view.right - inset - size / 2).toInt()
                         }
@@ -274,13 +371,6 @@ object TrackSwipeActions {
                             centerX + size / 2, centerY + size / 2
                         )
                         it.draw(canvas)
-                    }
-                    val key = viewHolder.hashCode()
-                    val past = abs(dX) > view.width * getSwipeThreshold(viewHolder)
-                    if (isCurrentlyActive && past && armed.add(key)) {
-                        view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
-                    } else if (!past) {
-                        armed.remove(key)
                     }
                 }
                 super.onChildDraw(
@@ -346,9 +436,12 @@ object TrackSwipeActions {
         })
     }
 
-    /** How far the row follows the finger, and the furthest it will go. */
-    private const val FOLLOW = 0.45F
-    private const val MAX_TRAVEL = 0.24F
+    /** The hard stop is reached at the same instant the shorter swipe arms its action. */
+    private const val SWIPE_THRESHOLD = 0.36F
+    private const val FOLLOW = 0.56F
+    private const val MAX_TRAVEL = SWIPE_THRESHOLD * FOLLOW
+    private const val SETTLE_MS = 190L
+    private const val NEVER_SWIPE_AWAY = 2F
 
     private fun addToQueue(activity: MainActivity, item: MediaItem) {
         val player = activity.getPlayer() ?: return

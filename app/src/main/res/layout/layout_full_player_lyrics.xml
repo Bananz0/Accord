@@ -17,7 +17,7 @@
         app:fel_edge="top|bottom"
         app:fel_size_bottom="72dp"
         app:fel_size_top="40dp"
-        app:layout_constraintBottom_toTopOf="@id/progressBar"
+        app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/full_player_tool_bar">

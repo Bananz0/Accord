@@ -14,14 +14,34 @@
     <com.google.android.material.card.MaterialCardView
         android:layout_width="168dp"
         android:layout_height="168dp"
+        android:clickable="false"
+        android:focusable="false"
         app:cardCornerRadius="6dp"
         app:strokeColor="@color/contrast_colorOutline"
         app:strokeWidth="1dp">
+
+        <uk.akane.accord.ui.components.CollageArtView
+            android:id="@+id/collage_art"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clickable="false"
+            android:focusable="false"
+            android:visibility="gone" />
+
+        <uk.akane.accord.ui.components.StationArtView
+            android:id="@+id/station_art"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clickable="false"
+            android:focusable="false"
+            android:visibility="gone" />
 
         <ImageView
             android:id="@+id/cover"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
+            android:clickable="false"
+            android:focusable="false"
             android:importantForAccessibility="no" />
 
     </com.google.android.material.card.MaterialCardView>

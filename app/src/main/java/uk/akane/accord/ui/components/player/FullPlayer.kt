@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.app.AlertDialog
 import android.content.Context
 import android.graphics.RectF
+import android.graphics.Rect
 import android.animation.ValueAnimator
 import android.content.BroadcastReceiver
 import android.content.Intent
@@ -73,6 +74,7 @@ import android.widget.ImageView
 import org.akanework.gramophone.logic.utils.AudioOutput
 import kotlin.math.abs
 import uk.akane.accord.R
+import uk.akane.accord.logic.ArtistCredits
 import uk.akane.accord.logic.dp
 import uk.akane.accord.logic.inverseLerp
 import uk.akane.accord.logic.playOrPause
@@ -85,7 +87,11 @@ import uk.akane.accord.ui.MainActivity
 import uk.akane.accord.ui.adapters.QueueItem
 import uk.akane.accord.ui.adapters.browse.PlaylistAdapter
 import uk.akane.accord.ui.components.FadingVerticalEdgeLayout
+import uk.akane.accord.ui.components.ResistiveSwipeHaptics
+import uk.akane.accord.ui.components.performPressHaptic
+import uk.akane.accord.ui.components.resistedSwipeDistance
 import uk.akane.accord.ui.components.lyrics.LyricsViewModel
+import uk.akane.accord.ui.fragments.browse.ArtistDetailFragment
 import uk.akane.cupertino.widget.text.OverlayTextView
 import uk.akane.cupertino.widget.button.AnimatedVectorButton
 import uk.akane.cupertino.widget.button.OverlayBackgroundButton
@@ -105,8 +111,9 @@ import android.animation.Animator
 import android.animation.AnimatorListenerAdapter
 import android.view.animation.Interpolator
 import android.view.animation.PathInterpolator
+import android.view.animation.OvershootInterpolator
 import androidx.preference.PreferenceManager
-import kotlinx.coroutines.flow.first
+import org.akanework.gramophone.logic.data.library.songListSnapshot
 import org.akanework.gramophone.logic.data.AutoplayQueue
 
 class FullPlayer @JvmOverloads constructor(
@@ -182,6 +189,8 @@ class FullPlayer @JvmOverloads constructor(
      */
     private var coverSlideOffsetX = 0F
     private var coverSlideAnimator: ValueAnimator? = null
+    private val coverSwipeHaptics = ResistiveSwipeHaptics()
+    private var pendingCoverReleaseVelocity = 0F
 
     /** Brings the cover back even if the artwork has not arrived; see [startCoverSlideOut]. */
     private val coverSlideInDeadline = Runnable {
@@ -195,6 +204,7 @@ class FullPlayer @JvmOverloads constructor(
     private val coverSlideBackstop = Runnable {
         if (!coverSlideInFlight && pendingCoverSlide != SLIDE_NONE) {
             pendingCoverSlide = SLIDE_NONE
+            pendingCoverReleaseVelocity = 0F
             animateCoverOffset(0F, COVER_SWIPE_SETTLE_MS, settleInterpolator)
         }
     }
@@ -266,16 +276,32 @@ class FullPlayer @JvmOverloads constructor(
         coverSimpleImageView = findViewById(R.id.cover)
         titleTextView = findViewById(R.id.title)
         subtitleTextView = findViewById(R.id.subtitle)
+        subtitleTextView.setOnClickListener { view ->
+            val item = instance?.currentMediaItem ?: return@setOnClickListener
+            val artist = ArtistCredits.primaryArtist(item)
+            if (artist.isBlank() || artist == "(Unknown Artist)") return@setOnClickListener
+            view.performPressHaptic()
+            activity.collapseNowPlaying()
+            activity.fragmentSwitcherView.addFragmentToCurrentStack(
+                ArtistDetailFragment.newInstance(artist)
+            )
+        }
         listOverlayButton = findViewById(R.id.list)
         airplayOverlayButton = findViewById(R.id.airplay)
         captionOverlayButton = findViewById(R.id.caption)
         starTransformButton = findViewById(R.id.star)
         ellipsisButton = findViewById(R.id.ellipsis)
         qualityBadge = findViewById(R.id.quality_badge)
-        qualityBadge.setOnClickListener { showQualityDetails() }
+        qualityBadge.setOnClickListener {
+            it.performPressHaptic()
+            showQualityDetails()
+        }
         outputDeviceIcon = findViewById(R.id.output_device_icon)
         outputDeviceName = findViewById(R.id.output_device_name)
-        outputDeviceIcon.setOnClickListener { startSystemMediaControl() }
+        outputDeviceIcon.setOnClickListener {
+            it.performPressHaptic()
+            startSystemMediaControl()
+        }
         controllerButton = findViewById(R.id.main_control_btn)
         previousButton = findViewById(R.id.backward_btn)
         nextButton = findViewById(R.id.forward_btn)
@@ -304,25 +330,32 @@ class FullPlayer @JvmOverloads constructor(
             }
         )
         queueRecyclerView.adapter = queueAdapter
-        queueItemTouchHelper = ItemTouchHelper(QueueItemTouchHelperCallback(queueAdapter)).apply {
+        queueItemTouchHelper = ItemTouchHelper(
+            QueueItemTouchHelperCallback(queueAdapter) { index ->
+                instance?.removeMediaItem(index)
+            }
+        ).apply {
             attachToRecyclerView(queueRecyclerView)
         }
         queueContainer.doOnLayout {
             queueEnterOffset = resolveQueueEnterOffset()
         }
 
-        ellipsisButton.setOnCheckedChangeListener { v, checked ->
+        ellipsisButton.setOnCheckedChangeListener { v, _ ->
+            v.performPressHaptic()
             callUpPlayerPopupMenu(v)
         }
 
         ellipsisButton.setOnLongClickListener {
             // TODO tell floating panel to intercept gesture
+            it.performPressHaptic()
             callUpPlayerPopupMenu(it)
             true
         }
 
         fullPlayerToolbar.setOnEllipsisCheckedChangeListener(
             OverlayBackgroundButton.OnCheckedChangeListener { button, _ ->
+                button.performPressHaptic()
                 callUpPlayerPopupMenu(button)
             }
         )
@@ -344,35 +377,12 @@ class FullPlayer @JvmOverloads constructor(
             onSeek = { timestamp -> instance?.seekTo(timestamp) },
         )
 
-        // Upstream reveals lyrics from a stray Button of its own and leaves the quote control in the
-        // bottom row inert. The quote button is where anyone would look for lyrics, so it gets the
-        // job, and it toggles rather than being one-way.
+        // The hidden button belongs to the pre-rewrite lyrics prototype. The three bottom buttons
+        // are the actual mode controls in the working APK.
         lyricsBtn.visibility = GONE
         captionOverlayButton.setOnClickListener {
-            val showing = fadingEdgeLayout.visibility == VISIBLE
-            if (showing) {
-                fadingEdgeLayout.visibility = GONE
-            } else {
-                fadingEdgeLayout.visibility = VISIBLE
-                if (!lyricsViewAttached) {
-                    lyricsViewAttached = true
-                    lyricsViewModel?.onViewCreated(fadingEdgeLayout)
-                }
-                refreshLyrics()
-            }
-            captionOverlayButton.isChecked = !showing
-            // The lyrics container is constrained over exactly the space the artwork and titles
-            // occupy, so without this the lines render on top of the cover and are unreadable.
-            val coverVisibility = if (showing) VISIBLE else INVISIBLE
-            coverSimpleImageView.visibility = coverVisibility
-            titleTextView.visibility = coverVisibility
-            subtitleTextView.visibility = coverVisibility
-            if (showing) {
-                // Restores whatever the current track earned rather than assuming a badge.
-                instance?.currentTracks?.let { onTracksChanged(it) }
-            } else {
-                qualityBadge.visibility = INVISIBLE
-            }
+            it.performPressHaptic()
+            toggleContentMode(ContentType.LYRICS)
         }
 
         volumeOverlaySlider.addEmphasizeListener(object : OverlaySlider.EmphasizeListener {
@@ -465,17 +475,20 @@ class FullPlayer @JvmOverloads constructor(
         }
 
         listOverlayButton.setOnClickListener {
-            Log.d(
-                TAG,
-                "ContentType: ${if (listOverlayButton.isChecked) ContentType.NORMAL else ContentType.PLAYLIST}"
-            )
-            contentType =
-                if (listOverlayButton.isChecked) ContentType.NORMAL else ContentType.PLAYLIST
-            listOverlayButton.toggle()
+            it.performPressHaptic()
+            toggleContentMode(ContentType.PLAYLIST)
+        }
+
+        queueShuffleButton.setOnClickListener {
+            val controller = instance ?: return@setOnClickListener
+            it.performPressHaptic()
+            controller.shuffleModeEnabled = !controller.shuffleModeEnabled
+            queueShuffleButton.isChecked = controller.shuffleModeEnabled
         }
 
         queueAutoplayButton.isChecked = isAutoplayEnabled()
         queueAutoplayButton.setOnClickListener {
+            it.performPressHaptic()
             val enabled = !isAutoplayEnabled()
             PreferenceManager.getDefaultSharedPreferences(context)
                 .edit().putBoolean(PREF_AUTOPLAY, enabled).apply()
@@ -492,6 +505,7 @@ class FullPlayer @JvmOverloads constructor(
 
         queueRepeatButton.setOnClickListener {
             val controller = instance ?: return@setOnClickListener
+            it.performPressHaptic()
             val nextRepeatMode = when (controller.repeatMode) {
                 Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
                 Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
@@ -503,6 +517,8 @@ class FullPlayer @JvmOverloads constructor(
         }
 
         airplayOverlayButton.setOnClickListener {
+            it.performPressHaptic()
+            animateBottomButtonPress(airplayOverlayButton)
             startSystemMediaControl()
         }
 
@@ -544,14 +560,17 @@ class FullPlayer @JvmOverloads constructor(
         }
 
         controllerButton.setOnClickListener {
+            it.performPressHaptic()
             instance?.playOrPause()
         }
 
         previousButton.setOnClickListener {
+            it.performPressHaptic()
             pendingCoverSlide = SLIDE_PREVIOUS
             instance?.seekToPrevious()
         }
         nextButton.setOnClickListener {
+            it.performPressHaptic()
             pendingCoverSlide = SLIDE_NEXT
             instance?.seekToNext()
         }
@@ -612,18 +631,20 @@ class FullPlayer @JvmOverloads constructor(
     private var initialElevation = 24.dp.px
     private var finalScale = 0F
     private val queueCoverRadius = 5.dp.px
-    private var queueEnterOffset = 0f
+    private var queueEnterOffset = 0F
     private val queueStartFraction = 1F / 1.2F
+    private val lyricsStartFraction = 0.08F
 
     private fun updateTransitionTargetForContentType(value: ContentType) {
-        val targetView = if (value == ContentType.PLAYLIST) {
+        val compactMode = value == ContentType.PLAYLIST || value == ContentType.LYRICS
+        val targetView = if (compactMode) {
             fullPlayerToolbar.getCoverView()
         } else {
             coverSimpleImageView
         }
-        val lockCornerRadius = value == ContentType.PLAYLIST
+        val lockCornerRadius = compactMode
         val targetRadius = if (lockCornerRadius) queueCoverRadius else 0F
-        val targetElevation = if (value == ContentType.PLAYLIST) null else initialElevation
+        val targetElevation = if (compactMode) null else initialElevation
 
         val update = {
             floatingPanelLayout.updateTransitionTarget(
@@ -840,15 +861,15 @@ class FullPlayer @JvmOverloads constructor(
     }
 
     private fun resolveQueueEnterOffset(): Float {
-        // Animate from just above the seekbar, not from title area
-        val progressBarTop = progressOverlaySlider.top.toFloat()
-        val queueContainerBottom = queueContainer.bottom.toFloat()
-
-        // Offset to move queue container so its top aligns with progressBar top
-        return progressBarTop - queueContainerBottom
+        return 0F
     }
 
     private fun animateQueuePanel(fraction: Float) {
+        if (contentType != ContentType.PLAYLIST) {
+            queueContainer.visibility = INVISIBLE
+            setQueueChildrenAlpha(0F)
+            return
+        }
         val queueFraction = inverseLerp(queueStartFraction, 1F, fraction, clamp = true)
         if (queueFraction <= 0F) {
             queueEnterOffset = resolveQueueEnterOffset()
@@ -859,7 +880,6 @@ class FullPlayer @JvmOverloads constructor(
         }
 
         queueContainer.visibility = VISIBLE
-        // Simply animate from start offset to 0 (final position)
         queueContainer.translationY = lerp(queueEnterOffset, 0F, queueFraction)
         setQueueChildrenAlpha(queueFraction)
     }
@@ -873,12 +893,12 @@ class FullPlayer @JvmOverloads constructor(
     }
 
     private fun callUpPlayerPopupMenu(v: View) {
-        val anchorView = if (contentType == ContentType.PLAYLIST) {
+        val anchorView = if (contentType != ContentType.NORMAL) {
             fullPlayerToolbar.getEllipsisView()
         } else {
             v
         }
-        val showBelow = contentType == ContentType.PLAYLIST
+        val showBelow = contentType != ContentType.NORMAL
         PlayerPopupMenu.show(
             host = floatingPanelLayout,
             anchorView = anchorView,
@@ -915,6 +935,32 @@ class FullPlayer @JvmOverloads constructor(
         return super.dispatchApplyWindowInsets(platformInsets)
     }
 
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (contentType == ContentType.LYRICS) {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    removeCallbacks(hideControlsRunnable)
+                    if (lyricsControlsHidden) {
+                        revealingControlsGesture = true
+                        showLyricsControls(scheduleHide = false)
+                        return true
+                    }
+                }
+
+                MotionEvent.ACTION_UP,
+                MotionEvent.ACTION_CANCEL -> {
+                    scheduleControlsHide()
+                    if (revealingControlsGesture) {
+                        revealingControlsGesture = false
+                        return true
+                    }
+                }
+            }
+            if (revealingControlsGesture) return true
+        }
+        return super.dispatchTouchEvent(event)
+    }
+
     override fun onSlideStatusChanged(status: FloatingPanelLayout.SlideStatus) {
         when (status) {
             FloatingPanelLayout.SlideStatus.EXPANDED -> {
@@ -949,71 +995,400 @@ class FullPlayer @JvmOverloads constructor(
 
     override fun onSlide(value: Float) {
         slideFraction = value
-        if (contentType == ContentType.PLAYLIST) {
+        if (contentType == ContentType.PLAYLIST || contentType == ContentType.LYRICS) {
             fullPlayerToolbar.getCoverView().alpha = if (value >= 1F) 1F else 0F
         }
     }
 
     private var transformationFraction = 0F
+    private var contentTypeAnimator: ValueAnimator? = null
+    private var selectedBottomButton: OverlayButton? = null
+    private val bottomButtonAnimators = mutableMapOf<OverlayButton, ValueAnimator>()
 
     private var contentType = ContentType.NORMAL
         set(value) {
+            if (field == value) return
+            val previous = field
+            field = value
+            syncBottomButtons(value)
+
             when (value) {
                 ContentType.LYRICS -> {
-                    // TODO
+                    cancelControlsHide()
+                    syncQualityBadgeVisibility()
+                    showLyrics()
+                    if (previous == ContentType.PLAYLIST) {
+                        animateContentSwap(queueContainer, fadingEdgeLayout) {
+                            scheduleControlsHide()
+                        }
+                    } else {
+                        animatePlayerTransform(1F, animateLyrics = true) {
+                            scheduleControlsHide()
+                        }
+                    }
                 }
 
                 ContentType.NORMAL -> {
-                    setTrackControlsVisible(true)
-                    AnimationUtils.createValAnimator(
-                        transformationFraction, 0F,
-                        duration = MID_DURATION,
-                        doOnEnd = { updateTransitionTargetForContentType(ContentType.NORMAL) }
+                    cancelControlsHide()
+                    animatePlayerTransform(
+                        target = 0F,
+                        animateLyrics = previous == ContentType.LYRICS,
                     ) {
-                        transformationFraction = it
-                        animateCoverChange(it)
+                        hideLyrics()
+                        instance?.currentTracks?.let { onTracksChanged(it) }
                     }
                 }
 
                 ContentType.PLAYLIST -> {
-                    captionOverlayButton.isChecked = false
-                    // The queue and the lyrics are two views of the same space. Upstream
-                    // never made them exclusive, so opening the queue left the lyrics
-                    // rendering behind it, and the star and overflow - which act on the one
-                    // playing track - stayed over a list of many.
-                    hideLyrics()
-                    setTrackControlsVisible(false)
+                    cancelControlsHide()
+                    syncQualityBadgeVisibility()
                     queueContainer.visibility = VISIBLE
                     queueContainer.translationY = queueEnterOffset
                     setQueueChildrenAlpha(0F)
                     queueContainer.bringToFront()
-                    AnimationUtils.createValAnimator(
-                        transformationFraction, 1F,
-                        duration = MID_DURATION,
-                        doOnEnd = { updateTransitionTargetForContentType(ContentType.PLAYLIST) }
-                    ) {
-                        transformationFraction = it
-                        animateCoverChange(it)
+                    if (previous == ContentType.LYRICS) {
+                        animateContentSwap(fadingEdgeLayout, queueContainer)
+                    } else {
+                        animatePlayerTransform(1F)
                     }
                 }
             }
-            field = value
             updateTransitionTargetForContentType(value)
         }
 
-    /** Puts the lyrics away without disturbing whether they had been opened. */
-    private fun hideLyrics() {
-        fadingEdgeLayout.visibility = GONE
-        coverSimpleImageView.visibility = VISIBLE
-        titleTextView.visibility = VISIBLE
-        subtitleTextView.visibility = VISIBLE
+    private fun toggleContentMode(mode: ContentType) {
+        if (contentTypeAnimator != null) return
+        contentType = if (contentType == mode) ContentType.NORMAL else mode
     }
 
-    /** The star and the overflow belong to the playing track, so they follow it out of view. */
-    private fun setTrackControlsVisible(visible: Boolean) {
+    private fun showLyrics() {
+        fadingEdgeLayout.visibility = VISIBLE
+        fadingEdgeLayout.alpha = 0F
+        fadingEdgeLayout.bringToFront()
+        bringPlayerChromeToFront()
+        if (!lyricsViewAttached) {
+            lyricsViewAttached = true
+            lyricsViewModel?.onViewCreated(fadingEdgeLayout)
+        }
+        refreshLyrics()
+    }
+
+    /**
+     * The lyrics surface fills the player so it can expand when the controls auto-hide. Keep the
+     * interactive chrome later in the drawing/touch order or the lyrics scroll view consumes every
+     * tap before the buttons can see it.
+     */
+    private fun bringPlayerChromeToFront() {
+        listOf<View>(
+            fullPlayerToolbar,
+            progressOverlaySlider,
+            currentTimestampTextView,
+            leftTimestampTextView,
+            controllerButton,
+            previousButton,
+            nextButton,
+            volumeOverlaySlider,
+            speakerHintView,
+            speakerFullHintView,
+            captionOverlayButton,
+            airplayOverlayButton,
+            outputDeviceIcon,
+            outputDeviceName,
+            listOverlayButton,
+        ).forEach { it.bringToFront() }
+    }
+
+    private fun hideLyrics() {
+        fadingEdgeLayout.visibility = INVISIBLE
+        fadingEdgeLayout.alpha = 0F
+        fadingEdgeLayout.translationY = 0F
+        fadingEdgeLayout.scaleX = 1F
+        fadingEdgeLayout.scaleY = 1F
+    }
+
+    private fun animatePlayerTransform(
+        target: Float,
+        animateLyrics: Boolean = false,
+        onEnd: (() -> Unit)? = null,
+    ) {
+        contentTypeAnimator?.cancel()
+        var cancelled = false
+        contentTypeAnimator = ValueAnimator.ofFloat(transformationFraction, target).apply {
+            duration = MID_DURATION
+            interpolator = AnimationUtils.easingStandardInterpolator
+            addUpdateListener { animator ->
+                val fraction = animator.animatedValue as Float
+                transformationFraction = fraction
+                animateCoverChange(fraction)
+                if (animateLyrics) animateLyricsEntrance(fraction)
+            }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationCancel(animation: Animator) {
+                    cancelled = true
+                }
+
+                override fun onAnimationEnd(animation: Animator) {
+                    if (cancelled) return
+                    contentTypeAnimator = null
+                    onEnd?.invoke()
+                    updateTransitionTargetForContentType(contentType)
+                }
+            })
+            start()
+        }
+    }
+
+    private fun animateLyricsEntrance(fraction: Float) {
+        val lyricsFraction = inverseLerp(lyricsStartFraction, 1F, fraction, clamp = true)
+        val enterOffset = maxOf(
+            progressOverlaySlider.top.toFloat() - fadingEdgeLayout.top.toFloat(),
+            40.dp.px,
+        )
+        fadingEdgeLayout.translationY = lerp(enterOffset, 0F, lyricsFraction)
+        fadingEdgeLayout.alpha = lyricsFraction
+    }
+
+    private fun animateContentSwap(from: View, to: View, onEnd: (() -> Unit)? = null) {
+        contentTypeAnimator?.cancel()
+        to.visibility = VISIBLE
+        to.alpha = 0F
+        to.scaleX = 0.92F
+        to.scaleY = 0.92F
+        var cancelled = false
+        contentTypeAnimator = ValueAnimator.ofFloat(0F, 1F).apply {
+            duration = MID_DURATION
+            interpolator = AnimationUtils.easingStandardInterpolator
+            addUpdateListener { animator ->
+                val fraction = animator.animatedValue as Float
+                from.alpha = 1F - fraction
+                from.scaleX = lerp(1F, 0.92F, fraction)
+                from.scaleY = from.scaleX
+                to.alpha = fraction
+                to.scaleX = lerp(0.92F, 1F, fraction)
+                to.scaleY = to.scaleX
+                if (from === queueContainer) setQueueChildrenAlpha(1F - fraction)
+                if (to === queueContainer) setQueueChildrenAlpha(fraction)
+            }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationCancel(animation: Animator) {
+                    cancelled = true
+                }
+
+                override fun onAnimationEnd(animation: Animator) {
+                    if (cancelled) return
+                    from.visibility = INVISIBLE
+                    from.alpha = 0F
+                    from.scaleX = 1F
+                    from.scaleY = 1F
+                    to.alpha = 1F
+                    to.scaleX = 1F
+                    to.scaleY = 1F
+                    to.translationY = 0F
+                    if (from === queueContainer) setQueueChildrenAlpha(0F)
+                    if (to === queueContainer) setQueueChildrenAlpha(1F)
+                    contentTypeAnimator = null
+                    onEnd?.invoke()
+                    updateTransitionTargetForContentType(contentType)
+                }
+            })
+            start()
+        }
+    }
+
+    private fun syncBottomButtons(value: ContentType) {
+        setBottomButtonSelected(captionOverlayButton, value == ContentType.LYRICS)
+        setBottomButtonSelected(listOverlayButton, value == ContentType.PLAYLIST)
+        selectedBottomButton = when (value) {
+            ContentType.LYRICS -> captionOverlayButton
+            ContentType.PLAYLIST -> listOverlayButton
+            ContentType.NORMAL -> null
+        }
+    }
+
+    private fun setBottomButtonSelected(button: OverlayButton, selected: Boolean) {
+        if (button.isChecked != selected) button.isChecked = selected
+        animateBottomButtonScale(button, if (selected) 1.1F else 1F, selected)
+    }
+
+    private fun animateBottomButtonScale(
+        button: OverlayButton,
+        target: Float,
+        selecting: Boolean,
+    ) {
+        if (button.scaleX == target && button.scaleY == target) return
+        bottomButtonAnimators.remove(button)?.cancel()
+        val animator = ValueAnimator.ofFloat(button.scaleX, target).apply {
+            duration = if (selecting) 260L else 220L
+            interpolator = OvershootInterpolator(if (selecting) 3.6F else 3.45F)
+            addUpdateListener {
+                val scale = it.animatedValue as Float
+                button.scaleX = scale
+                button.scaleY = scale
+            }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    if (bottomButtonAnimators[button] === animation) {
+                        bottomButtonAnimators.remove(button)
+                    }
+                }
+            })
+            start()
+        }
+        bottomButtonAnimators[button] = animator
+    }
+
+    private fun animateBottomButtonPress(button: OverlayButton) {
+        animateBottomButtonScale(button, 1.1F, selecting = true)
+        button.removeCallbacks(resetAirplayButton)
+        button.postDelayed(resetAirplayButton, 180L)
+    }
+
+    private val resetAirplayButton = Runnable {
+        animateBottomButtonScale(airplayOverlayButton, 1F, selecting = false)
+    }
+
+    private var controlsAnimator: ValueAnimator? = null
+    private var controlsHideFraction = 0F
+    private var lyricsControlsHidden = false
+    private var revealingControlsGesture = false
+    private val lyricsClipRect = Rect()
+    private val hideControlsRunnable = Runnable { hideLyricsControls() }
+
+    private fun scheduleControlsHide() {
+        removeCallbacks(hideControlsRunnable)
+        if (contentType == ContentType.LYRICS) {
+            postDelayed(hideControlsRunnable, CONTROLS_HIDE_DELAY_MS)
+        }
+    }
+
+    private fun cancelControlsHide() {
+        removeCallbacks(hideControlsRunnable)
+        controlsAnimator?.cancel()
+        controlsAnimator = null
+        lyricsControlsHidden = false
+        setControlsVisibility(true)
+        applyControlsHideFraction(0F)
+    }
+
+    private fun hideLyricsControls() {
+        if (lyricsControlsHidden || contentType != ContentType.LYRICS) return
+        lyricsControlsHidden = true
+        animateControlsTo(1F) {
+            setControlsVisibility(false)
+        }
+    }
+
+    private fun showLyricsControls(scheduleHide: Boolean) {
+        removeCallbacks(hideControlsRunnable)
+        if (contentType != ContentType.LYRICS) return
+        val needsAnimation = lyricsControlsHidden || controlsHideFraction > 0F
+        lyricsControlsHidden = false
+        setControlsVisibility(true)
+        if (needsAnimation) {
+            animateControlsTo(0F)
+        }
+        if (scheduleHide) scheduleControlsHide()
+    }
+
+    private fun animateControlsTo(target: Float, onEnd: (() -> Unit)? = null) {
+        controlsAnimator?.cancel()
+        var cancelled = false
+        controlsAnimator = ValueAnimator.ofFloat(controlsHideFraction, target).apply {
+            duration = MID_DURATION
+            interpolator = AnimationUtils.fastOutSlowInInterpolator
+            addUpdateListener {
+                applyControlsHideFraction(it.animatedValue as Float)
+            }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationCancel(animation: Animator) {
+                    cancelled = true
+                }
+
+                override fun onAnimationEnd(animation: Animator) {
+                    if (cancelled) return
+                    controlsAnimator = null
+                    applyControlsHideFraction(target)
+                    onEnd?.invoke()
+                }
+            })
+            start()
+        }
+    }
+
+    private fun applyControlsHideFraction(fraction: Float) {
+        controlsHideFraction = fraction
+        listOf<View>(
+            progressOverlaySlider,
+            currentTimestampTextView,
+            leftTimestampTextView,
+            controllerButton,
+            previousButton,
+            nextButton,
+            volumeOverlaySlider,
+            speakerHintView,
+            speakerFullHintView,
+            captionOverlayButton,
+            airplayOverlayButton,
+            listOverlayButton,
+            outputDeviceIcon,
+            outputDeviceName,
+            qualityBadge,
+        ).forEach { applyControlCollapse(it, fraction) }
+        updateLyricsClip(fraction)
+    }
+
+    private fun applyControlCollapse(view: View, fraction: Float) {
+        view.alpha = 1F - fraction
+        val translation = maxOf(height.toFloat() - view.bottom, 24.dp.px)
+        view.translationY = fraction * translation
+    }
+
+    private fun setControlsVisibility(visible: Boolean) {
         val visibility = if (visible) VISIBLE else INVISIBLE
-        starTransformButton.visibility = visibility
-        ellipsisButton.visibility = visibility
+        listOf<View>(
+            progressOverlaySlider,
+            currentTimestampTextView,
+            leftTimestampTextView,
+            controllerButton,
+            previousButton,
+            nextButton,
+            volumeOverlaySlider,
+            speakerHintView,
+            speakerFullHintView,
+            captionOverlayButton,
+            listOverlayButton,
+        ).forEach { it.visibility = visibility }
+        if (visible) {
+            refreshOutputDevice()
+            syncQualityBadgeVisibility()
+        } else {
+            airplayOverlayButton.visibility = INVISIBLE
+            outputDeviceIcon.visibility = INVISIBLE
+            outputDeviceName.visibility = INVISIBLE
+            qualityBadge.visibility = INVISIBLE
+        }
+    }
+
+    private fun updateLyricsClip(fraction: Float) {
+        val height = fadingEdgeLayout.height
+        if (height <= 0) {
+            fadingEdgeLayout.doOnLayout { updateLyricsClip(fraction) }
+            return
+        }
+        if (fraction >= 1F) {
+            fadingEdgeLayout.clipBounds = null
+            fadingEdgeLayout.setBottomFadeOffset(0)
+            return
+        }
+        val controlsTop = (
+            progressOverlaySlider.top - fadingEdgeLayout.top - 16.dp.px
+        ).toInt().coerceIn(0, height)
+        val clipBottom = (
+            controlsTop + (height - controlsTop) * fraction
+        ).toInt().coerceIn(0, height)
+        lyricsClipRect.set(0, 0, fadingEdgeLayout.width, clipBottom)
+        fadingEdgeLayout.clipBounds = lyricsClipRect
+        fadingEdgeLayout.setBottomFadeOffset(height - clipBottom)
     }
 
     private var lastDisposable: Disposable? = null
@@ -1072,7 +1447,15 @@ class FullPlayer @JvmOverloads constructor(
             qualityBadge.visibility = GONE
         } else {
             qualityBadge.setText(details.quality.label)
-            qualityBadge.visibility = VISIBLE
+            syncQualityBadgeVisibility()
+        }
+    }
+
+    private fun syncQualityBadgeVisibility() {
+        qualityBadge.visibility = when {
+            currentQualityDetails == null -> GONE
+            lyricsControlsHidden -> INVISIBLE
+            else -> VISIBLE
         }
     }
 
@@ -1132,18 +1515,38 @@ class FullPlayer @JvmOverloads constructor(
     override fun onCoverSwipeMove(dx: Float) {
         coverSlideAnimator?.cancel()
         coverSlideAnimator = null
-        coverSlideOffsetX = dx * COVER_SWIPE_FOLLOW
+        val player = instance
+        val actionAvailable = if (dx < 0F) {
+            player?.hasNextMediaItem() == true
+        } else {
+            player?.hasPreviousMediaItem() == true || (player?.currentPosition ?: 0L) > 0L
+        }
+        coverSwipeHaptics.update(
+            coverSimpleImageView,
+            dx,
+            coverSimpleImageView.width * COVER_SWIPE_THRESHOLD,
+            actionAvailable,
+        )
+        coverSlideOffsetX = resistedSwipeDistance(
+            dx,
+            coverSimpleImageView.width * COVER_SWIPE_MAX_TRAVEL,
+            COVER_SWIPE_FOLLOW,
+        )
         applyCoverTranslation()
     }
 
-    override fun onCoverSwipeEnd(dx: Float) {
-        if (abs(dx) > coverSimpleImageView.width * COVER_SWIPE_THRESHOLD) {
+    override fun onCoverSwipeEnd(dx: Float, velocityX: Float) {
+        val flingThreshold = ViewConfiguration.get(context).scaledMinimumFlingVelocity *
+            COVER_FLING_VELOCITY_MULTIPLIER
+        val hasFling = abs(velocityX) >= flingThreshold
+        val releaseDirection = if (hasFling) velocityX else dx
+        if (abs(dx) >= coverSimpleImageView.width * COVER_SWIPE_THRESHOLD || hasFling) {
             // Dragging the current cover away to the left brings on the next track, matching
             // how every carousel on the platform reads. The cover is not sent home here - the
             // track change does that, carrying it the rest of the way out and bringing the new
             // one in.
             val player = instance
-            val forwards = dx < 0
+            val forwards = releaseDirection < 0F
             // At the end of the queue seekToNext does nothing, so no track change arrives and
             // nothing would ever bring the cover back - it sat where the finger left it.
             val willMove = if (forwards) {
@@ -1152,6 +1555,8 @@ class FullPlayer @JvmOverloads constructor(
                 player?.hasPreviousMediaItem() == true || (player?.currentPosition ?: 0L) > 0L
             }
             if (willMove) {
+                coverSwipeHaptics.commit(coverSimpleImageView)
+                pendingCoverReleaseVelocity = velocityX
                 pendingCoverSlide = if (forwards) SLIDE_NEXT else SLIDE_PREVIOUS
                 if (forwards) player?.seekToNext() else player?.seekToPrevious()
                 // A backstop for the cases the check above cannot see - a repeat mode changing
@@ -1161,7 +1566,25 @@ class FullPlayer @JvmOverloads constructor(
             }
         }
         // Not far enough to count. Back where it was.
-        animateCoverOffset(0F, COVER_SWIPE_SETTLE_MS, settleInterpolator)
+        coverSwipeHaptics.release(coverSimpleImageView)
+        val projectedOffset = resistedSwipeDistance(
+            dx + velocityX * COVER_MOMENTUM_PROJECTION_SECONDS,
+            coverSimpleImageView.width * COVER_SWIPE_MAX_TRAVEL,
+            COVER_SWIPE_FOLLOW,
+        )
+        val continuesCurrentDirection = coverSlideOffsetX == 0F ||
+            projectedOffset * coverSlideOffsetX > 0F
+        if (continuesCurrentDirection && abs(projectedOffset) > abs(coverSlideOffsetX)) {
+            animateCoverOffset(
+                projectedOffset,
+                COVER_MOMENTUM_MS,
+                LinearInterpolator(),
+            ) {
+                animateCoverOffset(0F, COVER_SWIPE_SETTLE_MS, settleInterpolator)
+            }
+        } else {
+            animateCoverOffset(0F, COVER_SWIPE_SETTLE_MS, settleInterpolator)
+        }
     }
 
     /**
@@ -1190,6 +1613,7 @@ class FullPlayer @JvmOverloads constructor(
         mediaItem: MediaItem?,
         reason: Int
     ) {
+        coverSwipeHaptics.reset()
         fullPlayerToolbar.onMediaItemTransition(mediaItem, reason)
         // Hide until the new item's tracks arrive, so the previous track's badge does not linger
         // over a different song.
@@ -1241,9 +1665,16 @@ class FullPlayer @JvmOverloads constructor(
         // shorter and has to take proportionally less time. At a fixed duration the cover
         // visibly changed speed the instant the finger left it.
         val remaining = abs(target - coverSlideOffsetX)
-        val duration = (COVER_SLIDE_OUT_MS * (remaining / coverSlideDistance()))
-            .toLong()
+        val velocityDuration = abs(pendingCoverReleaseVelocity)
+            .takeIf {
+                it >= ViewConfiguration.get(context).scaledMinimumFlingVelocity *
+                    COVER_FLING_VELOCITY_MULTIPLIER
+            }
+            ?.let { ((remaining / it) * 1000F).toLong() }
+        val duration = (velocityDuration ?: (COVER_SLIDE_OUT_MS *
+            (remaining / coverSlideDistance())).toLong())
             .coerceIn(COVER_SLIDE_MIN_MS, COVER_SLIDE_OUT_MS)
+        pendingCoverReleaseVelocity = 0F
 
         // Linear, not accelerating: a swipe hands over at speed, and easing in from a moving
         // finger reads as the cover briefly slowing down before it leaves.
@@ -1308,7 +1739,7 @@ class FullPlayer @JvmOverloads constructor(
         }
         val appContext = context.applicationContext
         CoroutineScope(Dispatchers.Main).launch {
-            val library = activity.reader.songListFlow.first()
+            val library = activity.reader.songListSnapshot()
             val batch = withContext(Dispatchers.IO) {
                 AutoplayQueue.nextBatch(appContext, seed, library, queued)
             }
@@ -1403,6 +1834,10 @@ class FullPlayer @JvmOverloads constructor(
 
     override fun onRepeatModeChanged(repeatMode: Int) {
         updateRepeatButton(repeatMode)
+    }
+
+    override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
+        queueShuffleButton.isChecked = shuffleModeEnabled
     }
 
     override fun onPlaybackStateChanged(playbackState: @Player.State Int) {
@@ -1567,10 +2002,19 @@ class FullPlayer @JvmOverloads constructor(
 
     override fun onDetachedFromWindow() {
         stopPositionUpdates()
+        removeCallbacks(hideControlsRunnable)
+        controlsAnimator?.cancel()
+        controlsAnimator = null
+        contentTypeAnimator?.cancel()
+        contentTypeAnimator = null
+        bottomButtonAnimators.values.toList().forEach { it.cancel() }
+        bottomButtonAnimators.clear()
+        airplayOverlayButton.removeCallbacks(resetAirplayButton)
         removeCallbacks(coverSlideBackstop)
         removeCallbacks(coverSlideInDeadline)
         coverSlideAnimator?.cancel()
         coverSlideAnimator = null
+        coverSwipeHaptics.reset()
         lyricsViewModel?.release()
         lyricsViewModel = null
         lyricsViewAttached = false
@@ -1657,9 +2101,14 @@ class FullPlayer @JvmOverloads constructor(
         private const val PAUSED_COVER_SCALE = 0.84F
 
         /** How far the cover follows the finger, and how far it has to go to count as a swipe. */
-        private const val COVER_SWIPE_FOLLOW = 0.5F
-        private const val COVER_SWIPE_THRESHOLD = 0.25F
-        private const val COVER_SWIPE_SETTLE_MS = 220L
+        private const val COVER_SWIPE_FOLLOW = 0.56F
+        private const val COVER_SWIPE_THRESHOLD = 0.32F
+        private const val COVER_SWIPE_MAX_TRAVEL =
+            COVER_SWIPE_THRESHOLD * COVER_SWIPE_FOLLOW
+        private const val COVER_FLING_VELOCITY_MULTIPLIER = 1.35F
+        private const val COVER_MOMENTUM_PROJECTION_SECONDS = 0.07F
+        private const val COVER_MOMENTUM_MS = 70L
+        private const val COVER_SWIPE_SETTLE_MS = 190L
 
         /** Which way the artwork travels on a track change. */
         private const val SLIDE_NONE = 0
@@ -1672,6 +2121,7 @@ class FullPlayer @JvmOverloads constructor(
 
         /** The longest the cover stays off screen waiting for artwork to load. */
         private const val COVER_ART_WAIT_MS = 90L
+        private const val CONTROLS_HIDE_DELAY_MS = 3_000L
 
         private const val PREF_AUTOPLAY = "autoplay_similar"
     }

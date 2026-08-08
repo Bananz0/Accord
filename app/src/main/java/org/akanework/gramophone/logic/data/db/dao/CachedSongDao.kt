@@ -14,6 +14,9 @@ interface CachedSongDao {
     @Query("SELECT * FROM $CACHED_SONG_TABLE_NAME")
     fun getAll(): List<CachedSong>
 
+    @Query("SELECT * FROM $CACHED_SONG_TABLE_NAME LIMIT :limit")
+    fun getInitialFast(limit: Int = 100): List<CachedSong>
+
     @Query("SELECT COUNT(*) FROM $CACHED_SONG_TABLE_NAME")
     fun count(): Int
 

@@ -12,7 +12,9 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import coil3.load
 import uk.akane.accord.R
+import uk.akane.accord.ui.components.CollageArtView
 import uk.akane.accord.ui.components.StationArtView
+import uk.akane.accord.ui.components.performPressHaptic
 import org.akanework.gramophone.logic.ui.coolCrossfade
 import androidx.media3.session.MediaController
 
@@ -43,12 +45,14 @@ class HomeSectionAdapter(
         val title: TextView = view.findViewById(R.id.section_title)
         val subtitle: TextView = view.findViewById(R.id.section_subtitle)
         val items: RecyclerView = view.findViewById(R.id.section_items)
+        val cardAdapter = CardAdapter()
 
         init {
             items.layoutManager =
                 LinearLayoutManager(view.context, LinearLayoutManager.HORIZONTAL, false)
             items.setRecycledViewPool(cardPool)
             items.isNestedScrollingEnabled = false
+            items.adapter = cardAdapter
         }
     }
 
@@ -65,7 +69,9 @@ class HomeSectionAdapter(
         holder.subtitle.text = section.subtitle
         holder.subtitle.visibility =
             if (section.subtitle.isNullOrBlank()) View.GONE else View.VISIBLE
-        holder.items.adapter = CardAdapter(section)
+        val sectionChanged = holder.cardAdapter.sectionId != section.id
+        holder.cardAdapter.submit(section)
+        if (sectionChanged) holder.items.scrollToPosition(0)
     }
 
     /** What is currently on screen, for callers that need to re-submit with an extra row folded in. */
@@ -78,25 +84,32 @@ class HomeSectionAdapter(
         diff.dispatchUpdatesTo(this)
     }
 
-    private inner class CardAdapter(
-        private val section: HomeSection
-    ) : RecyclerView.Adapter<CardAdapter.CardViewHolder>() {
+    inner class CardAdapter : RecyclerView.Adapter<CardAdapter.CardViewHolder>() {
 
-        private val cards = section.cards
-        private val isStation = section.style == HomeSectionStyle.STATION
+        private var section: HomeSection? = null
+        private val cards: List<HomeCard>
+            get() = section?.cards.orEmpty()
+        val sectionId: String?
+            get() = section?.id
+
+        fun submit(newSection: HomeSection) {
+            section = newSection
+            notifyDataSetChanged()
+        }
 
         inner class CardViewHolder(view: View) : RecyclerView.ViewHolder(view) {
             val cover: ImageView? = view.findViewById(R.id.cover)
-            val title: TextView = view.findViewById(
-                if (isStation) R.id.station_title else R.id.title
-            )
+            val title: TextView =
+                view.findViewById<TextView?>(R.id.station_title)
+                    ?: view.findViewById(R.id.title)
             val subtitle: TextView? = view.findViewById(R.id.subtitle)
             val art: StationArtView? = view.findViewById(R.id.station_art)
+            val collageArt: CollageArtView? = view.findViewById(R.id.collage_art)
         }
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) = CardViewHolder(
             LayoutInflater.from(parent.context).inflate(
-                if (isStation) R.layout.layout_station_card
+                if (viewType == VIEW_TYPE_STATION) R.layout.layout_station_card
                 else R.layout.homepage_recommend_card,
                 parent,
                 false
@@ -105,36 +118,42 @@ class HomeSectionAdapter(
 
         override fun getItemCount(): Int = cards.size
 
-        /**
-         * Rows share one RecycledViewPool, which keys on view type. Station and album cards inflate
-         * different layouts, so leaving both on the default type let a station card be handed to a
-         * row section - "For fans of" came up drawn as stations.
-         */
         override fun getItemViewType(position: Int): Int =
-            if (isStation) VIEW_TYPE_STATION else VIEW_TYPE_CARD
+            if (section?.style == HomeSectionStyle.STATION) VIEW_TYPE_STATION else VIEW_TYPE_CARD
 
         override fun onBindViewHolder(holder: CardViewHolder, position: Int) {
             val card = cards[position]
             holder.title.text = card.title
-            if (isStation) {
-                // Artwork is generated from the station's name, so it is stable per station and
-                // different between them without needing a cover to borrow.
+            holder.subtitle?.text = card.subtitle
+            holder.subtitle?.visibility =
+                if (card.subtitle.isNullOrBlank()) View.GONE else View.VISIBLE
+
+            if (section?.style == HomeSectionStyle.STATION) {
                 holder.art?.bind(card.title)
             } else {
-                // No error()/placeholder(): Coil3 has no Int overloads, so a drawable id silently
-                // binds to kotlin.error() and throws at runtime. The layout's own src is the
-                // fallback.
-                holder.cover?.load(card.cover) { coolCrossfade(true) }
-                holder.subtitle?.text = card.subtitle
-                holder.subtitle?.visibility =
-                    if (card.subtitle.isNullOrBlank()) View.GONE else View.VISIBLE
+                if (card.collageCovers.isNotEmpty()) {
+                    holder.cover?.visibility = View.GONE
+                    holder.art?.visibility = View.GONE
+                    holder.collageArt?.visibility = View.VISIBLE
+                    holder.collageArt?.setCovers(card.collageCovers)
+                } else if (card.cover != null) {
+                    holder.cover?.visibility = View.VISIBLE
+                    holder.art?.visibility = View.GONE
+                    holder.collageArt?.visibility = View.GONE
+                    holder.cover?.load(card.cover) { coolCrossfade(true) }
+                } else {
+                    holder.cover?.visibility = View.GONE
+                    holder.art?.visibility = View.VISIBLE
+                    holder.collageArt?.visibility = View.GONE
+                    holder.art?.bind(card.title)
+                }
             }
-            holder.itemView.setOnClickListener {
-                if (card.songs.isEmpty()) return@setOnClickListener
+            val clickListener = View.OnClickListener {
+                it.performPressHaptic()
                 val handler = onCardClick
                 if (handler != null) {
-                    handler(section, card)
-                } else {
+                    section?.let { handler(it, card) }
+                } else if (card.songs.isNotEmpty()) {
                     player()?.apply {
                         setMediaItems(card.songs, card.startIndex, C.TIME_UNSET)
                         prepare()
@@ -142,6 +161,10 @@ class HomeSectionAdapter(
                     }
                 }
             }
+            holder.itemView.setOnClickListener(clickListener)
+            holder.collageArt?.setOnClickListener(clickListener)
+            holder.cover?.setOnClickListener(clickListener)
+            holder.art?.setOnClickListener(clickListener)
         }
     }
 

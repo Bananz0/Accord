@@ -22,6 +22,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import uk.akane.accord.R
 import uk.akane.accord.logic.dp
+import uk.akane.accord.logic.ArtistCredits
 import uk.akane.accord.ui.MainActivity
 import uk.akane.accord.ui.fragments.browse.ArtistDetailFragment
 
@@ -31,13 +32,14 @@ class ArtistAdapter(
     private val onContentLoaded: (() -> Unit)
 ) : RecyclerView.Adapter<ArtistAdapter.ViewHolder>() {
 
-    private val list = mutableListOf<ArtistItem>()
+    private val list = mutableListOf<ArtistListItem>()
 
     private val mainActivity
         get() = fragment.activity as MainActivity
 
     /** Kept so the search box can re-filter without waiting for the library to emit again. */
     private var latestSongList: List<MediaItem> = emptyList()
+    private var displayMode = ArtistKind.PRIMARY
 
     init {
         fragment.viewLifecycleOwner.lifecycleScope.launch {
@@ -55,14 +57,30 @@ class ArtistAdapter(
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
         return ViewHolder(
             LayoutInflater.from(parent.context)
-                .inflate(R.layout.layout_artist_item, parent, false)
+                .inflate(
+                    if (viewType == VIEW_TYPE_HEADER) R.layout.adapter_category_header
+                    else R.layout.layout_artist_item,
+                    parent,
+                    false,
+                )
         )
     }
 
-    override fun onBindViewHolder(holder: ViewHolder, position: Int) {
-        val item = list[position]
+    override fun getItemViewType(position: Int): Int =
+        if (list[position] is ArtistListItem.Header) VIEW_TYPE_HEADER else VIEW_TYPE_ARTIST
 
-        holder.artistImage.load(item.artworkUri) {
+    override fun onBindViewHolder(holder: ViewHolder, position: Int) {
+        when (val item = list[position]) {
+            is ArtistListItem.Header -> {
+                holder.artistName.text = item.title
+                return
+            }
+            is ArtistListItem.Artist -> bindArtist(holder, item)
+        }
+    }
+
+    private fun bindArtist(holder: ViewHolder, item: ArtistListItem.Artist) {
+        holder.artistImage?.load(item.artworkUri) {
             crossfade(true)
             size(160.dp.px.toInt(), 160.dp.px.toInt())
         }
@@ -71,7 +89,10 @@ class ArtistAdapter(
 
         holder.itemView.setOnClickListener {
             mainActivity.fragmentSwitcherView.addFragmentToCurrentStack(
-                ArtistDetailFragment.newInstance(item.name)
+                ArtistDetailFragment.newInstance(
+                    artist = item.name,
+                    featuredOnly = item.kind == ArtistKind.FEATURED,
+                )
             )
         }
     }
@@ -79,8 +100,9 @@ class ArtistAdapter(
     override fun getItemCount(): Int = list.size
 
     class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
-        val artistImage: ImageView = view.findViewById(R.id.artistImage)
-        val artistName: TextView = view.findViewById(R.id.artistName)
+        val artistImage: ImageView? = view.findViewById(R.id.artistImage)
+        val artistName: TextView =
+            view.findViewById<TextView?>(R.id.artistName) ?: view.findViewById(R.id.title)
     }
 
     /** See [SongAdapter.submitMutex] - same race, same reason. */
@@ -100,6 +122,12 @@ class ArtistAdapter(
         submitFromSongs(latestSongList)
     }
 
+    fun setDisplayMode(mode: ArtistKind) {
+        if (displayMode == mode) return
+        displayMode = mode
+        submitFromSongs(latestSongList)
+    }
+
     private fun String?.matchesFilter(): Boolean {
         if (filter.isEmpty()) return true
         return this?.normaliseForFilter()?.contains(filter.normaliseForFilter()) == true
@@ -111,23 +139,50 @@ class ArtistAdapter(
 
     private fun submitFromSongs(songs: List<MediaItem>) {
         CoroutineScope(Dispatchers.Default).launch { submitMutex.withLock {
-            val artistMap = LinkedHashMap<String, MutableList<MediaItem>>()
+            val primaryArtists = LinkedHashMap<String, MutableList<MediaItem>>()
+            val featuredArtists = LinkedHashMap<String, MutableList<MediaItem>>()
 
             for (song in songs) {
-                val artist = song.mediaMetadata.artist?.toString()?.trim().orEmpty()
-                val safeArtist = artist.ifEmpty { "(Unknown Artist)" }
-                artistMap.getOrPut(safeArtist) { mutableListOf() }.add(song)
+                val primary = ArtistCredits.primaryArtist(song)
+                primaryArtists.getOrPut(primary) { mutableListOf() }.add(song)
+                ArtistCredits.featuredArtists(song).forEach { guest ->
+                    featuredArtists.getOrPut(guest) { mutableListOf() }.add(song)
+                }
             }
 
-            val newItems = artistMap.entries
+            val primaryItems = primaryArtists.entries
+                .filter { (name, _) -> name.matchesFilter() }
                 .map { (name, tracks) ->
-                    ArtistItem(
+                    ArtistListItem.Artist(
                         name = name,
                         artworkUri = tracks.firstOrNull()?.mediaMetadata?.artworkUri,
-                        tracks = tracks.toList()
+                        tracks = tracks.toList(),
+                        kind = ArtistKind.PRIMARY,
                     )
                 }
                 .sortedBy { it.name.lowercase() }
+            val featuredItems = featuredArtists.entries
+                .filter { (name, _) -> name.matchesFilter() }
+                .map { (name, tracks) ->
+                    ArtistListItem.Artist(
+                        name = name,
+                        artworkUri = tracks.firstOrNull()?.mediaMetadata?.artworkUri,
+                        tracks = tracks.distinctBy(MediaItem::mediaId),
+                        kind = ArtistKind.FEATURED,
+                    )
+                }
+                .sortedBy { it.name.lowercase() }
+
+            val newItems = buildList<ArtistListItem> {
+                if (displayMode == ArtistKind.PRIMARY && primaryItems.isNotEmpty()) {
+                    add(ArtistListItem.Header("Main artists"))
+                    addAll(primaryItems)
+                }
+                if (displayMode == ArtistKind.FEATURED && featuredItems.isNotEmpty()) {
+                    add(ArtistListItem.Header("Featured artists"))
+                    addAll(featuredItems)
+                }
+            }
 
             val oldSnapshot = withContext(Dispatchers.Main) { list.toList() }
             val diff = DiffUtil.calculateDiff(
@@ -144,23 +199,44 @@ class ArtistAdapter(
     }
 
     class ArtistDiffCallback(
-        private val oldList: List<ArtistItem>,
-        private val newList: List<ArtistItem>
+        private val oldList: List<ArtistListItem>,
+        private val newList: List<ArtistListItem>
     ) : DiffUtil.Callback() {
 
         override fun getOldListSize(): Int = oldList.size
         override fun getNewListSize(): Int = newList.size
 
         override fun areItemsTheSame(oldPos: Int, newPos: Int): Boolean =
-            oldList[oldPos].name == newList[newPos].name
+            when {
+                oldList[oldPos] is ArtistListItem.Header && newList[newPos] is ArtistListItem.Header ->
+                    (oldList[oldPos] as ArtistListItem.Header).title ==
+                        (newList[newPos] as ArtistListItem.Header).title
+                oldList[oldPos] is ArtistListItem.Artist && newList[newPos] is ArtistListItem.Artist -> {
+                    val old = oldList[oldPos] as ArtistListItem.Artist
+                    val new = newList[newPos] as ArtistListItem.Artist
+                    old.name == new.name && old.kind == new.kind
+                }
+                else -> false
+            }
 
         override fun areContentsTheSame(oldPos: Int, newPos: Int): Boolean =
             oldList[oldPos] == newList[newPos]
     }
 
-    data class ArtistItem(
-        val name: String,
-        val artworkUri: android.net.Uri?,
-        val tracks: List<MediaItem>
-    )
+    enum class ArtistKind { PRIMARY, FEATURED }
+
+    sealed class ArtistListItem {
+        data class Header(val title: String) : ArtistListItem()
+        data class Artist(
+            val name: String,
+            val artworkUri: android.net.Uri?,
+            val tracks: List<MediaItem>,
+            val kind: ArtistKind,
+        ) : ArtistListItem()
+    }
+
+    private companion object {
+        const val VIEW_TYPE_ARTIST = 0
+        const val VIEW_TYPE_HEADER = 1
+    }
 }

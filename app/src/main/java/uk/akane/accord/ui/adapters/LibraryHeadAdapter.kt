@@ -13,6 +13,8 @@ import uk.akane.accord.ui.fragments.browse.AlbumsFragment
 import uk.akane.accord.ui.fragments.browse.ArtistsFragment
 import uk.akane.accord.ui.fragments.browse.PlaylistsFragment
 import uk.akane.accord.ui.fragments.browse.SongFragment
+import uk.akane.accord.ui.fragments.browse.GenresFragment
+import uk.akane.accord.ui.fragments.browse.LibraryTracksFragment
 
 class LibraryHeadAdapter(private val context: Context) : RecyclerView.Adapter<LibraryHeadAdapter.ViewHolder>() {
 
@@ -24,15 +26,21 @@ class LibraryHeadAdapter(private val context: Context) : RecyclerView.Adapter<Li
         ARTIST(R.string.library_head_artist, R.drawable.ic_microphone),
         ALBUM(R.string.library_head_album, R.drawable.ic_album),
         SONG(R.string.library_head_song, R.drawable.ic_music_note),
-        GENRE(R.string.library_head_genre, R.drawable.ic_genre)
+        GENRE(R.string.library_head_genre, R.drawable.ic_genre),
+        RECENT(R.string.recently_added, R.drawable.ic_calendar),
+        DOWNLOADED(R.string.downloads_size, R.drawable.ic_download),
+        AVAILABLE_OFFLINE(R.string.available_offline, R.drawable.ic_folder),
     }
 
     private val currentHeaderArrangeList = mutableListOf<SectionType>(
         SectionType.PLAYLIST,
+        SectionType.RECENT,
         SectionType.ARTIST,
         SectionType.ALBUM,
+        SectionType.GENRE,
         SectionType.SONG,
-        SectionType.GENRE
+        SectionType.DOWNLOADED,
+        SectionType.AVAILABLE_OFFLINE,
     )
 
     override fun onCreateViewHolder(
@@ -60,7 +68,10 @@ class LibraryHeadAdapter(private val context: Context) : RecyclerView.Adapter<Li
                     SectionType.SONG -> SongFragment()
                     SectionType.ALBUM -> AlbumsFragment()
                     SectionType.ARTIST -> ArtistsFragment()
-                    else -> SongFragment()
+                    SectionType.GENRE -> GenresFragment()
+                    SectionType.RECENT -> LibraryTracksFragment.recent()
+                    SectionType.DOWNLOADED -> LibraryTracksFragment.downloaded()
+                    SectionType.AVAILABLE_OFFLINE -> LibraryTracksFragment.availableOffline()
                 }
             )
         }

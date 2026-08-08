@@ -151,7 +151,7 @@
                         android:layout_width="36dp"
                         android:layout_height="36dp"
                         android:layout_marginEnd="0dp"
-                        android:contentDescription="@string/popup_add_to_a_playlist"
+                        android:contentDescription="@string/add_to_queue"
                         app:icon="@drawable/ic_plus"
                         app:iconSize="22dp"
                         app:iconTint="@color/accentColor"
@@ -162,6 +162,30 @@
 
                 </androidx.constraintlayout.widget.ConstraintLayout>
             </com.google.android.material.card.MaterialCardView>
+
+            <TextView
+                android:id="@+id/tvAlbumsHeader"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="16dp"
+                android:layout_marginEnd="16dp"
+                android:layout_marginTop="20dp"
+                android:fontFamily="@font/inter_semibold"
+                android:includeFontPadding="false"
+                android:text="@string/category_albums"
+                android:textColor="@color/onSurfaceColor"
+                android:textSize="20sp" />
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/rvAlbums"
+                android:layout_width="match_parent"
+                android:layout_height="230dp"
+                android:clipToPadding="false"
+                android:nestedScrollingEnabled="false"
+                android:orientation="horizontal"
+                android:overScrollMode="never"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp" />
 
             <LinearLayout
                 android:id="@+id/topSongsHeader"
@@ -191,11 +215,12 @@
                     android:layout_marginStart="6dp"
                     android:contentDescription="@string/artist_top_songs"
                     android:src="@drawable/ic_chevron_small"
+                    android:visibility="gone"
                     app:tint="@color/onSurfaceColorInactive" />
 
             </LinearLayout>
 
-            <androidx.recyclerview.widget.RecyclerView
+            <uk.akane.accord.ui.components.TrackSwipeRecyclerView
                 android:id="@+id/rvSongs"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"

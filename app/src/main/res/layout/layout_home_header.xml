@@ -1,8 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    The home screen's masthead - heading and the banner - as the first row of the feed rather than
-    as fixed furniture above it. Pinned, it left the rows a sliver of screen to scroll inside; as a
-    row it scrolls away with everything else.
+    The home screen's masthead - heading and the station banner carousel - as the first row of the feed
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -32,13 +30,14 @@
         android:textSize="15sp"
         android:includeFontPadding="false" />
 
-    <uk.akane.accord.ui.components.BannerView
-        android:id="@+id/banner"
-        android:layout_width="276dp"
-        android:layout_height="360dp"
-        android:layout_marginStart="22dp"
-        android:layout_marginTop="8dp"
-        app:videoSrc="@raw/breeze"
-        app:placeholder="@drawable/breeze_preview" />
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/banner_carousel"
+        android:layout_width="match_parent"
+        android:layout_height="280dp"
+        android:layout_marginTop="12dp"
+        android:clipToPadding="false"
+        android:paddingStart="22dp"
+        android:paddingEnd="22dp"
+        android:overScrollMode="never" />
 
 </LinearLayout>

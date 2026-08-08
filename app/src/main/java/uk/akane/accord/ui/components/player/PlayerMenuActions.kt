@@ -10,20 +10,19 @@ import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.MediaItem
 import androidx.media3.session.SessionCommand
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinDownloadManager
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinLibraryLoader
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinReporter
+import org.akanework.gramophone.logic.data.library.songListSnapshot
 import org.akanework.gramophone.logic.GramophonePlaybackService
 import org.akanework.gramophone.logic.utils.MediaStoreUtils
 import uk.akane.accord.R
 import uk.akane.accord.ui.MainActivity
 import uk.akane.accord.ui.fragments.browse.AddToPlaylistFragment
-import uk.akane.accord.ui.fragments.browse.StationDetailFragment
+import uk.akane.accord.ui.fragments.browse.AlbumDetailFragment
 import uk.akane.accord.ui.fragments.browse.ViewCreditsFragment
-import kotlin.random.Random
 
 /**
  * What the player's overflow menu actually does.
@@ -37,6 +36,7 @@ object PlayerMenuActions {
     /** Identifies an entry independently of its label, which changes with state and language. */
     enum class Action {
         VIEW_CREDITS,
+        DOWNLOAD,
         REMOVE_DOWNLOAD,
         ADD_TO_PLAYLIST,
         SHARE_SONG,
@@ -56,14 +56,25 @@ object PlayerMenuActions {
         }
         when (action) {
             Action.VIEW_CREDITS -> openCredits(activity, item)
-            Action.REMOVE_DOWNLOAD -> JellyfinDownloadManager.remove(activity, listOf(item))
+            Action.DOWNLOAD -> {
+                activity.lifecycleScope.launch(Dispatchers.IO) {
+                    JellyfinDownloadManager.download(activity, listOf(item))
+                }
+                toast(activity, activity.getString(R.string.download_started))
+            }
+            Action.REMOVE_DOWNLOAD -> {
+                activity.lifecycleScope.launch(Dispatchers.IO) {
+                    JellyfinDownloadManager.remove(activity, listOf(item))
+                }
+                toast(activity, activity.getString(R.string.download_removed))
+            }
             Action.ADD_TO_PLAYLIST -> open(activity) {
                 AddToPlaylistFragment.newInstance(listOf(item.mediaId))
             }
             Action.SHARE_SONG -> shareSong(activity, item)
             Action.SHARE_LYRICS -> shareLyrics(activity, item)
             Action.GO_TO_ALBUM -> goToAlbum(activity, item)
-            Action.CREATE_STATION -> createStation(activity, item)
+            Action.CREATE_STATION -> activity.openStationFor(item)
             Action.TOGGLE_FAVOURITE -> toggleFavourite(activity, item)
         }
     }
@@ -163,56 +174,17 @@ object PlayerMenuActions {
         activity.lifecycleScope.launch {
             // Matched by title rather than by album id: the id on a MediaItem is the interned one,
             // and matching on what the user can see keeps local and server copies together.
-            val tracks = activity.reader.songListFlow.first()
+            val tracks = activity.reader.songListSnapshot()
                 .filter { it.mediaMetadata.albumTitle?.toString() == albumTitle }
             if (tracks.isEmpty()) {
                 toast(activity, activity.getString(R.string.go_to_album_missing))
                 return@launch
             }
             open(activity) {
-                StationDetailFragment.newInstance(
-                    title = albumTitle,
-                    subtitle = tracks.first().mediaMetadata.albumArtist?.toString()
-                        ?: tracks.first().mediaMetadata.artist?.toString(),
-                    mediaIds = tracks.map { it.mediaId }
-                )
-            }
-        }
-    }
-
-    /**
-     * Builds a station around the playing track: everything by the same artist, then everything
-     * sharing its genre, shuffled together. Deliberately not just the artist's discography - a
-     * station that only ever plays one artist is an artist page with a different name.
-     */
-    private fun createStation(activity: MainActivity, item: MediaItem) {
-        val metadata = item.mediaMetadata
-        val artist = metadata.artist?.toString()
-        val genre = metadata.genre?.toString()
-        activity.lifecycleScope.launch {
-            val library = activity.reader.songListFlow.first()
-            val sameArtist = library.filter { it.mediaMetadata.artist?.toString() == artist }
-            val sameGenre = library.filter {
-                genre != null && it.mediaMetadata.genre?.toString() == genre
-            }
-            val tracks = (sameArtist + sameGenre)
-                .distinctBy { it.mediaId }
-                .shuffled(Random(item.mediaId.hashCode().toLong()))
-                .take(STATION_SIZE)
-                // The song it was built from opens the station, so tapping play continues from
-                // what is already on.
-                .let { listOf(item) + it.filter { track -> track.mediaId != item.mediaId } }
-            if (tracks.size < 2) {
-                toast(activity, activity.getString(R.string.go_to_album_missing))
-                return@launch
-            }
-            open(activity) {
-                StationDetailFragment.newInstance(
-                    title = activity.getString(
-                        R.string.station_from_song, metadata.title?.toString().orEmpty()
-                    ),
-                    subtitle = artist,
-                    mediaIds = tracks.map { it.mediaId }
+                AlbumDetailFragment.newInstance(
+                    albumTitle,
+                    tracks.first().mediaMetadata.albumArtist?.toString()
+                        ?: tracks.first().mediaMetadata.artist?.toString().orEmpty(),
                 )
             }
         }
@@ -231,5 +203,4 @@ object PlayerMenuActions {
     }
 
     private const val TAG = "PlayerMenuActions"
-    private const val STATION_SIZE = 50
 }

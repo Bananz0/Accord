@@ -6,6 +6,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.TextView
+import android.widget.Toast
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.doOnLayout
@@ -20,8 +21,12 @@ import coil3.load
 import coil3.request.crossfade
 import com.google.android.material.button.MaterialButton
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinDownloadManager
 import uk.akane.accord.R
+import uk.akane.accord.logic.ArtistCredits
 import uk.akane.accord.ui.MainActivity
 import uk.akane.accord.ui.components.NavigationBar
 import uk.akane.cupertino.navigation.SwitcherPostponeFragment
@@ -29,6 +34,7 @@ import kotlin.random.Random
 import uk.akane.accord.ui.components.CollectionPopupMenu
 import uk.akane.accord.ui.components.TrackRowMenu
 import uk.akane.accord.ui.components.TrackSwipeActions
+import uk.akane.accord.ui.components.performPressHaptic
 
 class AlbumDetailFragment : SwitcherPostponeFragment() {
 
@@ -50,6 +56,7 @@ class AlbumDetailFragment : SwitcherPostponeFragment() {
     private val trackAdapter = AlbumTrackAdapter()
     private var currentTracks: List<MediaItem> = emptyList()
     private var didLoadOnce = false
+    private var collectionDownloaded = false
 
     init {
         postponeSwitcherAnimation()
@@ -87,12 +94,19 @@ class AlbumDetailFragment : SwitcherPostponeFragment() {
         val albumTitle = requireArguments().getString(ARG_TITLE).orEmpty()
         val albumArtist = requireArguments().getString(ARG_ARTIST).orEmpty()
         titleView.text = albumTitle
-        artistView.text = albumArtist
+        bindArtistLink(albumArtist)
         navigationBar.setTitle(albumTitle)
         // Without this the three dots showed the general screen menu - refresh the library,
         // open settings - on a screen that is plainly about one album.
         navigationBar.setMenuEntries(
-            entries = { CollectionPopupMenu.build(resources, withArtist = true) },
+            entries = {
+                CollectionPopupMenu.build(
+                    resources,
+                    withArtist = true,
+                    withDownload = !collectionDownloaded,
+                    withRemoveDownload = collectionDownloaded,
+                )
+            },
             onClick = { entry ->
                 CollectionPopupMenu.handle(activity, entry, currentTracks, albumTitle)
             },
@@ -119,7 +133,11 @@ class AlbumDetailFragment : SwitcherPostponeFragment() {
 
         playButton.setOnClickListener {
             val mediaController = activity.getPlayer() ?: return@setOnClickListener
-            if (currentTracks.isEmpty()) return@setOnClickListener
+            it.performPressHaptic()
+            if (currentTracks.isEmpty()) {
+                Toast.makeText(requireContext(), R.string.no_tracks_available, Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
             mediaController.setMediaItems(currentTracks, 0, C.TIME_UNSET)
             mediaController.prepare()
             mediaController.play()
@@ -127,7 +145,11 @@ class AlbumDetailFragment : SwitcherPostponeFragment() {
 
         shuffleButton.setOnClickListener {
             val mediaController = activity.getPlayer() ?: return@setOnClickListener
-            if (currentTracks.isEmpty()) return@setOnClickListener
+            it.performPressHaptic()
+            if (currentTracks.isEmpty()) {
+                Toast.makeText(requireContext(), R.string.no_tracks_available, Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
             val shuffled = currentTracks.shuffled(Random(System.currentTimeMillis()))
             mediaController.setMediaItems(shuffled, 0, C.TIME_UNSET)
             mediaController.prepare()
@@ -138,8 +160,15 @@ class AlbumDetailFragment : SwitcherPostponeFragment() {
             viewLifecycleOwner.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
                 activity.reader.songListFlow.collectLatest { songs ->
                     val filtered = songs.filter { song ->
-                        safeAlbum(song.mediaMetadata.albumTitle?.toString()) == albumTitle &&
-                            safeArtist(song.mediaMetadata.artist?.toString()) == albumArtist
+                        val songAlbum = safeAlbum(song.mediaMetadata.albumTitle?.toString())
+                        val albumMatches = songAlbum.equals(albumTitle, ignoreCase = true)
+                        if (!albumMatches) return@filter false
+
+                        if (albumArtist.isBlank() || albumArtist == "(Unknown Artist)") {
+                            true
+                        } else {
+                            ArtistCredits.primaryArtist(song).equals(albumArtist, ignoreCase = true)
+                        }
                     }
                     val sorted = filtered.sortedWith(
                         compareBy<MediaItem> { it.mediaMetadata.trackNumber ?: Int.MAX_VALUE }
@@ -156,13 +185,21 @@ class AlbumDetailFragment : SwitcherPostponeFragment() {
     override fun onHiddenChanged(hidden: Boolean) {
         super.onHiddenChanged(hidden)
         navigationBar.onVisibilityChangedFromFragment(hidden)
+        if (!hidden) refreshDownloadState()
     }
 
     private fun updateAlbumDetails(tracks: List<MediaItem>) {
         currentTracks = tracks
         trackAdapter.submitList(tracks)
+        refreshDownloadState(tracks)
 
         val first = tracks.firstOrNull()
+        if (artistView.text.isBlank() || artistView.text.toString() == "(Unknown Artist)") {
+            bindArtistLink(
+                first?.mediaMetadata?.albumArtist?.toString()
+                    ?: first?.mediaMetadata?.artist?.toString().orEmpty()
+            )
+        }
         if (first?.mediaMetadata?.artworkUri != null) {
             headerArt.load(first.mediaMetadata.artworkUri) { crossfade(true) }
         } else {
@@ -201,6 +238,35 @@ class AlbumDetailFragment : SwitcherPostponeFragment() {
 
     private fun safeArtist(value: String?): String =
         value?.trim().orEmpty().ifEmpty { "(Unknown Artist)" }
+
+    private fun bindArtistLink(value: String) {
+        val artist = safeArtist(value)
+        val canOpen = artist != "(Unknown Artist)"
+        artistView.text = artist
+        artistView.isClickable = canOpen
+        artistView.isFocusable = canOpen
+        artistView.setOnClickListener(if (canOpen) View.OnClickListener {
+            activity.fragmentSwitcherView.addFragmentToCurrentStack(
+                ArtistDetailFragment.newInstance(artist)
+            )
+        } else null)
+    }
+
+    private fun refreshDownloadState(tracks: List<MediaItem> = currentTracks) {
+        if (!isAdded || tracks.isEmpty()) {
+            collectionDownloaded = false
+            return
+        }
+        val expectedIds = tracks.map(MediaItem::mediaId)
+        viewLifecycleOwner.lifecycleScope.launch {
+            val downloaded = withContext(Dispatchers.IO) {
+                JellyfinDownloadManager.areAllDownloaded(requireContext(), tracks)
+            }
+            if (currentTracks.map(MediaItem::mediaId) == expectedIds) {
+                collectionDownloaded = downloaded
+            }
+        }
+    }
 
     private inner class AlbumTrackAdapter : RecyclerView.Adapter<AlbumTrackAdapter.ViewHolder>() {
         private val items = mutableListOf<MediaItem>()

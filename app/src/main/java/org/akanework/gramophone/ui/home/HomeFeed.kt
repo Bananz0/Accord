@@ -1,34 +1,21 @@
 package org.akanework.gramophone.ui.home
 
-
 import android.content.Context
 import android.net.Uri
 import androidx.media3.common.MediaItem
-import uk.akane.accord.R
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinLibraryLoader
 import org.akanework.gramophone.logic.data.lastfm.LastFmClient
 import org.akanework.gramophone.logic.data.lastfm.LastFmCredentialStore
-import org.akanework.gramophone.ui.LibraryViewModel
+import uk.akane.accord.R
 import java.util.Calendar
-import kotlin.random.Random
 
-/**
- * A titled row of cards on the home screen.
- *
- * The screen is a list of these rather than a fixed pair of rows, so what it shows can follow what
- * the library actually contains - somebody who has never favourited anything gets a different set
- * of rows to somebody with years of play counts, instead of an empty shelf.
- */
-/**
- * How a section is presented. Stations are the large generated-artwork cards the 1.0-stable build
- * shows under "Made for you"; everything else is the usual row of album artwork.
- */
 enum class HomeSectionStyle { ROW, STATION }
+
+enum class HomeCardTarget { MIX, ALBUM }
 
 data class HomeSection(
     val id: String,
     val title: String,
-    /** The line under the title, naming what is in the row. Spotify uses this heavily. */
     val subtitle: String? = null,
     val cards: List<HomeCard>,
     val style: HomeSectionStyle = HomeSectionStyle.ROW,
@@ -38,382 +25,402 @@ data class HomeCard(
     val title: String,
     val subtitle: String?,
     val cover: Uri?,
-    /** Tapping plays these, starting at [startIndex]. */
+    val collageCovers: List<Uri> = emptyList(),
     val songs: List<MediaItem>,
     val startIndex: Int = 0,
-)
+    val cachedMediaIds: List<String> = emptyList(),
+    val target: HomeCardTarget = HomeCardTarget.MIX,
+) {
+    val mediaIds: List<String>
+        get() = songs.map { it.mediaId }.ifEmpty { cachedMediaIds }
+}
 
-/**
- * Builds the home feed from the library.
- *
- * Everything here is pure computation over the already-loaded library, so it is cheap enough to
- * rebuild whenever the library changes - except [similarArtistSection], which needs the network and
- * is fetched separately and appended when it arrives.
- */
+/** Builds a deterministic home feed from the listening signals already stored by Jellyfin. */
 object HomeFeed {
 
     private const val ROW_SIZE = 12
     private const val MIX_SIZE = 50
+    private const val MIN_MIX_SIZE = 5
 
-    /**
-     * The only thing the feed needs from an artist. Stated here so the feed does not have to pick
-     * between this app's library model and libPhonograph's - the two describe the same thing with
-     * no common supertype, and the feed is now built for both the old screens and the Accord ones.
-     */
     data class ArtistInput(val title: String?, val songList: List<MediaItem>)
 
     fun build(
         context: Context,
         library: List<MediaItem>,
-        artists: List<ArtistInput>
+        artists: List<ArtistInput>,
     ): List<HomeSection> {
         if (library.isEmpty()) return emptyList()
 
         return buildList {
-            madeForYou(context, library)?.let(::add)
             jumpBackIn(context, library)?.let(::add)
+            madeForYou(context, library, artists)?.let(::add)
+            recentlyAddedAlbums(context, library)?.let(::add)
             topMixes(context, artists)?.let(::add)
+            genreMixes(library)?.let(::add)
+            finishYourAlbums(library)?.let(::add)
+            decadeMixes(library)?.let(::add)
         }
     }
 
     /**
-     * The stations row - one card per mix, drawn with generated artwork rather than a song's cover.
-     *
-     * These used to be separate rows of album art, which made four different ideas look like one
-     * long shelf of the same albums. As stations they are distinguishable at a glance and each one
-     * is a mix rather than a list of records.
+     * Every tile is an independently compiled playlist. This deliberately avoids the old pattern
+     * where a row showed thirty covers that all opened the same backing queue at a different index.
      */
-    private fun madeForYou(context: Context, library: List<MediaItem>): HomeSection? {
-        val stations = buildList {
-            stationDailyShuffle(context, library)?.let(::add)
-            stationMostPlayed(context, library)?.let(::add)
-            stationFavourites(context, library)?.let(::add)
-            stationRecentlyAdded(context, library)?.let(::add)
-            stationDaylist(context, library)?.let(::add)
+    private fun madeForYou(
+        context: Context,
+        library: List<MediaItem>,
+        artists: List<ArtistInput>,
+    ): HomeSection? {
+        val played = library.filter { it.playCount() > 0 }
+        val favourites = library.filter { it.isFavourite() }
+        val topArtists = artists
+            .filter { it.title?.isNotBlank() == true }
+            .sortedByDescending { artist -> artist.songList.sumOf { it.playCount() } }
+        val topArtistNames = topArtists.take(8).mapNotNull { it.title?.normaliseForMatch() }.toSet()
+        val likedGenres = library
+            .filter { it.playCount() > 0 || it.isFavourite() }
+            .mapNotNull { item -> item.genreKey()?.let { it to (item.playCount() + if (item.isFavourite()) 5 else 0) } }
+            .groupBy({ it.first }, { it.second })
+            .entries
+            .sortedByDescending { entry -> entry.value.sum() }
+            .take(6)
+            .map { it.key }
+            .toSet()
+
+        val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+        val partOfDay = when (hour) {
+            in 5..10 -> "morning"
+            in 11..16 -> "afternoon"
+            in 17..21 -> "evening"
+            else -> "late night"
         }
-        if (stations.isEmpty()) return null
+
+        val cards = listOfNotNull(
+            mixCard(
+                title = "Personal anthems",
+                subtitle = "Your biggest songs, balanced across the artists you love",
+                songs = played.sortedByDescending { it.playCount() }.balancedByArtist(),
+            ),
+            mixCard(
+                title = "Current rotation",
+                subtitle = "The music defining your recent listening",
+                songs = played.filter { it.lastPlayed() > 0L }
+                    .sortedByDescending { it.lastPlayed() }
+                    .take(MIX_SIZE * 3)
+                    .balancedByArtist(),
+            ),
+            mixCard(
+                title = "Loved essentials",
+                subtitle = "A fresh sequence of songs you have favourited",
+                songs = favourites.stableShuffle(weeklySeed("loved_essentials")),
+            ),
+            mixCard(
+                title = "Forgotten favourites",
+                subtitle = "Old favourites that have been waiting for another play",
+                songs = favourites.filter { it.lastPlayed() > 0L }
+                    .sortedBy { it.lastPlayed() }
+                    .balancedByArtist(),
+            ),
+            mixCard(
+                title = "Deep cuts",
+                subtitle = "Less-played tracks from the artists already in your orbit",
+                songs = library.filter { item ->
+                    item.artistKey() in topArtistNames && item.playCount() <= 1
+                }.stableShuffle(weeklySeed("deep_cuts")),
+            ),
+            mixCard(
+                title = "New to you",
+                subtitle = "Unplayed tracks close to the genres you return to",
+                songs = library.filter { item ->
+                    item.playCount() == 0 &&
+                        item.genreKey() in likedGenres &&
+                        item.artistKey() !in topArtistNames.take(3)
+                }.stableShuffle(weeklySeed("new_to_you")),
+            ),
+            mixCard(
+                title = "Soundtrack your $partOfDay",
+                subtitle = "A different corner of your library for right now",
+                songs = library.stableShuffle(dailySeed("daylist_${hour / 4}")),
+            ),
+            mixCard(
+                title = "Fresh arrivals",
+                subtitle = "Recently added music, mixed across artists",
+                songs = library.sortedByDescending { it.addDate() }
+                    .take(MIX_SIZE * 3)
+                    .balancedByArtist(),
+            ),
+            mixCard(
+                title = "Album sampler",
+                subtitle = "One doorway into every record in your collection",
+                songs = library
+                    .distinctBy { it.albumKey() ?: it.mediaId }
+                    .stableShuffle(weeklySeed("album_sampler")),
+            ),
+        ).withoutNearDuplicates()
+
+        if (cards.isEmpty()) return null
         return HomeSection(
-            id = "made_for_you",
+            id = "made_for_you_v2",
             title = context.getString(R.string.home_made_for_you),
-            subtitle = context.getString(R.string.home_made_for_you_subtitle),
-            cards = stations,
+            subtitle = "Distinct mixes built from different parts of your listening",
+            cards = cards,
             style = HomeSectionStyle.STATION,
         )
     }
 
-    /** A station card carries the whole mix; the artwork is generated from its title. */
-    private fun station(title: String, songs: List<MediaItem>): HomeCard? {
-        if (songs.size < 5) return null
-        return HomeCard(title = title, subtitle = null, cover = null, songs = songs)
-    }
-
-    private fun stationDailyShuffle(context: Context, library: List<MediaItem>): HomeCard? {
-        val calendar = Calendar.getInstance()
-        val seed = calendar.get(Calendar.YEAR) * 1000L + calendar.get(Calendar.DAY_OF_YEAR)
-        return station(
-            context.getString(R.string.mix_daily_shuffle),
-            library.shuffled(Random(seed)).take(MIX_SIZE)
+    private fun mixCard(title: String, subtitle: String, songs: List<MediaItem>): HomeCard? {
+        val selected = songs.distinctBy { it.mediaId }.take(MIX_SIZE)
+        if (selected.size < MIN_MIX_SIZE) return null
+        return HomeCard(
+            title = title,
+            subtitle = subtitle,
+            cover = null,
+            collageCovers = selected.mapNotNull { it.mediaMetadata.artworkUri }.distinct().take(4),
+            songs = selected,
         )
     }
 
-    private fun stationMostPlayed(context: Context, library: List<MediaItem>): HomeCard? = station(
-        context.getString(R.string.mix_most_played),
-        library.filter { it.playCount() > 0 }
-            .sortedByDescending { it.playCount() }
-            .take(MIX_SIZE)
-    )
-
-    private fun stationFavourites(context: Context, library: List<MediaItem>): HomeCard? = station(
-        context.getString(R.string.mix_favourites),
-        library.filter { it.isFavourite() }.shuffled().take(MIX_SIZE)
-    )
-
-    private fun stationRecentlyAdded(context: Context, library: List<MediaItem>): HomeCard? =
-        station(
-            context.getString(R.string.mix_recently_added),
-            library.sortedByDescending { it.addDate() }.take(MIX_SIZE)
-        )
-
-    private fun stationDaylist(context: Context, library: List<MediaItem>): HomeCard? {
-        val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-        return station(
-            timeOfDayLabel(context, hour),
-            library.shuffled(Random(hour.toLong())).take(MIX_SIZE)
-        )
-    }
-
-    /**
-     * A shuffle of the whole library that holds still for the day.
-     *
-     * Seeded by the date, so it is the same set all day and a different one tomorrow - a row that
-     * reshuffled on every glance would not be worth returning to.
-     */
-    private fun dailyShuffle(context: Context, library: List<MediaItem>): HomeSection? {
-        if (library.size < ROW_SIZE) return null
-        val calendar = Calendar.getInstance()
-        val seed = calendar.get(Calendar.YEAR) * 1000L + calendar.get(Calendar.DAY_OF_YEAR)
-        val shown = library.shuffled(Random(seed)).take(ROW_SIZE)
-        return HomeSection(
-            id = "daily_shuffle",
-            title = context.getString(R.string.mix_daily_shuffle),
-            subtitle = context.getString(R.string.mix_daily_shuffle_subtitle),
-            cards = shown.mapIndexed { index, item ->
-                HomeCard(
-                    title = item.mediaMetadata.title?.toString().orEmpty(),
-                    subtitle = item.mediaMetadata.artist?.toString(),
-                    cover = item.mediaMetadata.artworkUri,
-                    songs = shown,
-                    startIndex = index,
-                )
-            }
-        )
-    }
-
-    /** Straight play counts, which on Jellyfin are counted across every client, not just this one. */
-    private fun mostPlayed(context: Context, library: List<MediaItem>): HomeSection? {
-        val played = library.filter { it.playCount() > 0 }
-            .sortedByDescending { it.playCount() }
-            .take(ROW_SIZE)
-        if (played.isEmpty()) return null
-        return HomeSection(
-            id = "most_played",
-            title = context.getString(R.string.mix_most_played),
-            cards = played.mapIndexed { index, item ->
-                HomeCard(
-                    title = item.mediaMetadata.title?.toString().orEmpty(),
-                    subtitle = item.mediaMetadata.artist?.toString(),
-                    cover = item.mediaMetadata.artworkUri,
-                    songs = played,
-                    startIndex = index,
-                )
-            }
-        )
-    }
-
-    /**
-     * What was played most recently, newest first.
-     *
-     * Uses Jellyfin's own last-played timestamps, so it reflects listening on every client rather
-     * than only this phone.
-     */
     private fun jumpBackIn(context: Context, library: List<MediaItem>): HomeSection? {
-        val recent = library.filter { it.lastPlayed() > 0 }
-            .sortedByDescending { it.lastPlayed() }
-            .distinctBy { it.mediaMetadata.albumTitle?.toString() ?: it.mediaId }
-            .take(ROW_SIZE)
-        if (recent.isEmpty()) return null
+        val played = library.filter { it.lastPlayed() > 0L }
+        val source = if (played.isNotEmpty()) played.sortedByDescending { it.lastPlayed() }
+        else library.sortedByDescending { it.addDate() }
+        val albums = source.toAlbumGroups().take(ROW_SIZE)
+        if (albums.isEmpty()) return null
+
         return HomeSection(
-            id = "jump_back_in",
+            id = "jump_back_in_v2",
             title = context.getString(R.string.home_jump_back_in),
-            cards = recent.mapIndexed { index, item ->
-                HomeCard(
-                    title = item.mediaMetadata.title?.toString().orEmpty(),
-                    subtitle = item.mediaMetadata.artist?.toString(),
-                    cover = item.mediaMetadata.artworkUri,
-                    songs = recent,
-                    startIndex = index,
-                )
-            }
+            cards = albums.map { (_, tracks) -> tracks.toAlbumCard() },
         )
     }
 
-    /**
-     * One mix per artist the user actually listens to, in the shape of Spotify's "Your top mixes".
-     *
-     * Ranked by total play count rather than track count, so a heavily played EP outranks an
-     * untouched discography that happens to be large.
-     */
+    private fun recentlyAddedAlbums(context: Context, library: List<MediaItem>): HomeSection? {
+        val albums = library
+            .sortedByDescending { it.addDate() }
+            .toAlbumGroups()
+            .take(ROW_SIZE)
+        if (albums.isEmpty()) return null
+
+        return HomeSection(
+            id = "recently_added_albums_v2",
+            title = context.getString(R.string.mix_recently_added),
+            subtitle = "The newest records in your library",
+            cards = albums.map { (_, tracks) -> tracks.toAlbumCard() },
+        )
+    }
+
     private fun topMixes(context: Context, allArtists: List<ArtistInput>): HomeSection? {
         val artists = allArtists
-            .filter { artist -> artist.songList.any { it.playCount() > 0 } }
-            .sortedByDescending { artist -> artist.songList.sumOf { it.playCount() } }
+            .filter { it.songList.size >= 3 && it.title?.isNotBlank() == true }
+            .sortedByDescending { artist ->
+                artist.songList.sumOf { it.playCount() }.takeIf { it > 0 } ?: artist.songList.size
+            }
             .take(ROW_SIZE)
         if (artists.isEmpty()) return null
+
         return HomeSection(
-            id = "top_mixes",
+            id = "top_mixes_v2",
             title = context.getString(R.string.home_top_mixes),
             subtitle = context.getString(R.string.home_top_mixes_subtitle),
             cards = artists.map { artist ->
-                val mix = artist.songList.shuffled().take(MIX_SIZE)
+                val title = artist.title ?: context.getString(R.string.unknown_artist)
+                val songs = artist.songList
+                    .stableShuffle(weeklySeed("artist_mix_$title"))
+                    .take(MIX_SIZE)
                 HomeCard(
-                    title = context.getString(
-                        R.string.home_artist_mix,
-                        artist.title ?: context.getString(R.string.unknown_artist)
-                    ),
-                    subtitle = artist.songList.firstOrNull()?.mediaMetadata?.albumTitle?.toString(),
-                    cover = artist.songList.firstOrNull()?.mediaMetadata?.artworkUri,
-                    songs = mix,
+                    title = context.getString(R.string.home_artist_mix, title),
+                    subtitle = songs.mapNotNull { it.mediaMetadata.albumTitle?.toString() }
+                        .distinct().take(3).joinToString(", "),
+                    cover = songs.firstNotNullOfOrNull { it.mediaMetadata.artworkUri },
+                    collageCovers = songs.mapNotNull { it.mediaMetadata.artworkUri }.distinct().take(4),
+                    songs = songs,
                 )
-            }
+            },
         )
     }
 
-    /**
-     * A time-of-day mix, in the spirit of Spotify's daylist.
-     *
-     * Seeded by the date and the part of the day, so it holds still for a few hours and then turns
-     * over - a mix that reshuffled on every glance would not feel like a playlist at all.
-     */
-    private fun daylist(context: Context, library: List<MediaItem>): HomeSection? {
-        val calendar = Calendar.getInstance()
-        val hour = calendar.get(Calendar.HOUR_OF_DAY)
-        val slot = hour / 6
-        val seed = calendar.get(Calendar.YEAR) * 10_000L +
-                calendar.get(Calendar.DAY_OF_YEAR) * 10L + slot
-        val random = Random(seed)
-
-        // Anchored on one genre so the row has a character rather than being a plain shuffle.
-        // Jellyfin joins a track's genres into one field, so they have to be split back apart -
-        // otherwise the card is titled "Alternative Pop;Electronic;Electropop" and the mix only
-        // contains tracks tagged with that exact combination.
-        val genresBySong = library.associateWith { it.genres() }
-        val genres = genresBySong.values.flatten().distinct()
+    private fun genreMixes(library: List<MediaItem>): HomeSection? {
+        val genres = library
+            .mapNotNull { item -> item.genreKey()?.let { key -> Triple(key, item.genreName(), item) } }
+            .groupBy({ it.first }, { it })
+            .values
+            .filter { it.size >= MIN_MIX_SIZE }
+            .sortedByDescending { genre ->
+                genre.sumOf { it.third.playCount() } * 3 + genre.size
+            }
+            .take(ROW_SIZE)
         if (genres.isEmpty()) return null
 
-        val cards = genres.shuffled(random).take(ROW_SIZE).mapNotNull { genre ->
-            val songs = library.filter { genre in genresBySong.getValue(it) }
-                .shuffled(random)
-                .take(MIX_SIZE)
-            if (songs.size < 5) return@mapNotNull null
-            HomeCard(
-                title = genre,
-                subtitle = context.resources.getQuantityString(
-                    R.plurals.songs, songs.size, songs.size
-                ),
-                cover = songs.firstOrNull()?.mediaMetadata?.artworkUri,
-                songs = songs,
-            )
-        }
-        if (cards.isEmpty()) return null
         return HomeSection(
-            id = "daylist",
-            title = context.getString(R.string.home_daylist, timeOfDayLabel(context, hour)),
-            subtitle = context.getString(R.string.home_daylist_subtitle),
+            id = "genre_mixes_v2",
+            title = "Your genre mixes",
+            subtitle = "Each mix stays inside a different sound in your library",
+            cards = genres.map { entries ->
+                val displayName = entries.first().second
+                val songs = entries.map { it.third }
+                    .stableShuffle(weeklySeed("genre_${entries.first().first}"))
+                    .take(MIX_SIZE)
+                HomeCard(
+                    title = "$displayName Mix",
+                    subtitle = songs.mapNotNull { it.mediaMetadata.artist?.toString() }
+                        .distinct().take(4).joinToString(", "),
+                    cover = songs.firstNotNullOfOrNull { it.mediaMetadata.artworkUri },
+                    collageCovers = songs.mapNotNull { it.mediaMetadata.artworkUri }.distinct().take(4),
+                    songs = songs,
+                )
+            },
+        )
+    }
+
+    private fun finishYourAlbums(library: List<MediaItem>): HomeSection? {
+        val cards = library.toAlbumGroups()
+            .mapNotNull { (_, tracks) ->
+                val unheard = tracks.filter { it.playCount() == 0 }
+                val playedCount = tracks.size - unheard.size
+                if (tracks.size < 4 || playedCount == 0 || unheard.isEmpty()) return@mapNotNull null
+                HomeCard(
+                    title = tracks.albumTitle(),
+                    subtitle = "${unheard.size} unheard · ${tracks.albumArtist()}",
+                    cover = tracks.firstNotNullOfOrNull { it.mediaMetadata.artworkUri },
+                    songs = unheard,
+                )
+            }
+            .sortedByDescending { it.songs.size }
+            .take(ROW_SIZE)
+        if (cards.isEmpty()) return null
+
+        return HomeSection(
+            id = "finish_your_albums_v2",
+            title = "Finish what you started",
+            subtitle = "Unheard tracks from albums you have already begun",
             cards = cards,
         )
     }
 
-    private fun timeOfDayLabel(context: Context, hour: Int) = context.getString(
-        when (hour) {
-            in 5..11 -> R.string.time_of_day_morning
-            in 12..16 -> R.string.time_of_day_afternoon
-            in 17..21 -> R.string.time_of_day_evening
-            else -> R.string.time_of_day_night
-        }
-    )
-
-    private fun recentlyAdded(context: Context, library: List<MediaItem>): HomeSection? {
-        val recent = library.sortedByDescending { it.addDate() }
-            .distinctBy { it.mediaMetadata.albumTitle?.toString() ?: it.mediaId }
+    private fun decadeMixes(library: List<MediaItem>): HomeSection? {
+        val decades = library.mapNotNull { item ->
+            val year = item.mediaMetadata.releaseYear?.takeIf { it in 1950..2039 }
+                ?: return@mapNotNull null
+            (year / 10) * 10 to item
+        }.groupBy({ it.first }, { it.second })
+            .filterValues { it.size >= MIN_MIX_SIZE }
+            .entries
+            .sortedByDescending { it.key }
             .take(ROW_SIZE)
-        if (recent.isEmpty()) return null
+        if (decades.isEmpty()) return null
+
         return HomeSection(
-            id = "recently_added",
-            title = context.getString(R.string.mix_recently_added),
-            cards = recent.mapIndexed { index, item ->
+            id = "decade_mixes_v2",
+            title = "Time capsules",
+            subtitle = "A separate playlist for every era in your collection",
+            cards = decades.map { (decade, tracks) ->
+                val songs = tracks.stableShuffle(weeklySeed("decade_$decade")).take(MIX_SIZE)
                 HomeCard(
-                    title = item.mediaMetadata.albumTitle?.toString()
-                        ?: item.mediaMetadata.title?.toString().orEmpty(),
-                    subtitle = item.mediaMetadata.artist?.toString(),
-                    cover = item.mediaMetadata.artworkUri,
-                    songs = recent,
-                    startIndex = index,
+                    title = "${decade}s Mix",
+                    subtitle = songs.mapNotNull { it.mediaMetadata.artist?.toString() }
+                        .distinct().take(4).joinToString(", "),
+                    cover = songs.firstNotNullOfOrNull { it.mediaMetadata.artworkUri },
+                    collageCovers = songs.mapNotNull { it.mediaMetadata.artworkUri }.distinct().take(4),
+                    songs = songs,
                 )
-            }
+            },
         )
     }
 
-    private fun favourites(context: Context, library: List<MediaItem>): HomeSection? {
-        val favourites = library.filter { it.isFavourite() }
-        if (favourites.size < 3) return null
-        val shown = favourites.shuffled().take(ROW_SIZE)
-        return HomeSection(
-            id = "favourites",
-            title = context.getString(R.string.mix_favourites),
-            cards = shown.mapIndexed { index, item ->
-                HomeCard(
-                    title = item.mediaMetadata.title?.toString().orEmpty(),
-                    subtitle = item.mediaMetadata.artist?.toString(),
-                    cover = item.mediaMetadata.artworkUri,
-                    songs = shown,
-                    startIndex = index,
-                )
-            }
-        )
-    }
-
-    /**
-     * "For fans of X" - artists Last.fm considers similar to a favourite of the user's, narrowed to
-     * those actually present in the library.
-     *
-     * Recommendations from play counts alone can only ever surface what is already listened to.
-     * Last.fm brings in outside knowledge of what sounds alike, which is the only way this can point
-     * at a corner of the library the user has never opened.
-     *
-     * Suspends on a network call. Returns null when Last.fm is unconfigured, unreachable, or none of
-     * the similar artists are in the library - all ordinary outcomes, not errors.
-     */
+    /** Last.fm discovery, narrowed to artists that can actually be played from this library. */
     suspend fun similarArtistSection(
         context: Context,
         artists: List<ArtistInput>,
     ): HomeSection? {
         val store = LastFmCredentialStore(context)
-        if (!store.hasApplicationCredentials()) return null
-
-        if (artists.isEmpty()) return null
+        if (!store.hasApplicationCredentials() || artists.isEmpty()) return null
 
         val seed = artists
             .filter { artist -> artist.songList.any { it.playCount() > 0 } }
             .maxByOrNull { artist -> artist.songList.sumOf { it.playCount() } }
+            ?: artists.firstOrNull()
             ?: return null
         val seedName = seed.title ?: return null
-
         val similar = try {
-            LastFmClient(store.apiKey, store.apiSecret, store.brokerUrl)
-                .getSimilarArtists(seedName)
-        } catch (e: Exception) {
+            LastFmClient(store.apiKey, store.apiSecret, store.brokerUrl).getSimilarArtists(seedName)
+        } catch (_: Exception) {
             return null
         }
-        if (similar.isEmpty()) return null
 
-        // Match on a normalised name: Last.fm's spelling and the tags on the user's files agree
-        // often enough, but not on case or punctuation.
         val byName = artists.associateBy { it.title?.normaliseForMatch().orEmpty() }
         val matches = similar.mapNotNull { byName[it.normaliseForMatch()] }
-            .filter { it.title != seed.title }
+            .filter { it.title != seed.title && it.songList.size >= 3 }
             .distinctBy { it.title }
             .take(ROW_SIZE)
         if (matches.isEmpty()) return null
 
         return HomeSection(
-            id = "for_fans_of",
+            id = "for_fans_of_v2",
             title = context.getString(R.string.home_for_fans_of, seedName),
-            subtitle = matches.mapNotNull { it.title }.take(4).joinToString(", "),
+            subtitle = "Playable artist mixes related to $seedName",
             cards = matches.map { artist ->
-                val mix = artist.songList.shuffled().take(MIX_SIZE)
+                val title = artist.title ?: context.getString(R.string.unknown_artist)
+                val songs = artist.songList
+                    .stableShuffle(weeklySeed("similar_artist_$title"))
+                    .take(MIX_SIZE)
                 HomeCard(
-                    title = artist.title ?: context.getString(R.string.unknown_artist),
+                    title = "$title Mix",
                     subtitle = context.resources.getQuantityString(
-                        R.plurals.songs, artist.songList.size, artist.songList.size
+                        R.plurals.songs, artist.songList.size, artist.songList.size,
                     ),
-                    cover = artist.songList.firstOrNull()?.mediaMetadata?.artworkUri,
-                    songs = mix,
+                    cover = songs.firstNotNullOfOrNull { it.mediaMetadata.artworkUri },
+                    collageCovers = songs.mapNotNull { it.mediaMetadata.artworkUri }.distinct().take(4),
+                    songs = songs,
                 )
-            }
+            },
         )
     }
 
-    private fun String.normaliseForMatch(): String =
-        lowercase().filter { it.isLetterOrDigit() }
+    private fun List<MediaItem>.toAlbumGroups(): List<Pair<String, List<MediaItem>>> {
+        val groups = linkedMapOf<String, MutableList<MediaItem>>()
+        forEach { item ->
+            val key = item.albumKey() ?: return@forEach
+            groups.getOrPut(key) { mutableListOf() }.add(item)
+        }
+        return groups.map { it.key to it.value }
+    }
 
-    /** A track's genres as separate values. Jellyfin delivers them as one delimited string. */
-    private fun MediaItem.genres(): List<String> =
-        mediaMetadata.genre?.toString()
-            ?.split(';', '/', ',')
-            ?.map { it.trim() }
-            ?.filter { it.isNotBlank() }
-            ?.distinct()
+    private fun List<MediaItem>.toAlbumCard(): HomeCard = HomeCard(
+        title = albumTitle(),
+        subtitle = albumArtist(),
+        cover = firstNotNullOfOrNull { it.mediaMetadata.artworkUri },
+        songs = this,
+        target = HomeCardTarget.ALBUM,
+    )
+
+    private fun List<MediaItem>.albumTitle(): String =
+        firstNotNullOfOrNull { it.mediaMetadata.albumTitle?.toString()?.takeIf(String::isNotBlank) }
             .orEmpty()
+
+    private fun List<MediaItem>.albumArtist(): String =
+        firstNotNullOfOrNull {
+            it.mediaMetadata.albumArtist?.toString()?.takeIf(String::isNotBlank)
+                ?: it.mediaMetadata.artist?.toString()?.takeIf(String::isNotBlank)
+        }.orEmpty()
+
+    private fun MediaItem.albumKey(): String? {
+        val title = mediaMetadata.albumTitle?.toString()?.trim()?.takeIf(String::isNotBlank)
+            ?: return null
+        val artist = mediaMetadata.albumArtist?.toString()?.trim()
+            ?: mediaMetadata.artist?.toString()?.trim().orEmpty()
+        return "${title.normaliseForMatch()}|${artist.normaliseForMatch()}"
+    }
+
+    private fun MediaItem.artistKey(): String =
+        mediaMetadata.artist?.toString()?.normaliseForMatch().orEmpty()
+
+    private fun MediaItem.genreKey(): String? =
+        mediaMetadata.genre?.toString()?.trim()?.takeIf(String::isNotBlank)?.normaliseForMatch()
+
+    private fun MediaItem.genreName(): String =
+        mediaMetadata.genre?.toString()?.trim()?.takeIf(String::isNotBlank) ?: "Genre"
+
+    private fun String.normaliseForMatch(): String = lowercase().filter { it.isLetterOrDigit() }
 
     private fun MediaItem.playCount(): Int =
         mediaMetadata.extras?.getInt(JellyfinLibraryLoader.EXTRA_PLAY_COUNT, 0) ?: 0
@@ -424,6 +431,57 @@ object HomeFeed {
     private fun MediaItem.lastPlayed(): Long =
         mediaMetadata.extras?.getLong(JellyfinLibraryLoader.EXTRA_LAST_PLAYED, 0L) ?: 0L
 
-    private fun MediaItem.addDate(): Long =
-        mediaMetadata.extras?.getLong("AddDate", 0L) ?: 0L
+    private fun MediaItem.addDate(): Long = mediaMetadata.extras?.getLong("AddDate", 0L) ?: 0L
+
+    /** Round-robin artists so one prolific artist cannot consume an entire personal mix. */
+    private fun List<MediaItem>.balancedByArtist(): List<MediaItem> {
+        val groups = linkedMapOf<String, ArrayDeque<MediaItem>>()
+        forEach { item ->
+            val key = item.artistKey().ifBlank { "unknown:${item.mediaId}" }
+            groups.getOrPut(key) { ArrayDeque() }.add(item)
+        }
+        return buildList {
+            while (size < MIX_SIZE && groups.isNotEmpty()) {
+                val iterator = groups.iterator()
+                while (iterator.hasNext() && size < MIX_SIZE) {
+                    val entry = iterator.next()
+                    entry.value.removeFirstOrNull()?.let(::add)
+                    if (entry.value.isEmpty()) iterator.remove()
+                }
+            }
+        }
+    }
+
+    private fun List<HomeCard>.withoutNearDuplicates(): List<HomeCard> = buildList {
+        this@withoutNearDuplicates.forEach { candidate ->
+            val candidateIds = candidate.mediaIds.toSet()
+            val isNearDuplicate = any { accepted ->
+                val acceptedIds = accepted.mediaIds.toSet()
+                val smaller = minOf(candidateIds.size, acceptedIds.size)
+                smaller > 0 && candidateIds.intersect(acceptedIds).size.toDouble() / smaller >= 0.90
+            }
+            if (!isNearDuplicate) add(candidate)
+        }
+    }
+
+    private fun dailySeed(prefix: String): String {
+        val calendar = Calendar.getInstance()
+        return "$prefix:${calendar.get(Calendar.YEAR)}:${calendar.get(Calendar.DAY_OF_YEAR)}"
+    }
+
+    private fun weeklySeed(prefix: String): String {
+        val calendar = Calendar.getInstance()
+        return "$prefix:${calendar.get(Calendar.YEAR)}:${calendar.get(Calendar.WEEK_OF_YEAR)}"
+    }
+
+    private fun List<MediaItem>.stableShuffle(seed: String): List<MediaItem> =
+        sortedWith(compareBy<MediaItem> { stableHash(seed, it.mediaId) }.thenBy { it.mediaId })
+
+    private fun stableHash(seed: String, value: String): Long {
+        var hash = 0xcbf29ce484222325UL.toLong()
+        "$seed\u0000$value".forEach { character ->
+            hash = (hash xor character.code.toLong()) * 0x100000001b3L
+        }
+        return hash
+    }
 }

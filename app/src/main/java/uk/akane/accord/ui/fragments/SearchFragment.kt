@@ -10,6 +10,7 @@ import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.core.animation.doOnEnd
 import androidx.core.view.ViewCompat
@@ -33,6 +34,7 @@ import kotlinx.coroutines.withContext
 import uk.akane.accord.Accord
 import uk.akane.accord.ui.MainActivity
 import uk.akane.accord.ui.adapters.SearchResultsAdapter
+import uk.akane.accord.ui.adapters.LidarrSearchResultsAdapter
 import uk.akane.accord.R
 import uk.akane.accord.logic.dp
 import uk.akane.accord.ui.adapters.SearchAdapter
@@ -41,6 +43,10 @@ import uk.akane.cupertino.widget.fadOutAnimation
 import uk.akane.cupertino.utils.AnimationUtils
 import uk.akane.accord.ui.components.TrackSwipeActions
 import androidx.core.view.updatePadding
+import org.akanework.gramophone.logic.data.lidarr.LidarrClient
+import org.akanework.gramophone.logic.data.lidarr.LidarrCredentialStore
+import uk.akane.accord.ui.components.LidarrSetupPrompt
+import uk.akane.accord.ui.components.performPressHaptic
 
 class SearchFragment: Fragment() {
     private lateinit var navigationBar: NavigationBar
@@ -60,6 +66,7 @@ class SearchFragment: Fragment() {
     private lateinit var searchResults: RecyclerView
     private lateinit var searchEmpty: TextView
     private lateinit var resultsAdapter: SearchResultsAdapter
+    private lateinit var lidarrResultsAdapter: LidarrSearchResultsAdapter
 
     /** The library to search. Kept in step with the reader so results follow a sync. */
     private var library: List<MediaItem> = emptyList()
@@ -133,6 +140,7 @@ class SearchFragment: Fragment() {
         searchResults = detailedSearchContainer.findViewById(R.id.search_results)
         searchEmpty = detailedSearchContainer.findViewById(R.id.search_empty)
         resultsAdapter = SearchResultsAdapter { (activity as? MainActivity)?.getPlayer() }
+        lidarrResultsAdapter = LidarrSearchResultsAdapter(::requestLidarrAlbum)
         searchResults.layoutManager = LinearLayoutManager(requireContext())
         searchResults.adapter = resultsAdapter
         // This list is not the one the navigation bar is attached to, so nothing was leaving
@@ -152,7 +160,9 @@ class SearchFragment: Fragment() {
         TrackSwipeActions.attach(
             recyclerView = searchResults,
             activity = requireActivity() as MainActivity,
-            trackAt = { index -> resultsAdapter.itemAt(index) },
+            trackAt = { index ->
+                if (isAppleTabSelected) resultsAdapter.itemAt(index) else null
+            },
         )
 
         observeLibrary()
@@ -187,6 +197,12 @@ class SearchFragment: Fragment() {
         navigationBar.onVisibilityChangedFromFragment(hidden)
     }
 
+    /** A second tap on the already-selected Search destination goes straight to typing. */
+    fun focusSearch() {
+        if (!isAdded || view == null) return
+        if (isSearchExpanded) focusDetailedSearch() else enterSearchMode()
+    }
+
     private fun observeLibrary() {
         val reader = (requireActivity().application as Accord).reader
         viewLifecycleOwner.lifecycleScope.launch {
@@ -194,7 +210,9 @@ class SearchFragment: Fragment() {
                 reader.songListFlow.collectLatest { songs ->
                     library = songs
                     // A sync finishing mid-query should widen the results, not leave them stale.
-                    runQuery(searchInputDetail.text?.toString().orEmpty())
+                    if (isAppleTabSelected) {
+                        runQuery(searchInputDetail.text?.toString().orEmpty())
+                    }
                 }
             }
         }
@@ -212,27 +230,88 @@ class SearchFragment: Fragment() {
         val query = rawQuery.trim().lowercase()
         if (query.isEmpty()) {
             resultsAdapter.submit(emptyList())
+            lidarrResultsAdapter.submit(emptyList())
             searchEmpty.visibility = View.GONE
             return
         }
         pendingQuery = viewLifecycleOwner.lifecycleScope.launch {
             delay(SEARCH_DEBOUNCE_MS)
-            val matches = withContext(Dispatchers.Default) {
-                val needle = query.normaliseForSearch()
-                library.asSequence()
-                    .filter { item ->
-                        val metadata = item.mediaMetadata
-                        metadata.title?.toString()?.normaliseForSearch()?.contains(needle) == true ||
-                            metadata.artist?.toString()?.normaliseForSearch()
-                                ?.contains(needle) == true ||
-                            metadata.albumTitle?.toString()?.normaliseForSearch()
-                                ?.contains(needle) == true
-                    }
-                    .take(SEARCH_RESULT_LIMIT)
-                    .toList()
+            if (isAppleTabSelected) {
+                val matches = withContext(Dispatchers.Default) {
+                    val needle = query.normaliseForSearch()
+                    library.asSequence()
+                        .filter { item ->
+                            val metadata = item.mediaMetadata
+                            metadata.title?.toString()?.normaliseForSearch()?.contains(needle) == true ||
+                                metadata.artist?.toString()?.normaliseForSearch()
+                                    ?.contains(needle) == true ||
+                                metadata.albumTitle?.toString()?.normaliseForSearch()
+                                    ?.contains(needle) == true
+                        }
+                        .take(SEARCH_RESULT_LIMIT)
+                        .toList()
+                }
+                resultsAdapter.submit(matches)
+                searchEmpty.text = getString(R.string.search_no_results)
+                searchEmpty.visibility = if (matches.isEmpty()) View.VISIBLE else View.GONE
+            } else {
+                searchLidarr(query)
             }
-            resultsAdapter.submit(matches)
-            searchEmpty.visibility = if (matches.isEmpty()) View.VISIBLE else View.GONE
+        }
+    }
+
+    private suspend fun searchLidarr(query: String) {
+        val store = LidarrCredentialStore(requireContext())
+        if (store.serverUrl.isNullOrBlank() || store.apiKey.isNullOrBlank()) {
+            lidarrResultsAdapter.submit(emptyList())
+            searchEmpty.setText(R.string.requests_no_lidarr)
+            searchEmpty.visibility = View.VISIBLE
+            return
+        }
+        val result = withContext(Dispatchers.IO) {
+            runCatching { LidarrClient(store).searchAlbums(query) }
+        }
+        result.onSuccess { albums ->
+            lidarrResultsAdapter.submit(albums)
+            searchEmpty.setText(R.string.requests_no_results)
+            searchEmpty.visibility = if (albums.isEmpty()) View.VISIBLE else View.GONE
+        }.onFailure {
+            lidarrResultsAdapter.submit(emptyList())
+            searchEmpty.text = it.message ?: getString(R.string.requests_failed)
+            searchEmpty.visibility = View.VISIBLE
+        }
+    }
+
+    private fun requestLidarrAlbum(album: LidarrClient.AlbumResult) {
+        if (album.alreadyAdded) {
+            Toast.makeText(requireContext(), R.string.requests_already_added, Toast.LENGTH_SHORT)
+                .show()
+            return
+        }
+        if (!LidarrCredentialStore(requireContext()).isConfigured()) {
+            LidarrSetupPrompt.ensureConfigured(requireContext(), viewLifecycleOwner) {
+                requestLidarrAlbum(album)
+            }
+            return
+        }
+        viewLifecycleOwner.lifecycleScope.launch {
+            val added = withContext(Dispatchers.IO) {
+                runCatching {
+                    LidarrClient(LidarrCredentialStore(requireContext())).addAlbum(album)
+                }
+            }
+            Toast.makeText(
+                requireContext(),
+                added.fold(
+                    onSuccess = {
+                        if (it) getString(R.string.requests_added, album.title)
+                        else getString(R.string.requests_failed)
+                    },
+                    onFailure = { it.message ?: getString(R.string.requests_failed) },
+                ),
+                Toast.LENGTH_LONG,
+            ).show()
+            if (added.getOrDefault(false)) runQuery(searchInputDetail.text?.toString().orEmpty())
         }
     }
 
@@ -415,8 +494,12 @@ class SearchFragment: Fragment() {
     private fun selectTab(isAppleTab: Boolean) {
         if (isAppleTabSelected == isAppleTab) return
         isAppleTabSelected = isAppleTab
+        tabContainer.performPressHaptic()
         updateTabSelection()
         updateTabIndicator(true)
+        searchResults.adapter = if (isAppleTabSelected) resultsAdapter else lidarrResultsAdapter
+        searchResults.scrollToPosition(0)
+        runQuery(searchInputDetail.text?.toString().orEmpty())
     }
 
     private fun updateTabSelection() {

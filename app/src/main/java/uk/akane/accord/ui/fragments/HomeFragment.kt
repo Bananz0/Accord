@@ -1,5 +1,6 @@
 package uk.akane.accord.ui.fragments
 
+import android.content.Context
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
@@ -11,22 +12,33 @@ import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.media3.common.MediaItem
+import androidx.recyclerview.widget.ConcatAdapter
 import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.PagerSnapHelper
 import androidx.recyclerview.widget.RecyclerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinLibraryLoader
+import org.akanework.gramophone.ui.home.HomeCard
+import org.akanework.gramophone.ui.home.HomeCardTarget
 import org.akanework.gramophone.ui.home.HomeFeed
+import org.akanework.gramophone.ui.home.HomeFeedCache
 import org.akanework.gramophone.ui.home.HomeSection
+import org.akanework.gramophone.ui.home.HomeSectionStyle
 import org.akanework.gramophone.ui.home.HomeSectionAdapter
 import uk.akane.accord.Accord
 import uk.akane.accord.R
+import uk.akane.accord.logic.ArtistCredits
 import uk.akane.accord.ui.MainActivity
-import androidx.recyclerview.widget.ConcatAdapter
-import org.akanework.gramophone.ui.home.HomeCard
-import uk.akane.accord.ui.fragments.browse.StationDetailFragment
+import uk.akane.accord.ui.adapters.BannerCarouselAdapter
+import uk.akane.accord.ui.adapters.BannerItem
 import uk.akane.accord.ui.components.NavigationBar
+import uk.akane.accord.ui.fragments.browse.AlbumDetailFragment
+import uk.akane.accord.ui.fragments.browse.StationDetailFragment
+import java.time.LocalDate
 
 class HomeFragment: Fragment() {
     private lateinit var navigationBar: NavigationBar
@@ -59,8 +71,7 @@ class HomeFragment: Fragment() {
             insets
         }
 
-        // The profile control opens settings - it is where an account and its preferences belong,
-        // and the overflow button keeps its own menu.
+        // The profile control opens settings
         navigationBar.setOnAvatarClickListener {
             (activity as? MainActivity)?.fragmentSwitcherView
                 ?.addFragmentToCurrentStack(SettingsFragment())
@@ -71,6 +82,12 @@ class HomeFragment: Fragment() {
             onCardClick = { section, card -> openStation(section, card) }
         )
         headerAdapter = HeaderAdapter { subtitle = it }
+
+        // Restore complete identities as well as labels, so cached stations remain usable on frame 1.
+        headerAdapter.setBannerItems(HomeFeedCache.loadBanners(requireContext()).orEmpty())
+        val cachedSections = HomeFeedCache.load(requireContext())
+        sectionAdapter.submit(cachedSections ?: buildInitialSkeletonSections(requireContext()))
+
         rootView.findViewById<RecyclerView>(R.id.home_sections).apply {
             layoutManager = LinearLayoutManager(context)
             adapter = ConcatAdapter(headerAdapter, sectionAdapter)
@@ -82,10 +99,41 @@ class HomeFragment: Fragment() {
     }
 
     /**
-     * A Jellyfin sync takes the better part of a minute on a large library and, until now, gave no
-     * sign it was happening - the library simply sat there looking empty. The home subtitle doubles
-     * as that indicator, and goes back to its normal text when the sync finishes.
+     * Clean skeleton placeholder cards for fresh installs before disk cache exists.
+     * Uses empty titles so there are NO misleading text swaps when real library items land.
      */
+    private fun buildInitialSkeletonSections(context: Context): List<HomeSection> {
+        val jumpBackInCards = List(6) {
+            HomeCard(
+                title = "",
+                subtitle = null,
+                cover = null,
+                songs = emptyList()
+            )
+        }
+        val skeletonCards = List(6) {
+            HomeCard(
+                title = "",
+                subtitle = null,
+                cover = null,
+                songs = emptyList()
+            )
+        }
+        return listOf(
+            HomeSection(
+                id = "jump_back_in",
+                title = context.getString(R.string.home_jump_back_in),
+                cards = jumpBackInCards
+            ),
+            HomeSection(
+                id = "top_mixes",
+                title = context.getString(R.string.home_top_mixes),
+                subtitle = context.getString(R.string.home_top_mixes_subtitle),
+                cards = skeletonCards
+            )
+        )
+    }
+
     private fun observeLibrarySync() {
         val jellyfin = (requireActivity().application as Accord).jellyfinReader
         viewLifecycleOwner.lifecycleScope.launch {
@@ -103,32 +151,144 @@ class HomeFragment: Fragment() {
         }
     }
 
-    /**
-     * Rebuilds the rows whenever the library changes, which on a Jellyfin sync means twice - once
-     * from cache, once from the server.
-     */
     private fun observeLibrary() {
         val reader = (requireActivity().application as Accord).reader
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
-                combine(reader.songListFlow, reader.artistListFlow) { songs, artists ->
-                    songs to artists.map { HomeFeed.ArtistInput(it.title, it.songList) }
-                }.collect { (songs, artists) ->
+                reader.songListFlow.collect { songs ->
+                    val artists = withContext(Dispatchers.Default) {
+                        songs.groupBy(ArtistCredits::primaryArtist)
+                            .map { (name, tracks) -> HomeFeed.ArtistInput(name, tracks) }
+                    }
                     val sections = withContext(Dispatchers.Default) {
                         HomeFeed.build(requireContext(), songs, artists)
                     }
+                    val bannerItems = withContext(Dispatchers.Default) {
+                        buildBannerItems(requireContext(), songs, artists)
+                    }
                     if (!isAdded) return@collect
-                    sectionAdapter.submit(withSimilar(sections))
+                    if (bannerItems.isNotEmpty()) {
+                        val displayedBanners = mergeBanners(
+                            headerAdapter.currentItems(),
+                            bannerItems
+                        )
+                        headerAdapter.setBannerItems(displayedBanners)
+                        withContext(Dispatchers.IO) {
+                            HomeFeedCache.saveBanners(requireContext(), displayedBanners)
+                        }
+                    }
+                    if (sections.isNotEmpty()) {
+                        val displayedSections = mergeSections(
+                            sectionAdapter.currentSections(),
+                            withSimilar(sections)
+                        )
+                        sectionAdapter.submit(displayedSections)
+                        withContext(Dispatchers.IO) {
+                            HomeFeedCache.save(requireContext(), displayedSections)
+                        }
+                    }
                     fetchSimilarArtists(artists)
                 }
             }
         }
     }
 
-    /**
-     * The one row that needs the network. Kept off the main rebuild so a slow or unreachable
-     * Last.fm cannot hold up the rows that come straight from the library.
-     */
+    private fun buildBannerItems(
+        context: Context,
+        library: List<MediaItem>,
+        artists: List<HomeFeed.ArtistInput>
+    ): List<BannerItem> {
+        if (library.isEmpty()) return emptyList()
+        val items = mutableListOf<BannerItem>()
+
+        // Deterministic daily seed so the artist summary is stable per day and doesn't re-randomize every second
+        val daySeed = runCatching { LocalDate.now().toString().hashCode() }.getOrDefault(12345)
+
+        // 1. Daily Shuffle Procedural Station Banner (Deterministic per day)
+        val shuffleSongs = if (library.isNotEmpty()) {
+            library.sortedBy { (it.mediaId.hashCode() xor daySeed) }.take(50)
+        } else emptyList()
+
+        val shuffleArtists = shuffleSongs.mapNotNull { it.mediaMetadata.artist?.toString() }
+            .distinct().take(5).joinToString("、")
+        items.add(
+            BannerItem(
+                id = "daily_shuffle",
+                title = context.getString(R.string.mix_daily_shuffle),
+                artistsSummary = shuffleArtists.ifEmpty { context.getString(R.string.mix_daily_shuffle_subtitle) },
+                cover = shuffleSongs.firstOrNull()?.mediaMetadata?.artworkUri,
+                songs = shuffleSongs
+            )
+        )
+
+        // 2. Heavy Rotation / Most Played Procedural Banner
+        val played = library.filter { (it.mediaMetadata.extras?.getInt(JellyfinLibraryLoader.EXTRA_PLAY_COUNT, 0) ?: 0) > 0 }
+            .sortedByDescending { it.mediaMetadata.extras?.getInt(JellyfinLibraryLoader.EXTRA_PLAY_COUNT, 0) ?: 0 }
+            .take(50)
+        val heavySongs = if (played.size >= 5) played else library.take(50)
+        val heavyArtists = heavySongs.mapNotNull { it.mediaMetadata.artist?.toString() }
+            .distinct().take(5).joinToString("、")
+        items.add(
+            BannerItem(
+                id = "heavy_rotation",
+                title = context.getString(R.string.mix_most_played),
+                artistsSummary = heavyArtists.ifEmpty { "Top played tracks & artists" },
+                cover = heavySongs.firstOrNull()?.mediaMetadata?.artworkUri,
+                songs = heavySongs
+            )
+        )
+
+        // 3. Favorites Mix Procedural Banner
+        val favourites = library.filter { it.mediaMetadata.extras?.getBoolean(JellyfinLibraryLoader.EXTRA_IS_FAVOURITE, false) == true }.take(50)
+        val favSongs = if (favourites.isNotEmpty()) favourites else library.take(50)
+        val favArtists = favSongs.mapNotNull { it.mediaMetadata.artist?.toString() }
+            .distinct().take(5).joinToString("、")
+        items.add(
+            BannerItem(
+                id = "favourites_mix",
+                title = context.getString(R.string.mix_favourites),
+                artistsSummary = favArtists.ifEmpty { "Your favorited tracks" },
+                cover = favSongs.firstOrNull()?.mediaMetadata?.artworkUri,
+                songs = favSongs
+            )
+        )
+
+        // 4. Recently Added Procedural Banner
+        val recentSongs = library.sortedByDescending { it.mediaMetadata.extras?.getLong("AddDate", 0L) ?: 0L }.take(50)
+        val recentArtists = recentSongs.mapNotNull { it.mediaMetadata.artist?.toString() }
+            .distinct().take(5).joinToString("、")
+        items.add(
+            BannerItem(
+                id = "recently_added",
+                title = context.getString(R.string.mix_recently_added),
+                artistsSummary = recentArtists.ifEmpty { "Recently added albums" },
+                cover = recentSongs.firstOrNull()?.mediaMetadata?.artworkUri,
+                songs = recentSongs
+            )
+        )
+
+        // 5. Top Artist Mixes as Procedural Banners
+        artists.sortedBy { it.title?.lowercase().orEmpty() }.take(4).forEach { artist ->
+            val artistTitle = artist.title ?: return@forEach
+            val artistSongs = artist.songList.take(50)
+            if (artistSongs.isNotEmpty()) {
+                val albumSummary = artistSongs.mapNotNull { it.mediaMetadata.albumTitle?.toString() }
+                    .distinct().take(4).joinToString("、")
+                items.add(
+                    BannerItem(
+                        id = "artist_mix_$artistTitle",
+                        title = context.getString(R.string.home_artist_mix, artistTitle),
+                        artistsSummary = albumSummary.ifEmpty { artistTitle },
+                        cover = artistSongs.firstOrNull()?.mediaMetadata?.artworkUri,
+                        songs = artistSongs
+                    )
+                )
+            }
+        }
+
+        return items
+    }
+
     private fun fetchSimilarArtists(artists: List<HomeFeed.ArtistInput>) {
         if (similarSection != null || artists.isEmpty()) return
         viewLifecycleOwner.lifecycleScope.launch {
@@ -141,48 +301,147 @@ class HomeFragment: Fragment() {
         }
     }
 
-    /** Opens a station as its own screen instead of hijacking playback on a single tap. */
     private fun openStation(section: HomeSection, card: HomeCard) {
+        val activity = activity as? MainActivity ?: return
+        if (card.target == HomeCardTarget.ALBUM) {
+            val albumTitle = card.title
+            val albumArtist = card.subtitle ?: ""
+            activity.fragmentSwitcherView.addFragmentToCurrentStack(
+                AlbumDetailFragment.newInstance(albumTitle, albumArtist)
+            )
+        } else {
+            if (card.mediaIds.isEmpty()) return
+            activity.fragmentSwitcherView.addFragmentToCurrentStack(
+                StationDetailFragment.newInstance(
+                    title = card.title.ifEmpty { section.title },
+                    subtitle = section.title,
+                    mediaIds = card.mediaIds,
+                    cover = card.cover ?: card.collageCovers.firstOrNull(),
+                    kind = if (section.style == HomeSectionStyle.STATION) {
+                        StationDetailFragment.CollectionKind.STATION
+                    } else {
+                        StationDetailFragment.CollectionKind.MIX
+                    },
+                )
+            )
+        }
+    }
+
+    private fun openBannerStation(item: BannerItem) {
+        if (item.mediaIds.isEmpty()) return
         val activity = activity as? MainActivity ?: return
         activity.fragmentSwitcherView.addFragmentToCurrentStack(
             StationDetailFragment.newInstance(
-                title = section.title,
-                subtitle = section.subtitle ?: card.title,
-                mediaIds = card.songs.map { it.mediaId }
+                title = item.title,
+                subtitle = item.subtitle ?: item.artistsSummary ?: getString(R.string.recommendations),
+                mediaIds = item.mediaIds,
+                cover = item.cover,
+                kind = StationDetailFragment.CollectionKind.STATION,
             )
         )
     }
 
-    /**
-     * The masthead as the feed's first row, so it scrolls with everything else. It hands its
-     * subtitle back because that view doubles as the library sync indicator.
-     */
     private inner class HeaderAdapter(
         private val onSubtitleBound: (TextView) -> Unit
     ) : RecyclerView.Adapter<HeaderAdapter.ViewHolder>() {
 
-        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) = ViewHolder(
-            LayoutInflater.from(parent.context)
+        private var carouselItems: List<BannerItem> = emptyList()
+        private var carouselAdapter: BannerCarouselAdapter? = null
+
+        fun setBannerItems(items: List<BannerItem>) {
+            carouselItems = items
+            if (carouselAdapter == null) {
+                notifyItemChanged(0)
+            } else {
+                carouselAdapter?.submitList(items)
+            }
+        }
+
+        fun currentItems(): List<BannerItem> = carouselItems
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
+            val view = LayoutInflater.from(parent.context)
                 .inflate(R.layout.layout_home_header, parent, false)
-        )
+            val holder = ViewHolder(view)
+            holder.carouselRecyclerView.layoutManager =
+                LinearLayoutManager(parent.context, LinearLayoutManager.HORIZONTAL, false)
+            PagerSnapHelper().attachToRecyclerView(holder.carouselRecyclerView)
+            return holder
+        }
 
         override fun getItemCount(): Int = 1
 
         override fun onBindViewHolder(holder: ViewHolder, position: Int) {
             onSubtitleBound(holder.subtitle)
             subtitleText?.let { holder.subtitle.text = it }
+
+            if (carouselAdapter == null) {
+                carouselAdapter = BannerCarouselAdapter(carouselItems) { item ->
+                    openBannerStation(item)
+                }
+                holder.carouselRecyclerView.adapter = carouselAdapter
+            } else {
+                carouselAdapter?.submitList(carouselItems)
+            }
         }
 
         inner class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
             val subtitle: TextView = view.findViewById(R.id.subtitle)
+            val carouselRecyclerView: RecyclerView = view.findViewById(R.id.banner_carousel)
         }
     }
 
     private fun withSimilar(sections: List<HomeSection>): List<HomeSection> {
         val similar = similarSection ?: return sections
         if (sections.any { it.id == similar.id }) return sections
-        // Second from the top: recognisable enough to be worth surfacing, but not ahead of what the
-        // user was actually listening to.
         return sections.toMutableList().apply { add(minOf(1, size), similar) }
     }
+
+    /**
+     * Refresh data in-place. Library sync emits several successively larger snapshots; retaining
+     * existing row/card positions prevents every emission from visibly rearranging the home page.
+     */
+    private fun mergeSections(
+        current: List<HomeSection>,
+        fresh: List<HomeSection>
+    ): List<HomeSection> {
+        if (current.isEmpty() || current.all(::isSkeletonSection)) return fresh
+        val cachedSimilar = current.firstOrNull { it.id == "for_fans_of_v2" }
+        val completeFresh = if (
+            cachedSimilar != null && fresh.none { it.id == cachedSimilar.id }
+        ) {
+            fresh.toMutableList().apply { add(minOf(3, size), cachedSimilar) }
+        } else fresh
+
+        // Library sync emits successively larger snapshots. Keep the cached complete feed while a
+        // small intermediate snapshot is arriving, then replace it wholesale. Appending unmatched
+        // cards here used to grow rows from 12 items to 70-130 items over several launches.
+        val currentFootprint = current.flatMap { section ->
+            section.cards.flatMap(HomeCard::mediaIds)
+        }.toSet().size
+        val freshFootprint = completeFresh.flatMap { section ->
+            section.cards.flatMap(HomeCard::mediaIds)
+        }.toSet().size
+        return if (currentFootprint > 0 && freshFootprint < currentFootprint * 0.7) {
+            current
+        } else {
+            completeFresh
+        }
+    }
+
+    private fun mergeBanners(
+        current: List<BannerItem>,
+        fresh: List<BannerItem>
+    ): List<BannerItem> {
+        if (current.isEmpty()) return fresh
+        val currentFootprint = current.flatMap(BannerItem::mediaIds).toSet().size
+        val freshFootprint = fresh.flatMap(BannerItem::mediaIds).toSet().size
+        return if (currentFootprint > 0 && freshFootprint < currentFootprint * 0.7) current else fresh
+    }
+
+    private fun isSkeletonSection(section: HomeSection): Boolean =
+        section.cards.isNotEmpty() && section.cards.all {
+            it.title.isBlank() && it.mediaIds.isEmpty()
+        }
+
 }

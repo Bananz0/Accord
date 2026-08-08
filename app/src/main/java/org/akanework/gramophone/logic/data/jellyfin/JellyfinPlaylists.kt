@@ -3,6 +3,7 @@ package org.akanework.gramophone.logic.data.jellyfin
 import android.content.Context
 import android.util.Log
 import androidx.annotation.WorkerThread
+import androidx.media3.common.MediaItem
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -42,24 +43,22 @@ object JellyfinPlaylists {
      * open and offer "New Playlist", which is the more useful half of it anyway.
      */
     @WorkerThread
-    fun list(): List<RemotePlaylist> {
+    fun list(context: Context? = null): List<RemotePlaylist> {
         val session = session() ?: return emptyList()
         val url = "${session.server}/Items" +
                 "?userId=${session.userId.undashed()}" +
                 "&includeItemTypes=Playlist" +
                 "&recursive=true" +
                 "&fields=ChildCount" +
-                "&sortBy=SortName"
+                "&sortBy=SortName" +
+                "&limit=10000"
         val body = get(url, session) ?: return emptyList()
         return runCatching {
             val items = JSONObject(body).optJSONArray("Items") ?: return emptyList()
             (0 until items.length()).mapNotNull { index ->
                 val item = items.optJSONObject(index) ?: return@mapNotNull null
-                // Playlists of films and shows live in the same list; only audio ones can hold a
-                // song, and offering the rest would produce a failure the user cannot explain.
-                if (item.optString("MediaType").let { it.isNotEmpty() && it != "Audio" }) {
-                    return@mapNotNull null
-                }
+                // Empty and older playlists frequently report MediaType as "Unknown". They are
+                // still real playlists and must not disappear from the browser because of that.
                 val id = item.optString("Id").ifEmpty { return@mapNotNull null }
                 RemotePlaylist(
                     id = id,
@@ -69,10 +68,11 @@ object JellyfinPlaylists {
                         ?.takeIf { it.isNotEmpty() }
                         ?.let { tag ->
                             "${session.server}/Items/$id/Images/Primary" +
-                                    "?tag=$tag&maxWidth=$COVER_MAX_WIDTH&quality=90"
+                                    "?tag=$tag&maxWidth=$COVER_MAX_WIDTH&quality=90" +
+                                    "&api_key=${session.token.encoded()}"
                         },
                 )
-            }
+            }.also { playlists -> context?.let { cacheList(it, playlists) } }
         }.getOrElse {
             Log.w(TAG, "Could not parse playlist list", it)
             emptyList()
@@ -111,13 +111,39 @@ object JellyfinPlaylists {
                     Log.w(TAG, "Creating \"$name\" rejected with HTTP ${response.code}")
                     return null
                 }
-                JSONObject(response.body?.string().orEmpty()).optString("Id")
+                val id = JSONObject(response.body?.string().orEmpty()).optString("Id")
                     .takeIf { it.isNotEmpty() }
+                    ?: return null
+                if (verifyCreatedPlaylist(session, id, remoteIds.distinct().size)) {
+                    Log.i(TAG, "Created and verified \"$name\" with ${remoteIds.distinct().size} items")
+                    id
+                } else {
+                    Log.w(TAG, "Created \"$name\" as $id, but Jellyfin read-back did not contain its items")
+                    null
+                }
             }
         }.getOrElse {
             Log.w(TAG, "Creating \"$name\" failed", it)
             null
         }
+    }
+
+    /** A successful create response is not enough: only report success once Jellyfin reads it back. */
+    private fun verifyCreatedPlaylist(session: Session, playlistId: String, expectedCount: Int): Boolean {
+        val url = "${session.server}/Playlists/${playlistId.undashed()}/Items" +
+            "?userId=${session.userId.undashed()}"
+        repeat(3) { attempt ->
+            val body = get(url, session)
+            val count = body?.let { response ->
+                runCatching {
+                    val json = JSONObject(response)
+                    json.optInt("TotalRecordCount", json.optJSONArray("Items")?.length() ?: 0)
+                }.getOrNull()
+            }
+            if (count != null && count >= expectedCount) return true
+            if (attempt < 2) Thread.sleep(200L)
+        }
+        return false
     }
 
     /** Appends [mediaIds] to an existing playlist. Returns whether the server took them. */
@@ -147,6 +173,93 @@ object JellyfinPlaylists {
         }
     }
 
+    /** Deletes a playlist from Jellyfin. The tracks themselves are never deleted. */
+    @WorkerThread
+    fun delete(playlistId: String): Boolean {
+        val session = session() ?: return false
+        val request = Request.Builder()
+            .url("${session.server}/Items/${playlistId.undashed()}")
+            .header("Authorization", session.authHeader)
+            .delete()
+            .build()
+        return runCatching {
+            CLIENT.newCall(request).execute().use { response ->
+                response.isSuccessful.also { deleted ->
+                    if (deleted) Log.i(TAG, "Deleted playlist ${playlistId.undashed()}")
+                    else Log.w(TAG, "Delete rejected with HTTP ${response.code}")
+                }
+            }
+        }.getOrElse {
+            Log.w(TAG, "Deleting playlist failed", it)
+            false
+        }
+    }
+
+    /** Last successful server list, used immediately while a fresh request is in flight. */
+    fun cachedList(context: Context): List<RemotePlaylist> {
+        val raw = context.getSharedPreferences(CACHE_PREFS, Context.MODE_PRIVATE)
+            .getString(CACHE_KEY, null) ?: return emptyList()
+        return runCatching {
+            val array = JSONArray(raw)
+            (0 until array.length()).mapNotNull { index ->
+                val item = array.optJSONObject(index) ?: return@mapNotNull null
+                RemotePlaylist(
+                    id = item.optString("id").ifBlank { return@mapNotNull null },
+                    name = item.optString("name").ifBlank { return@mapNotNull null },
+                    songCount = item.optInt("songCount", 0),
+                    imageUrl = null,
+                )
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    private fun cacheList(context: Context, playlists: List<RemotePlaylist>) {
+        val array = JSONArray()
+        playlists.forEach { playlist ->
+            array.put(
+                JSONObject()
+                    .put("id", playlist.id)
+                    .put("name", playlist.name)
+                    .put("songCount", playlist.songCount)
+            )
+        }
+        context.getSharedPreferences(CACHE_PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(CACHE_KEY, array.toString())
+            .apply()
+    }
+
+    /** Resolves a server playlist, in server order, onto the already loaded playable library. */
+    @WorkerThread
+    fun items(
+        context: Context,
+        playlistId: String,
+        library: List<MediaItem>,
+    ): List<MediaItem> {
+        val session = session() ?: return emptyList()
+        val url = "${session.server}/Playlists/${playlistId.undashed()}/Items" +
+            "?userId=${session.userId.undashed()}&limit=10000"
+        val body = get(url, session) ?: return emptyList()
+        val remoteIds = runCatching {
+            val array = JSONObject(body).optJSONArray("Items") ?: return emptyList()
+            (0 until array.length()).mapNotNull { index ->
+                array.optJSONObject(index)?.optString("Id")?.takeIf { it.isNotBlank() }
+            }
+        }.getOrElse {
+            Log.w(TAG, "Could not parse items for playlist $playlistId", it)
+            return emptyList()
+        }
+        val remoteToLocal = org.akanework.gramophone.logic.data.db.AppDatabase
+            .getInstance(context)
+            .jellyfinIdDao()
+            .getAll()
+            .associate { it.jellyfinId.normalizedId() to it.localId }
+        val byLocalId = library.associateBy { it.mediaId.toLongOrNull() }
+        return remoteIds.mapNotNull { id ->
+            remoteToLocal[id.normalizedId()]?.let(byLocalId::get)
+        }
+    }
+
     private fun get(url: String, session: Session): String? {
         val request = Request.Builder()
             .url(url)
@@ -172,9 +285,12 @@ object JellyfinPlaylists {
     }
 
     private fun String.encoded(): String = URLEncoder.encode(this, "UTF-8")
+    private fun String.normalizedId(): String = replace("-", "").lowercase()
 
     private const val TAG = "JellyfinPlaylists"
     private const val COVER_MAX_WIDTH = 512
+    private const val CACHE_PREFS = "jellyfin_playlist_cache"
+    private const val CACHE_KEY = "playlists"
     private val JSON = "application/json".toMediaType()
     private val EMPTY_BODY = ByteArray(0).toRequestBody(null)
 

@@ -9,6 +9,7 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinDownloadManager
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinLibraryLoader
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinReporter
@@ -16,6 +17,8 @@ import uk.akane.accord.R
 import uk.akane.accord.ui.MainActivity
 import uk.akane.accord.ui.components.player.FloatingPanelLayout
 import uk.akane.accord.ui.fragments.browse.AddToPlaylistFragment
+import uk.akane.accord.ui.fragments.browse.AlbumDetailFragment
+import uk.akane.accord.ui.fragments.browse.ArtistDetailFragment
 import uk.akane.cupertino.popup.PopupHelper
 import uk.akane.cupertino.popup.showPopupMenuFromAnchor
 import uk.akane.accord.logic.dp
@@ -58,13 +61,17 @@ object TrackRowMenu {
         val activity = anchor.context.findMainActivity() ?: return
         val host = activity.findViewById<FloatingPanelLayout>(R.id.floating) ?: return
         val resources = anchor.resources
+        anchor.performPressHaptic()
 
-        // The download index is keyed on the same mediaId the rows carry.
-        val isDownloaded = JellyfinDownloadManager.completedIds(activity).contains(item.mediaId)
-        val isFavourite = item.mediaMetadata.extras
-            ?.getBoolean(JellyfinLibraryLoader.EXTRA_IS_FAVOURITE, false) == true
+        activity.lifecycleScope.launch {
+            val isDownloaded = withContext(Dispatchers.IO) {
+                JellyfinDownloadManager.isDownloaded(activity, item)
+            }
+            if (!anchor.isAttachedToWindow) return@launch
+            val isFavourite = item.mediaMetadata.extras
+                ?.getBoolean(JellyfinLibraryLoader.EXTRA_IS_FAVOURITE, false) == true
 
-        val entries = PopupHelper.PopupMenuBuilder()
+            val entries = PopupHelper.PopupMenuBuilder()
             .addMenuEntry(resources, R.drawable.ic_master_play, R.string.play_next, Action.PLAY_NEXT)
             .addMenuEntry(
                 resources, R.drawable.ic_bulletin_select, R.string.add_to_queue, Action.ADD_TO_QUEUE
@@ -75,11 +82,9 @@ object TrackRowMenu {
                 Action.ADD_TO_PLAYLIST
             )
             .apply {
-                // Downloading something already on the device, or removing something that was never
-                // downloaded, are both entries that can only disappoint.
                 if (isDownloaded) {
-                    addMenuEntry(
-                        resources, R.drawable.ic_trash, R.string.song_menu_remove_download,
+                    addDestructiveMenuEntry(
+                        resources, R.drawable.ic_trash, R.string.collection_remove_from_device,
                         Action.REMOVE_DOWNLOAD
                     )
                 } else {
@@ -115,18 +120,19 @@ object TrackRowMenu {
             }
             .build()
 
-        host.showPopupMenuFromAnchor(
-            entries = entries,
-            anchorView = anchor,
-            showBelow = true,
-            alignToRight = true,
-            anchorOffsetY = 12.dp.px.toInt(),
-            belowGapPx = 8.dp.px.toInt(),
-            backgroundView = activity.findViewById(R.id.shrink_container),
-            onEntryClick = { entry ->
-                handle(activity, entry, item, isFavourite, onRemoveFromPlaylist)
-            },
-        )
+            host.showPopupMenuFromAnchor(
+                entries = entries,
+                anchorView = anchor,
+                showBelow = true,
+                alignToRight = true,
+                anchorOffsetY = 12.dp.px.toInt(),
+                belowGapPx = 8.dp.px.toInt(),
+                backgroundView = activity.findViewById(R.id.shrink_container),
+                onEntryClick = { entry ->
+                    handle(activity, entry, item, isFavourite, onRemoveFromPlaylist)
+                },
+            )
+        }
     }
 
     private fun handle(
@@ -169,23 +175,43 @@ object TrackRowMenu {
             }
 
             Action.DOWNLOAD -> {
-                JellyfinDownloadManager.download(activity, listOf(item))
+                activity.lifecycleScope.launch(Dispatchers.IO) {
+                    JellyfinDownloadManager.download(activity, listOf(item))
+                }
                 toast(activity, R.string.download_started)
             }
 
             Action.REMOVE_DOWNLOAD -> {
-                JellyfinDownloadManager.remove(activity, listOf(item))
+                activity.lifecycleScope.launch(Dispatchers.IO) {
+                    JellyfinDownloadManager.remove(activity, listOf(item))
+                }
                 toast(activity, R.string.download_removed)
             }
 
-            Action.GO_TO_ARTIST -> item.mediaMetadata.artist?.toString()?.let { artist ->
-                activity.collapseNowPlaying()
-                activity.openMatchingTracks(artist) { it.mediaMetadata.artist?.toString() }
+            Action.GO_TO_ARTIST -> {
+                val artist = item.mediaMetadata.artist?.toString()
+                if (artist.isNullOrBlank()) {
+                    toast(activity, R.string.go_to_artist_missing)
+                } else {
+                    activity.collapseNowPlaying()
+                    activity.fragmentSwitcherView.addFragmentToCurrentStack(
+                        ArtistDetailFragment.newInstance(artist)
+                    )
+                }
             }
 
-            Action.GO_TO_ALBUM -> item.mediaMetadata.albumTitle?.toString()?.let { album ->
-                activity.collapseNowPlaying()
-                activity.openMatchingTracks(album) { it.mediaMetadata.albumTitle?.toString() }
+            Action.GO_TO_ALBUM -> {
+                val album = item.mediaMetadata.albumTitle?.toString()
+                if (album.isNullOrBlank()) {
+                    toast(activity, R.string.go_to_album_missing)
+                } else {
+                    activity.collapseNowPlaying()
+                    val artist = item.mediaMetadata.albumArtist?.toString()
+                        ?: item.mediaMetadata.artist?.toString().orEmpty()
+                    activity.fragmentSwitcherView.addFragmentToCurrentStack(
+                        AlbumDetailFragment.newInstance(album, artist)
+                    )
+                }
             }
 
             Action.CREATE_STATION -> activity.openStationFor(item)

@@ -1,9 +1,13 @@
 package uk.akane.accord.ui.components.lyrics
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ValueAnimator
 import android.content.Context
 import android.os.Bundle
 import android.util.Log
 import android.view.View
+import android.view.animation.PathInterpolator
 import androidx.core.view.doOnLayout
 import androidx.core.view.forEach
 import androidx.lifecycle.Lifecycle
@@ -33,6 +37,8 @@ class LyricsViewModel(
     private val onSeek: (Long) -> Unit = {},
 ) {
     private val scope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
+    private var entranceAnimator: ValueAnimator? = null
+    private var lyricsLayoutGeneration = 0
 
     private val lyrics = MutableStateFlow(Lyrics.Empty)
 
@@ -125,17 +131,38 @@ class LyricsViewModel(
         }
 
         var isLayoutFinished = false
+        var lastIndex = -1
         fun updateOnLayout() {
+            entranceAnimator?.removeAllListeners()
+            entranceAnimator?.cancel()
+            entranceAnimator = null
+            val layoutGeneration = ++lyricsLayoutGeneration
+
             lyricsView.doOnLayout {
                 isLayoutFinished = false
 
-                val index = 0
+                // Build the first visible frame around the lyric that is playing now. Give it a
+                // little context above, then gently settle it into the normal followed position.
+                // The current line is highlighted throughout; this is viewport motion, not a
+                // replay of every lyric between line zero and the current timestamp.
+                val index = getCurrentLyricsLineIndex(positionProvider())
 
                 val currentLineChild = lyricsView.getChildAt(index) as? LyricsLineView ?: return@doOnLayout
-                val targetOffset = currentLineChild.animations.getGlobalOffset() - lyricsView.contentPaddingTop
+                val contextIndex = (index - INITIAL_CONTEXT_LINES).coerceAtLeast(0)
+                val contextLineChild = lyricsView.getChildAt(contextIndex) as? LyricsLineView ?: currentLineChild
+                val maxScrollOffset =
+                    (lyricsView.measuredHeight + lyricsView.contentPaddingTop - scrollView.measuredHeight)
+                        .coerceAtLeast(0)
+                        .toFloat()
+                val startOffset =
+                    (contextLineChild.animations.getGlobalOffset() - lyricsView.contentPaddingTop)
+                        .coerceIn(0f, maxScrollOffset)
+                val targetOffset =
+                    (currentLineChild.animations.getGlobalOffset() - lyricsView.contentPaddingTop)
+                        .coerceIn(0f, maxScrollOffset)
 
                 scrollView.isVerticalScrollBarEnabled = false
-                scrollView.scrollTo(0, targetOffset.roundToInt())
+                scrollView.scrollTo(0, startOffset.roundToInt())
 
                 lyricsView.forEach { child: View ->
                     child as LyricsLineView
@@ -143,7 +170,41 @@ class LyricsViewModel(
                     child.visibility = View.VISIBLE
                 }
 
-                isLayoutFinished = true
+                lastIndex = index
+
+                // Waiting one frame ensures the contextual starting position is actually drawn.
+                // A short eased settle is deliberate: opening lyrics should feel alive without
+                // delaying the 200 ms playback follower below.
+                scrollView.postOnAnimation {
+                    if (layoutGeneration != lyricsLayoutGeneration || !scope.isActive) return@postOnAnimation
+                    if (startOffset.roundToInt() == targetOffset.roundToInt()) {
+                        isLayoutFinished = true
+                        return@postOnAnimation
+                    }
+
+                    val animator = ValueAnimator.ofInt(
+                        startOffset.roundToInt(),
+                        targetOffset.roundToInt(),
+                    ).apply {
+                        duration = INITIAL_SETTLE_DURATION_MS
+                        interpolator = INITIAL_SETTLE_INTERPOLATOR
+                        addUpdateListener { valueAnimator ->
+                            scrollView.scrollTo(0, valueAnimator.animatedValue as Int)
+                        }
+                        addListener(object : AnimatorListenerAdapter() {
+                            override fun onAnimationEnd(animation: Animator) {
+                                if (entranceAnimator === animation &&
+                                    layoutGeneration == lyricsLayoutGeneration
+                                ) {
+                                    entranceAnimator = null
+                                    isLayoutFinished = true
+                                }
+                            }
+                        })
+                    }
+                    entranceAnimator = animator
+                    animator.start()
+                }
             }
         }
 
@@ -153,7 +214,6 @@ class LyricsViewModel(
         // Follow the player rather than a timer. getCurrentLyricsLineIndex already maps a position
         // onto a line; upstream simply never called it with a real one.
         scope.launch {
-            var lastIndex = -1
             while (isActive) {
                 if (isLayoutFinished && lyrics.value != Lyrics.Empty) {
                     val index = getCurrentLyricsLineIndex(positionProvider())
@@ -192,6 +252,10 @@ class LyricsViewModel(
      * ever called it, so leaving the screen left the whole thing pinned in memory.
      */
     fun release() {
+        lyricsLayoutGeneration++
+        entranceAnimator?.removeAllListeners()
+        entranceAnimator?.cancel()
+        entranceAnimator = null
         scope.cancel()
         applyPending = null
         pendingLyrics = null
@@ -204,6 +268,10 @@ class LyricsViewModel(
     }
 
     companion object {
+        private const val INITIAL_CONTEXT_LINES = 2
+        private const val INITIAL_SETTLE_DURATION_MS = 320L
+        private val INITIAL_SETTLE_INTERPOLATOR = PathInterpolator(0.2f, 0f, 0f, 1f)
+
         /** Fast enough that a line change is not visibly late, cheap enough to leave running. */
         private const val POSITION_POLL_MS = 200L
     }

@@ -5,6 +5,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.TextView
+import android.widget.Toast
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -31,7 +32,8 @@ import uk.akane.accord.ui.components.TrackRowMenu
 class SongAdapter(
     private val recyclerView: RecyclerView,
     private val fragment: Fragment,
-    private val onContentLoaded: (() -> Unit)
+    private val sourceTransform: suspend (List<MediaItem>) -> List<MediaItem> = { it },
+    private val onContentLoaded: (() -> Unit),
 ) : RecyclerView.Adapter<SongAdapter.ViewHolder>() {
 
     private val list = mutableListOf<SongListItem>()
@@ -48,8 +50,9 @@ class SongAdapter(
         fragment.viewLifecycleOwner.lifecycleScope.launch {
             fragment.viewLifecycleOwner.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
                 (fragment.activity as MainActivity).reader.songListFlow.collectLatest { newList ->
-                    unfiltered = newList
-                    submitList(applyFilter(newList))
+                    val transformed = sourceTransform(newList)
+                    unfiltered = transformed
+                    submitList(applyFilter(transformed))
                 }
             }
         }
@@ -162,7 +165,10 @@ class SongAdapter(
 
         playAll?.setOnClickListener {
             val mediaController = mainActivity.getPlayer() ?: return@setOnClickListener
-            if (songList.isEmpty()) return@setOnClickListener
+            if (songList.isEmpty()) {
+                Toast.makeText(mainActivity, R.string.no_tracks_available, Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
 
             mediaController.setMediaItems(songList, /* startIndex */ 0, C.TIME_UNSET)
             mediaController.prepare()
@@ -171,7 +177,10 @@ class SongAdapter(
 
         shuffleAll?.setOnClickListener {
             val mediaController = mainActivity.getPlayer() ?: return@setOnClickListener
-            if (songList.isEmpty()) return@setOnClickListener
+            if (songList.isEmpty()) {
+                Toast.makeText(mainActivity, R.string.no_tracks_available, Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
 
             val shuffled = songList.shuffled(Random(System.currentTimeMillis()))
             mediaController.setMediaItems(shuffled, /* startIndex */ 0, C.TIME_UNSET)

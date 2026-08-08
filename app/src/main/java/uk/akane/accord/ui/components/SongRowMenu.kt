@@ -7,6 +7,7 @@ import androidx.media3.common.MediaItem
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinDownloadManager
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinLibraryLoader
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinReporter
@@ -30,23 +31,35 @@ object SongRowMenu {
         // Whether the server already has this starred, so the row can offer the opposite action
         // rather than only ever setting it - favouriting with no way to unfavourite is half a
         // feature.
-        val isFavourite = item.mediaMetadata.extras
-            ?.getBoolean(JellyfinLibraryLoader.EXTRA_IS_FAVOURITE, false) == true
-        PopupMenu(context, anchor).apply {
-            menu.add(0, ID_DOWNLOAD, 0, R.string.song_menu_download)
-            menu.add(0, ID_REMOVE_DOWNLOAD, 1, R.string.song_menu_remove_download)
+        CoroutineScope(Dispatchers.Main).launch {
+            val isDownloaded = withContext(Dispatchers.IO) {
+                JellyfinDownloadManager.isDownloaded(context, item)
+            }
+            if (!anchor.isAttachedToWindow) return@launch
+            val isFavourite = item.mediaMetadata.extras
+                ?.getBoolean(JellyfinLibraryLoader.EXTRA_IS_FAVOURITE, false) == true
+            PopupMenu(context, anchor).apply {
+            if (isDownloaded) {
+                menu.add(0, ID_REMOVE_DOWNLOAD, 0, R.string.collection_remove_from_device)
+            } else {
+                menu.add(0, ID_DOWNLOAD, 0, R.string.song_menu_download)
+            }
             menu.add(
-                0, ID_FAVOURITE, 2,
+                0, ID_FAVOURITE, 1,
                 if (isFavourite) R.string.song_menu_unfavourite else R.string.song_menu_favourite
             )
             setOnMenuItemClickListener { menuItem ->
                 when (menuItem.itemId) {
                     ID_DOWNLOAD -> {
-                        JellyfinDownloadManager.download(context, listOf(item))
+                        CoroutineScope(Dispatchers.IO).launch {
+                            JellyfinDownloadManager.download(context, listOf(item))
+                        }
                         true
                     }
                     ID_REMOVE_DOWNLOAD -> {
-                        JellyfinDownloadManager.remove(context, listOf(item))
+                        CoroutineScope(Dispatchers.IO).launch {
+                            JellyfinDownloadManager.remove(context, listOf(item))
+                        }
                         true
                     }
                     ID_FAVOURITE -> {
@@ -57,6 +70,7 @@ object SongRowMenu {
                 }
             }
             show()
+            }
         }
     }
 

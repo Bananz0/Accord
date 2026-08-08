@@ -154,6 +154,40 @@ class LastFmClient(
         }
     }
 
+    /** Every track the linked user has loved, newest first. */
+    suspend fun getLovedTracks(username: String): List<Track> {
+        if (username.isBlank()) return emptyList()
+        val result = mutableListOf<Track>()
+        var page = 1
+        var totalPages: Int
+        do {
+            val response = get(
+                mapOf(
+                    "method" to "user.getLovedTracks",
+                    "user" to username,
+                    "limit" to LOVED_PAGE_SIZE.toString(),
+                    "page" to page.toString(),
+                )
+            )
+            val loved = response.optJSONObject("lovedtracks") ?: break
+            val tracks = loved.optJSONArray("track")
+            if (tracks != null) {
+                for (index in 0 until tracks.length()) {
+                    val item = tracks.optJSONObject(index) ?: continue
+                    val title = item.optString("name").takeIf { it.isNotBlank() } ?: continue
+                    val artist = item.optJSONObject("artist")?.optString("name")
+                        ?.takeIf { it.isNotBlank() }
+                        ?: item.optString("artist").takeIf { it.isNotBlank() }
+                        ?: continue
+                    result += Track(artist = artist, title = title)
+                }
+            }
+            totalPages = loved.optJSONObject("@attr")?.optInt("totalPages", page) ?: page
+            page++
+        } while (page <= totalPages && page <= MAX_LOVED_PAGES)
+        return result.distinctBy { "${it.artist.lowercase()}\u0000${it.title.lowercase()}" }
+    }
+
     /**
      * Sends an unsigned, read-only call. Routed through the proxy too when one is configured, so a
      * device without an API key can still fetch recommendations.
@@ -283,5 +317,7 @@ class LastFmClient(
 
         /** Last.fm's documented per-request cap for track.scrobble. */
         const val MAX_BATCH = 50
+        private const val LOVED_PAGE_SIZE = 1000
+        private const val MAX_LOVED_PAGES = 50
     }
 }

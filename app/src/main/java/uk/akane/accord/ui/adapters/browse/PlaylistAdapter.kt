@@ -21,8 +21,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinLibraryLoader
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinPlaylists
+import org.akanework.gramophone.logic.data.lastfm.LastFmLovedLibrary
 import uk.akane.accord.R
 import uk.akane.accord.logic.dp
 import uk.akane.accord.ui.MainActivity
@@ -39,20 +44,42 @@ class PlaylistAdapter(
 ) : RecyclerView.Adapter<PlaylistAdapter.ViewHolder>() {
 
     private val list = mutableListOf<PlaylistRow>()
+    private var latestPlaylists: List<Playlist> = emptyList()
+    private var latestSongs: List<MediaItem> = emptyList()
+    private var remotePlaylists: List<JellyfinPlaylists.RemotePlaylist> = emptyList()
+    private var lovedTrackKeys: Set<String> = emptySet()
+    private val submitMutex = Mutex()
 
     private val mainActivity
         get() = fragment.activity as MainActivity
 
     init {
+        remotePlaylists = JellyfinPlaylists.cachedList(mainActivity)
+        lovedTrackKeys = LastFmLovedLibrary.cachedKeys(mainActivity)
         fragment.viewLifecycleOwner.lifecycleScope.launch {
             fragment.viewLifecycleOwner.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
-                mainActivity.reader.playlistListFlow
-                    .combine(mainActivity.reader.songListFlow) { playlists, songs ->
-                        playlists to songs
+                launch {
+                    mainActivity.reader.playlistListFlow
+                        .combine(mainActivity.reader.songListFlow) { playlists, songs ->
+                            playlists to songs
+                        }
+                        .collectLatest { (playlists, songs) ->
+                            latestPlaylists = playlists
+                            latestSongs = songs
+                            submitPlaylists(playlists, songs, remotePlaylists)
+                        }
+                }
+                launch {
+                    val fresh = withContext(Dispatchers.IO) {
+                        JellyfinPlaylists.list(mainActivity)
                     }
-                    .collectLatest { (playlists, songs) ->
-                        submitPlaylists(playlists, songs)
-                    }
+                    if (fresh.isNotEmpty()) remotePlaylists = fresh
+                    submitPlaylists(latestPlaylists, latestSongs, remotePlaylists)
+                }
+                launch {
+                    lovedTrackKeys = LastFmLovedLibrary.refreshKeys(mainActivity)
+                    submitPlaylists(latestPlaylists, latestSongs, remotePlaylists)
+                }
             }
         }
     }
@@ -95,7 +122,13 @@ class PlaylistAdapter(
 
         holder.itemView.setOnClickListener {
             mainActivity.fragmentSwitcherView.addFragmentToCurrentStack(
-                PlaylistDetailFragment.newInstance(item.playlistId, item.title, item.songs.size)
+                PlaylistDetailFragment.newInstance(
+                    item.playlistId,
+                    item.title,
+                    item.songCount,
+                    item.remotePlaylistId,
+                    item.artworkUri?.takeIf { item.remotePlaylistId != null },
+                )
             )
         }
     }
@@ -110,13 +143,24 @@ class PlaylistAdapter(
         val divider: View = view.findViewById(R.id.divider)
     }
 
-    private suspend fun submitPlaylists(playlists: List<Playlist>, songs: List<MediaItem>) {
+    private suspend fun submitPlaylists(
+        playlists: List<Playlist>,
+        songs: List<MediaItem>,
+        remote: List<JellyfinPlaylists.RemotePlaylist>,
+    ) = submitMutex.withLock {
         val oldList = list.toList()
         val coverPrefs = mainActivity.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val favoriteKeys = loadFavoriteKeys(mainActivity)
         val result = withContext(Dispatchers.Default) {
             val songMap = songs.associateBy { buildSongKey(it) }
-            val favoriteSongs = favoriteKeys.mapNotNull { songMap[it] }
+            val favoriteSongs = songs.filter { song ->
+                buildSongKey(song) in favoriteKeys ||
+                    song.mediaMetadata.extras?.getBoolean(
+                        JellyfinLibraryLoader.EXTRA_IS_FAVOURITE,
+                        false,
+                    ) == true ||
+                    LastFmLovedLibrary.isLoved(song, lovedTrackKeys)
+            }
 
             val favoriteRow = PlaylistRow(
                 key = "favorite",
@@ -125,9 +169,11 @@ class PlaylistAdapter(
                 iconRes = uk.akane.cupertino.R.drawable.ic_star_filled,
                 iconTintRes = R.color.accentColor,
                 playlistId = null,
+                remotePlaylistId = null,
                 isFavorite = true,
                 isRecentlyAdded = false,
-                songs = favoriteSongs
+                songs = favoriteSongs,
+                songCount = favoriteSongs.size,
             )
 
             val basePlaylists = playlists.filterNot { it is Favorite || it is RecentlyAdded }
@@ -170,14 +216,38 @@ class PlaylistAdapter(
                     iconRes = iconRes,
                     iconTintRes = iconTintRes,
                     playlistId = playlist.id,
+                    remotePlaylistId = null,
                     isFavorite = isFavorite,
                     isRecentlyAdded = isRecentlyAdded,
-                    songs = playlist.songList
+                    songs = playlist.songList,
+                    songCount = playlist.songList.size,
                 )
             }
 
             val regularItems = items.filter { !it.isFavorite && !it.isRecentlyAdded }
-            val orderedItems = listOf(favoriteRow) + regularItems
+            val localServerTitles = basePlaylists
+                .filter { it.path == null }
+                .mapNotNull { it.title?.normaliseForMatch() }
+                .toSet()
+            val remoteItems = remote
+                .filterNot { it.name.normaliseForMatch() in localServerTitles }
+                .map { playlist ->
+                    val artwork = playlist.imageUrl?.let(Uri::parse)
+                    PlaylistRow(
+                        key = "remote:${playlist.id}",
+                        title = playlist.name,
+                        artworkUri = artwork,
+                        iconRes = if (artwork == null) R.drawable.ic_playlist else null,
+                        iconTintRes = R.color.onSurfaceColorInactive,
+                        playlistId = null,
+                        remotePlaylistId = playlist.id,
+                        isFavorite = false,
+                        isRecentlyAdded = false,
+                        songs = emptyList(),
+                        songCount = playlist.songCount,
+                    )
+                }
+            val orderedItems = listOf(favoriteRow) + remoteItems + regularItems
 
             orderedItems to DiffUtil.calculateDiff(PlaylistDiffCallback(oldList, orderedItems))
         }
@@ -227,9 +297,11 @@ class PlaylistAdapter(
         val iconRes: Int?,
         val iconTintRes: Int,
         val playlistId: Long?,
+        val remotePlaylistId: String?,
         val isFavorite: Boolean,
         val isRecentlyAdded: Boolean,
-        val songs: List<MediaItem>
+        val songs: List<MediaItem>,
+        val songCount: Int,
     )
 
     companion object {
@@ -270,4 +342,7 @@ class PlaylistAdapter(
         if (mediaId.isNotBlank()) return mediaId
         return item.localConfiguration?.uri?.toString() ?: item.hashCode().toString()
     }
+
+    private fun String.normaliseForMatch(): String =
+        lowercase().filter { it.isLetterOrDigit() }
 }

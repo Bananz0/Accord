@@ -18,6 +18,7 @@ import android.util.Log
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.animation.OvershootInterpolator
 import androidx.core.content.res.ResourcesCompat
 import androidx.core.content.withStyledAttributes
 import androidx.core.graphics.ColorUtils
@@ -88,6 +89,8 @@ class NavigationBar @JvmOverloads constructor(
     private val ellipsisDrawable = ResourcesCompat.getDrawable(resources, R.drawable.ic_ellipsis_navigation_bar, null)!!
 
     private val addDrawable = ResourcesCompat.getDrawable(resources, R.drawable.ic_plus, null)!!
+    private val addCheckedDrawable =
+        ResourcesCompat.getDrawable(resources, R.drawable.ic_checkmark, null)!!
 
     private val chevronColor = accentColor
     private val chevronDrawable = ResourcesCompat.getDrawable(resources, R.drawable.ic_chevron_left, null)!!
@@ -107,6 +110,62 @@ class NavigationBar @JvmOverloads constructor(
             field = value
             invalidate()
         }
+    /** Draw the persistent saved state in the add button without moving the surrounding chrome. */
+    private var addButtonChecked = false
+    private var addButtonCheckProgress = 0F
+    private var addButtonCheckAnimator: ValueAnimator? = null
+    var isAddButtonChecked: Boolean
+        get() = addButtonChecked
+        set(value) = setAddButtonChecked(value, animate = false)
+
+    /**
+     * Animate a successful save into its persistent red check. Restored state deliberately uses
+     * the property setter above so reopening a screen never replays feedback for an old action.
+     */
+    fun setAddButtonChecked(
+        checked: Boolean,
+        animate: Boolean,
+        haptic: Boolean = animate && checked,
+    ) {
+        if (addButtonChecked == checked && addButtonCheckAnimator?.isRunning != true) return
+        addButtonChecked = checked
+        addButtonCheckAnimator?.cancel()
+        addButtonCheckAnimator = null
+        val target = if (checked) 1F else 0F
+        if (!animate || !isAttachedToWindow) {
+            addButtonCheckProgress = target
+            invalidate()
+            return
+        }
+        addButtonCheckAnimator = ValueAnimator.ofFloat(addButtonCheckProgress, target).apply {
+            duration = if (checked) 520L else 260L
+            interpolator = if (checked) {
+                OvershootInterpolator(2.15F)
+            } else {
+                AnimationUtils.easingStandardInterpolator
+            }
+            addUpdateListener {
+                addButtonCheckProgress = (it.animatedValue as Float).coerceIn(0F, 1.08F)
+                invalidate()
+            }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                private var cancelled = false
+
+                override fun onAnimationCancel(animation: android.animation.Animator) {
+                    cancelled = true
+                }
+
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    if (cancelled) return
+                    addButtonCheckProgress = target
+                    addButtonCheckAnimator = null
+                    invalidate()
+                    if (haptic) performPressHaptic()
+                }
+            })
+            start()
+        }
+    }
 
     private var lifecycle: Lifecycle? = null
 
@@ -531,14 +590,39 @@ class NavigationBar @JvmOverloads constructor(
                 ellipsisBackgroundPaint
             )
 
+            val progress = addButtonCheckProgress.coerceIn(0F, 1F)
+            val plusProgress = (progress / 0.58F).coerceIn(0F, 1F)
+            val checkProgress = ((progress - 0.22F) / 0.78F).coerceIn(0F, 1F)
+            val iconCenterX = (addDrawableLeft + addDrawableRight) / 2F
+            val iconCenterY = (addDrawableTop + addDrawableBottom) / 2F
+            val iconTint = ColorUtils.blendARGB(accent, accentColor, progress)
+
             addDrawable.setBounds(
-                addDrawableLeft,
-                addDrawableTop,
-                addDrawableRight.toInt(),
-                addDrawableBottom.toInt()
+                addDrawableLeft, addDrawableTop, addDrawableRight.toInt(), addDrawableBottom.toInt()
             )
-            addDrawable.setTint(accent)
-            addDrawable.draw(canvas)
+            addDrawable.setTint(iconTint)
+            addDrawable.alpha = ((1F - plusProgress) * 255).toInt().coerceIn(0, 255)
+            canvas.withSave {
+                val scale = 1F - 0.48F * plusProgress
+                scale(scale, scale, iconCenterX, iconCenterY)
+                rotate(35F * plusProgress, iconCenterX, iconCenterY)
+                addDrawable.draw(this)
+            }
+
+            addCheckedDrawable.setBounds(
+                addDrawableLeft, addDrawableTop, addDrawableRight.toInt(), addDrawableBottom.toInt()
+            )
+            addCheckedDrawable.setTint(accentColor)
+            addCheckedDrawable.alpha = (checkProgress * 255).toInt().coerceIn(0, 255)
+            canvas.withSave {
+                val scale = 0.54F + 0.46F * checkProgress
+                scale(scale, scale, iconCenterX, iconCenterY)
+                addCheckedDrawable.draw(this)
+            }
+
+            // Drawables are shared objects, so leave their alpha ready for non-animated frames.
+            addDrawable.alpha = 255
+            addCheckedDrawable.alpha = 255
 
             addButtonBounds.set(
                 addLeft,
@@ -597,6 +681,11 @@ class NavigationBar @JvmOverloads constructor(
 
     fun setOnReturnClickListener(listener: (() -> Unit)?) {
         returnClickListener = listener
+    }
+
+    fun setReturnButtonText(text: CharSequence) {
+        returnButtonText = text.toString()
+        invalidate()
     }
 
     /** The profile control, which upstream draws but never wires to anything. */
@@ -822,22 +911,26 @@ class NavigationBar @JvmOverloads constructor(
             }
             MotionEvent.ACTION_UP -> {
                 if (avatarPressed && avatarBounds.contains(event.x, event.y)) {
+                    performPressHaptic()
                     (avatarClickListener ?: { openSettings() }).invoke()
                     performClick()
                 }
                 avatarPressed = false
                 if (addButtonPressed && addButtonBounds.contains(event.x, event.y)) {
+                    performPressHaptic()
                     (addClickListener ?: {}).invoke()
                     performClick()
                 }
                 addButtonPressed = false
                 if (menuButtonPressed && menuButtonBounds.contains(event.x, event.y)) {
+                    performPressHaptic()
                     (menuClickListener ?: { showDefaultMenu() }).invoke()
                     performClick()
                 }
                 menuButtonPressed = false
                 if (!shouldDrawReturnButton) return true
                 if (returnButtonPressed && updateReturnButtonBounds().contains(event.x, event.y)) {
+                    performPressHaptic()
                     returnClickListener?.invoke()
                     performClick()
                 }

@@ -13,6 +13,7 @@ import androidx.core.view.doOnLayout
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import com.google.android.material.button.MaterialButton
 import android.widget.TextView
 import uk.akane.accord.R
@@ -21,6 +22,7 @@ import uk.akane.accord.logic.isDarkMode
 import uk.akane.accord.logic.playOrPause
 import uk.akane.accord.ui.MainActivity
 import uk.akane.accord.ui.components.NavigationBar
+import uk.akane.accord.ui.components.performPressHaptic
 import uk.akane.cupertino.widget.image.SimpleImageView
 
 class PreviewPlayer @JvmOverloads constructor(
@@ -66,7 +68,12 @@ class PreviewPlayer @JvmOverloads constructor(
         }
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            updatePanelVisibility()
             updateTitle()
+        }
+
+        override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+            updatePanelVisibility()
         }
 
         override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) {
@@ -111,10 +118,12 @@ class PreviewPlayer @JvmOverloads constructor(
         }
 
         controlMaterialButton.setOnClickListener {
+            it.performPressHaptic()
             activity.getPlayer()?.playOrPause()
         }
 
         nextMaterialButton.setOnClickListener {
+            it.performPressHaptic()
             activity.getPlayer()?.seekToNext()
         }
 
@@ -122,6 +131,7 @@ class PreviewPlayer @JvmOverloads constructor(
             controller.addListener(playerListener)
             updatePlaybackControls(controller.playbackState)
             updateTitle(controller)
+            updatePanelVisibility(controller)
         }
 
         updatePlaybackControls()
@@ -175,6 +185,13 @@ class PreviewPlayer @JvmOverloads constructor(
         if (resolved != lastTitleText) {
             titleTextView.text = resolved
             lastTitleText = resolved
+        }
+    }
+
+    private fun updatePanelVisibility(playerOverride: Player? = null) {
+        val player = playerOverride ?: activity.getPlayer()
+        if (player != null && player.mediaItemCount > 0) {
+            floatingPanelLayout.showForPlayback()
         }
     }
 

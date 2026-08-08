@@ -41,12 +41,19 @@ import uk.akane.libphonograph.manipulator.PlaylistSerializer
 import java.io.File
 import kotlin.random.Random
 import uk.akane.accord.ui.components.CollectionPopupMenu
+import uk.akane.accord.ui.components.CollageArtView
 import android.widget.Toast
 import uk.akane.accord.ui.components.TrackRowMenu
 import uk.akane.accord.ui.components.TrackSwipeActions
+import uk.akane.accord.ui.components.performPressHaptic
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinItemResolver
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinPlaylists
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinLibraryLoader
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinDownloadManager
+import org.akanework.gramophone.logic.data.lastfm.LastFmLovedLibrary
 
 class PlaylistDetailFragment : SwitcherPostponeFragment() {
 
@@ -65,6 +72,9 @@ class PlaylistDetailFragment : SwitcherPostponeFragment() {
     private var suggestedSongs: List<MediaItem> = emptyList()
     private var playlistSongs: MutableList<MediaItem> = mutableListOf()
     private var isFavoriteTarget = false
+    private var remotePlaylistId: String? = null
+    private var remoteArtworkUri: Uri? = null
+    private var collectionDownloaded = false
     private val suggestedAdapter = SuggestedSongAdapter { song ->
         addSuggestedToPlaylist(song)
     }
@@ -87,6 +97,8 @@ class PlaylistDetailFragment : SwitcherPostponeFragment() {
         navigationBar = rootView.findViewById(R.id.navigation_bar)
         contentRecycler = rootView.findViewById(R.id.rvContent)
         targetPlaylistId = requireArguments().getLong(ARG_ID, NO_ID)
+        remotePlaylistId = requireArguments().getString(ARG_REMOTE_ID)
+        remoteArtworkUri = requireArguments().getString(ARG_ARTWORK_URI)?.toUri()
 
         ViewCompat.setOnApplyWindowInsetsListener(navigationBar) { v, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
@@ -111,11 +123,14 @@ class PlaylistDetailFragment : SwitcherPostponeFragment() {
             entries = {
                 CollectionPopupMenu.build(
                     resources,
-                    withArtist = false,
+                    withArtist = true,
                     withAlbum = true,
                     // Only a real playlist can be renamed or deleted; Favourites and
                     // Recently Added are generated and have nothing to edit.
                     withPlaylistManagement = isEditablePlaylist(),
+                    withDownload = !collectionDownloaded,
+                    withRemoveDownload = collectionDownloaded,
+                    withServerDelete = remotePlaylistId != null,
                 )
             },
             onClick = { entry ->
@@ -125,6 +140,7 @@ class PlaylistDetailFragment : SwitcherPostponeFragment() {
                         PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                     )
                     CollectionPopupMenu.Action.DELETE -> promptDelete()
+                    CollectionPopupMenu.Action.DELETE_FROM_SERVER -> promptDeleteFromServer()
                     else -> CollectionPopupMenu.handle(
                         activity, entry, playlistSongs.toList(), headerTitle
                     )
@@ -151,8 +167,10 @@ class PlaylistDetailFragment : SwitcherPostponeFragment() {
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
                 activity.reader.playlistListFlow.collectLatest { playlists ->
-                    resolvePlaylist(playlists)?.let { updateFromPlaylist(it) }
-                    if (!didLoadOnce) {
+                    if (remotePlaylistId == null) {
+                        resolvePlaylist(playlists)?.let { updateFromPlaylist(it) }
+                    }
+                    if (remotePlaylistId == null && !didLoadOnce) {
                         didLoadOnce = true
                         notifyContentLoaded()
                     }
@@ -164,7 +182,19 @@ class PlaylistDetailFragment : SwitcherPostponeFragment() {
             viewLifecycleOwner.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
                 activity.reader.songListFlow.collectLatest { songs ->
                     allSongs = songs
-                    if (isFavoriteTarget) {
+                    val remoteId = remotePlaylistId
+                    if (remoteId != null) {
+                        val remoteSongs = withContext(Dispatchers.IO) {
+                            JellyfinPlaylists.items(requireContext(), remoteId, songs)
+                        }
+                        applyPlaylistSongs(remoteSongs)
+                        if (!didLoadOnce) {
+                            didLoadOnce = true
+                            notifyContentLoaded()
+                        }
+                    } else if (isFavoriteTarget) {
+                        updateFromFavoriteSongs(songs)
+                        LastFmLovedLibrary.refreshKeys(requireContext())
                         updateFromFavoriteSongs(songs)
                     }
                     refreshSuggestions()
@@ -178,6 +208,7 @@ class PlaylistDetailFragment : SwitcherPostponeFragment() {
     override fun onHiddenChanged(hidden: Boolean) {
         super.onHiddenChanged(hidden)
         navigationBar.onVisibilityChangedFromFragment(hidden)
+        if (!hidden) refreshDownloadState()
     }
 
     /**
@@ -213,7 +244,7 @@ class PlaylistDetailFragment : SwitcherPostponeFragment() {
     /** Generated playlists - Favourites and the like - have no file to rename or delete. */
     private fun isEditablePlaylist(): Boolean {
         val playlist = currentPlaylist ?: return false
-        return playlist !is Favorite && playlist.id != null
+        return playlist !is Favorite && playlist.id != null && playlist.path != null
     }
 
     private val playlistCoverPicker = registerForActivityResult(
@@ -330,6 +361,39 @@ class PlaylistDetailFragment : SwitcherPostponeFragment() {
         activity.fragmentSwitcherView.popBackTopFragmentIfExists()
     }
 
+    private fun promptDeleteFromServer() {
+        if (remotePlaylistId == null) return
+        MaterialAlertDialogBuilder(requireContext())
+            .setTitle(getString(R.string.collection_delete_server_title, headerTitle))
+            .setMessage(R.string.collection_delete_server_message)
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(R.string.playlist_delete_confirm) { _, _ ->
+                val remoteId = remotePlaylistId ?: return@setPositiveButton
+                viewLifecycleOwner.lifecycleScope.launch {
+                    val deleted = withContext(Dispatchers.IO) {
+                        JellyfinPlaylists.delete(remoteId)
+                    }
+                    if (!isAdded) return@launch
+                    if (deleted) {
+                        Toast.makeText(
+                            requireContext(),
+                            R.string.collection_deleted_from_server,
+                            Toast.LENGTH_SHORT
+                        ).show()
+                        activity.updateLibrary()
+                        activity.fragmentSwitcherView.popBackTopFragmentIfExists()
+                    } else {
+                        Toast.makeText(
+                            requireContext(),
+                            R.string.collection_delete_server_failed,
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
+            }
+            .show()
+    }
+
     private fun resolvePlaylist(playlists: List<Playlist>): Playlist? {
         val targetId = requireArguments().getLong(ARG_ID, NO_ID)
         val targetTitle = requireArguments().getString(ARG_TITLE).orEmpty()
@@ -343,6 +407,16 @@ class PlaylistDetailFragment : SwitcherPostponeFragment() {
 
     private fun updateFromPlaylist(playlist: Playlist) {
         currentPlaylist = playlist
+        remotePlaylistId = null
+        if (playlist.path == null) {
+            playlist.id?.let { localId ->
+                viewLifecycleOwner.lifecycleScope.launch {
+                    remotePlaylistId = withContext(Dispatchers.IO) {
+                        JellyfinItemResolver.remoteId(requireContext(), localId)
+                    }
+                }
+            }
+        }
         val title = playlist.title?.takeIf { it.isNotBlank() }
             ?: requireArguments().getString(ARG_TITLE).orEmpty()
         headerTitle = title
@@ -355,8 +429,15 @@ class PlaylistDetailFragment : SwitcherPostponeFragment() {
 
     private fun updateFromFavoriteSongs(songs: List<MediaItem>) {
         val favoriteKeys = PlaylistAdapter.loadFavoriteKeys(requireContext())
-        val songMap = songs.associateBy { buildSongKey(it) }
-        val ordered = favoriteKeys.mapNotNull { songMap[it] }
+        val lovedKeys = LastFmLovedLibrary.cachedKeys(requireContext())
+        val ordered = songs.filter { song ->
+            buildSongKey(song) in favoriteKeys ||
+                song.mediaMetadata.extras?.getBoolean(
+                    JellyfinLibraryLoader.EXTRA_IS_FAVOURITE,
+                    false,
+                ) == true ||
+                LastFmLovedLibrary.isLoved(song, lovedKeys)
+        }
         applyPlaylistSongs(ordered)
     }
 
@@ -364,6 +445,7 @@ class PlaylistDetailFragment : SwitcherPostponeFragment() {
         val merged = mergePlaylistSongs(songs)
         playlistSongs = orderPlaylistSongs(merged)
         playlistSongsAdapter.submitList(ArrayList(playlistSongs))
+        refreshDownloadState(playlistSongs)
         headerAdapter.update(
             headerTitle,
             headerSubtitle,
@@ -382,9 +464,29 @@ class PlaylistDetailFragment : SwitcherPostponeFragment() {
         }
     }
 
+    private fun refreshDownloadState(tracks: List<MediaItem> = playlistSongs) {
+        if (!isAdded || tracks.isEmpty()) {
+            collectionDownloaded = false
+            return
+        }
+        val expectedIds = tracks.map(MediaItem::mediaId)
+        viewLifecycleOwner.lifecycleScope.launch {
+            val downloaded = withContext(Dispatchers.IO) {
+                JellyfinDownloadManager.areAllDownloaded(requireContext(), tracks)
+            }
+            if (playlistSongs.map(MediaItem::mediaId) == expectedIds) {
+                collectionDownloaded = downloaded
+            }
+        }
+    }
+
     private fun orderPlaylistSongs(songs: List<MediaItem>): MutableList<MediaItem> {
         if (songs.isEmpty()) return songs.toMutableList()
-        return if (isFavoriteTarget) songs.toMutableList() else songs.asReversed().toMutableList()
+        return if (isFavoriteTarget || remotePlaylistId != null) {
+            songs.toMutableList()
+        } else {
+            songs.asReversed().toMutableList()
+        }
     }
 
     private fun refreshSuggestions(force: Boolean = false) {
@@ -414,6 +516,16 @@ class PlaylistDetailFragment : SwitcherPostponeFragment() {
         if (playlistSongs.any { buildSongKey(it) == songKey }) return
         if (currentPlaylist is Favorite || isFavoriteTarget) {
             addSuggestedToFavorites(song)
+            return
+        }
+
+        remotePlaylistId?.let { remoteId ->
+            viewLifecycleOwner.lifecycleScope.launch {
+                val added = withContext(Dispatchers.IO) {
+                    JellyfinPlaylists.addTo(requireContext(), remoteId, listOf(song.mediaId))
+                }
+                if (added) updateAfterSuggestionAdded(song)
+            }
             return
         }
 
@@ -614,7 +726,10 @@ class PlaylistDetailFragment : SwitcherPostponeFragment() {
             }
             holder.title.text = item.mediaMetadata.title?.toString().orEmpty()
             holder.subtitle.text = item.mediaMetadata.artist?.toString().orEmpty()
-            holder.addButton.setOnClickListener { onAddClicked(item) }
+            holder.addButton.setOnClickListener {
+                it.performPressHaptic()
+                onAddClicked(item)
+            }
         }
 
         inner class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
@@ -647,6 +762,43 @@ class PlaylistDetailFragment : SwitcherPostponeFragment() {
             holder.title.text = titleText
             holder.subtitle.text = subtitleText
             holder.updated.text = updatedText
+
+            val storedCover = requireContext()
+                .getSharedPreferences(PlaylistAdapter.PREFS_NAME, android.content.Context.MODE_PRIVATE)
+                .getString(PlaylistAdapter.coverKeyFor(headerTitle), null)
+                ?.toUri()
+            val singleCover = storedCover ?: remoteArtworkUri
+            val collageCovers = playlistSongs
+                .mapNotNull { it.mediaMetadata.artworkUri }
+                .distinct()
+                .take(6)
+
+            when {
+                singleCover != null -> {
+                    holder.collage.visibility = View.GONE
+                    holder.collage.setCovers(emptyList())
+                    holder.icon.visibility = View.GONE
+                    holder.cover.visibility = View.VISIBLE
+                    holder.cover.load(singleCover) {
+                        crossfade(true)
+                        size(640.dp.px.toInt(), 640.dp.px.toInt())
+                    }
+                }
+                collageCovers.isNotEmpty() -> {
+                    holder.cover.visibility = View.GONE
+                    holder.cover.setImageDrawable(null)
+                    holder.icon.visibility = View.GONE
+                    holder.collage.visibility = View.VISIBLE
+                    holder.collage.setCovers(collageCovers)
+                }
+                else -> {
+                    holder.cover.visibility = View.GONE
+                    holder.cover.setImageDrawable(null)
+                    holder.collage.visibility = View.GONE
+                    holder.collage.setCovers(emptyList())
+                    holder.icon.visibility = View.VISIBLE
+                }
+            }
         }
 
         override fun getItemCount(): Int = 1
@@ -655,6 +807,9 @@ class PlaylistDetailFragment : SwitcherPostponeFragment() {
             val title: TextView = view.findViewById(R.id.tvTitle)
             val subtitle: TextView = view.findViewById(R.id.tvArtist)
             val updated: TextView = view.findViewById(R.id.tvUpdated)
+            val cover: ImageView = view.findViewById(R.id.coverImage)
+            val collage: CollageArtView = view.findViewById(R.id.collageArt)
+            val icon: ImageView = view.findViewById(R.id.musicIcon)
         }
     }
 
@@ -677,6 +832,7 @@ class PlaylistDetailFragment : SwitcherPostponeFragment() {
                 suggestedRecycler.layoutManager = LinearLayoutManager(view.context)
                 suggestedRecycler.adapter = suggestedAdapter
                 refreshButton.setOnClickListener {
+                    it.performPressHaptic()
                     shouldRefreshSuggestions = true
                     refreshSuggestions(force = true)
                 }
@@ -735,15 +891,25 @@ class PlaylistDetailFragment : SwitcherPostponeFragment() {
         private const val ARG_ID = "playlist_id"
         private const val ARG_TITLE = "playlist_title"
         private const val ARG_COUNT = "playlist_count"
+        private const val ARG_REMOTE_ID = "remote_playlist_id"
+        private const val ARG_ARTWORK_URI = "playlist_artwork_uri"
         private const val NO_ID = -1L
         private const val SUGGESTED_COUNT = 5
 
-        fun newInstance(playlistId: Long?, title: String, songCount: Int): PlaylistDetailFragment {
+        fun newInstance(
+            playlistId: Long?,
+            title: String,
+            songCount: Int,
+            remotePlaylistId: String? = null,
+            artworkUri: Uri? = null,
+        ): PlaylistDetailFragment {
             return PlaylistDetailFragment().apply {
                 arguments = Bundle().apply {
                     putLong(ARG_ID, playlistId ?: NO_ID)
                     putString(ARG_TITLE, title)
                     putInt(ARG_COUNT, songCount)
+                    putString(ARG_REMOTE_ID, remotePlaylistId)
+                    putString(ARG_ARTWORK_URI, artworkUri?.toString())
                 }
             }
         }

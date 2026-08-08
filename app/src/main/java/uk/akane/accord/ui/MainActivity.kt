@@ -34,6 +34,7 @@ import uk.akane.accord.logic.utils.CalculationUtils.lerp
 import uk.akane.accord.logic.utils.UiUtils
 import uk.akane.accord.setupwizard.fragments.SetupWizardFragment
 import uk.akane.accord.ui.components.player.FloatingPanelLayout
+import uk.akane.accord.ui.components.performPressHaptic
 import uk.akane.accord.ui.fragments.BrowseFragment
 import uk.akane.accord.ui.fragments.HomeFragment
 import uk.akane.accord.ui.fragments.LibraryFragment
@@ -47,7 +48,7 @@ import android.media.AudioManager
 import android.view.KeyEvent
 import androidx.core.content.ContextCompat
 import androidx.media3.common.C
-import kotlinx.coroutines.flow.first
+import org.akanework.gramophone.logic.data.library.songListSnapshot
 import uk.akane.accord.ui.fragments.SettingsFragment
 
 class MainActivity : AppCompatActivity() {
@@ -73,7 +74,6 @@ class MainActivity : AppCompatActivity() {
 
     private var isWindowColorSet: Boolean = false
 
-    private var ready: Boolean = false
     private var isHandlingNowPlayingBack: Boolean = false
     private var nowPlayingBackStartFraction: Float = 0F
 
@@ -111,6 +111,9 @@ class MainActivity : AppCompatActivity() {
         ::floatingPanelLayout.isInitialized && floatingPanelLayout.slideFraction > 0F
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Android's splash hook must be installed before Activity restoration. Installing it after
+        // super.onCreate exposed the empty switcher container as a black frame on cold launches.
+        installSplashScreen()
         super.onCreate(savedInstanceState)
 
         // So the hardware keys act on music rather than on the ringer when nothing is playing yet.
@@ -121,12 +124,11 @@ class MainActivity : AppCompatActivity() {
         bottomDefaultRadius = resources.getDimensionPixelSize(R.dimen.bottom_panel_radius)
         bottomNavigationPanelColor = getColor(R.color.bottomNavigationPanelColor)
 
-        installSplashScreen().setKeepOnScreenCondition { !ready }
         enableEdgeToEdgeProperly()
 
         lifecycle.addObserver(controllerViewModel)
         controllerViewModel.addControllerCallback(lifecycle) { controller, controllerLifecycle ->
-            ready = true
+            // MediaController connected
         }
 
         // The navigation bar on every screen draws the signed-in user's Jellyfin picture, so it is
@@ -202,13 +204,14 @@ class MainActivity : AppCompatActivity() {
             }
         })
 
+        val searchFragment = SearchFragment()
         fragmentSwitcherView.setup(
             this,
             listOf(
                 HomeFragment(),
                 BrowseFragment(),
                 LibraryFragment(),
-                SearchFragment()
+                searchFragment
             ),
             listOf(
                 "Home",
@@ -218,7 +221,9 @@ class MainActivity : AppCompatActivity() {
             )
         )
 
+        var bottomNavigationHapticsReady = false
         bottomNavigationView.setOnItemSelectedListener { item ->
+            if (bottomNavigationHapticsReady) bottomNavigationView.performPressHaptic()
             fragmentSwitcherView.switchBaseFragment(
                 when (item.itemId) {
                     R.id.home -> 0
@@ -230,6 +235,12 @@ class MainActivity : AppCompatActivity() {
             )
             true
         }
+        bottomNavigationView.setOnItemReselectedListener { item ->
+            if (bottomNavigationHapticsReady) bottomNavigationView.performPressHaptic()
+            if (item.itemId == R.id.search) searchFragment.focusSearch()
+        }
+        // Listener setup can select the initial Home item; startup should never buzz by itself.
+        bottomNavigationView.post { bottomNavigationHapticsReady = true }
 
         floatingPanelLayout.addOnSlideListener(object : FloatingPanelLayout.OnSlideListener {
             override fun onSlideStatusChanged(status: FloatingPanelLayout.SlideStatus) {
@@ -440,7 +451,7 @@ class MainActivity : AppCompatActivity() {
      */
     fun openMatchingTracks(wanted: String, key: (androidx.media3.common.MediaItem) -> String?) {
         lifecycleScope.launch {
-            val tracks = reader.songListFlow.first().filter { key(it) == wanted }
+            val tracks = reader.songListSnapshot().filter { key(it) == wanted }
             if (tracks.isEmpty()) return@launch
             fragmentSwitcherView.addFragmentToCurrentStack(
                 uk.akane.accord.ui.fragments.browse.StationDetailFragment.newInstance(
@@ -459,11 +470,22 @@ class MainActivity : AppCompatActivity() {
     fun openStationFor(seed: androidx.media3.common.MediaItem) {
         collapseNowPlaying()
         lifecycleScope.launch {
-            val library = reader.songListFlow.first()
-            val tracks = org.akanework.gramophone.logic.data.AutoplayQueue.nextBatch(
-                applicationContext, seed, library, setOf(seed.mediaId)
-            )
-            if (tracks.isEmpty()) return@launch
+            val library = reader.songListSnapshot()
+            // AutoplayQueue may consult Last.fm. It is explicitly worker-thread code and used to
+            // run here on the main thread, making Create station appear inert while the UI froze.
+            val tracks = withContext(Dispatchers.IO) {
+                org.akanework.gramophone.logic.data.AutoplayQueue.nextBatch(
+                    applicationContext, seed, library, setOf(seed.mediaId)
+                )
+            }
+            if (tracks.isEmpty()) {
+                android.widget.Toast.makeText(
+                    this@MainActivity,
+                    R.string.station_no_similar_tracks,
+                    android.widget.Toast.LENGTH_SHORT,
+                ).show()
+                return@launch
+            }
             fragmentSwitcherView.addFragmentToCurrentStack(
                 uk.akane.accord.ui.fragments.browse.StationDetailFragment.newInstance(
                     title = getString(
@@ -472,6 +494,7 @@ class MainActivity : AppCompatActivity() {
                     ),
                     subtitle = seed.mediaMetadata.artist?.toString(),
                     mediaIds = (listOf(seed) + tracks).map { it.mediaId },
+                    kind = uk.akane.accord.ui.fragments.browse.StationDetailFragment.CollectionKind.STATION,
                 )
             )
         }
@@ -480,7 +503,7 @@ class MainActivity : AppCompatActivity() {
     /** Plays the whole library in a random order, from the screen-level overflow menu. */
     fun shuffleWholeLibrary() {
         lifecycleScope.launch {
-            val library = reader.songListFlow.first()
+            val library = reader.songListSnapshot()
             if (library.isEmpty()) return@launch
             getPlayer()?.apply {
                 setMediaItems(library.shuffled(), 0, C.TIME_UNSET)

@@ -13,7 +13,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import coil3.load
+import coil3.request.crossfade
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import uk.akane.accord.R
@@ -64,8 +67,26 @@ class GenresFragment : SwitcherPostponeFragment() {
         }
 
         recyclerView = rootView.findViewById(R.id.rv)
-        recyclerView.layoutManager = LinearLayoutManager(requireContext())
+        recyclerView.layoutManager = GridLayoutManager(requireContext(), 2)
         recyclerView.adapter = adapter
+        recyclerView.addItemDecoration(object : RecyclerView.ItemDecoration() {
+            private val outer = (22 * resources.displayMetrics.density).toInt()
+            private val inner = (8 * resources.displayMetrics.density).toInt()
+            override fun getItemOffsets(
+                outRect: android.graphics.Rect,
+                view: View,
+                parent: RecyclerView,
+                state: RecyclerView.State,
+            ) {
+                val position = parent.getChildAdapterPosition(view)
+                if (position == RecyclerView.NO_POSITION) return
+                val column = position % 2
+                outRect.left = if (column == 0) outer else inner
+                outRect.right = if (column == 0) inner else outer
+                outRect.top = inner
+                outRect.bottom = inner
+            }
+        })
         navigationBar.attach(recyclerView)
 
         rootView.findViewById<EditText?>(R.id.search_input)?.doAfterTextChanged {
@@ -105,7 +126,7 @@ class GenresFragment : SwitcherPostponeFragment() {
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) = ViewHolder(
             LayoutInflater.from(parent.context)
-                .inflate(R.layout.layout_song_item, parent, false)
+                .inflate(R.layout.layout_album_item, parent, false)
         )
 
         override fun getItemCount(): Int = items.size
@@ -116,24 +137,27 @@ class GenresFragment : SwitcherPostponeFragment() {
             holder.subtitle?.text = resources.getQuantityString(
                 R.plurals.songs, genre.songList.size, genre.songList.size
             )
-            holder.cover?.visibility = View.GONE
-            holder.menu?.visibility = View.GONE
+            holder.cover?.load(genre.songList.firstNotNullOfOrNull {
+                it.mediaMetadata.artworkUri
+            }) {
+                crossfade(true)
+            }
             holder.itemView.setOnClickListener {
                 activity.fragmentSwitcherView.addFragmentToCurrentStack(
                     StationDetailFragment.newInstance(
                         title = genre.title ?: getString(R.string.unknown_genre),
                         subtitle = null,
-                        mediaIds = genre.songList.map { song -> song.mediaId }
+                        mediaIds = genre.songList.map { song -> song.mediaId },
+                        kind = StationDetailFragment.CollectionKind.STATION
                     )
                 )
             }
         }
 
         inner class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
-            val cover: View? = view.findViewById(R.id.cover)
+            val cover: android.widget.ImageView? = view.findViewById(R.id.cover)
             val title: TextView? = view.findViewById(R.id.title)
             val subtitle: TextView? = view.findViewById(R.id.subtitle)
-            val menu: View? = view.findViewById(R.id.menu_btn)
         }
     }
 }

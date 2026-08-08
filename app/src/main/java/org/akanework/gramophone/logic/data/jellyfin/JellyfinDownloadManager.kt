@@ -11,6 +11,7 @@ import androidx.media3.exoplayer.offline.Download
 import androidx.media3.exoplayer.offline.DownloadManager
 import androidx.media3.exoplayer.offline.DownloadRequest
 import androidx.media3.exoplayer.offline.DownloadService
+import androidx.media3.datasource.cache.ContentMetadata
 import org.akanework.gramophone.logic.GramophoneDownloadService
 import org.akanework.gramophone.logic.getUri
 import java.util.concurrent.Executors
@@ -128,6 +129,48 @@ object JellyfinDownloadManager {
         Log.w(TAG, "Could not read download index", e)
         emptySet()
     }
+
+    /**
+     * Media ids that can be played without reaching Jellyfin.
+     *
+     * Downloads and streamed/prefetched audio intentionally share one SimpleCache. The download
+     * index only describes items added through DownloadService, so older downloads and fully
+     * prefetched tracks must also be discovered from complete cache entries.
+     */
+    fun availableOfflineIds(
+        context: Context,
+        items: Collection<MediaItem>,
+    ): Set<String> {
+        if (items.isEmpty()) return emptySet()
+        val completed = completedIds(context)
+        val cache = JellyfinMediaCache.get(context)
+        return buildSet {
+            addAll(completed)
+            items.forEach { item ->
+                if (item.mediaId.isBlank() || item.mediaId in completed) return@forEach
+                val key = item.getUri()?.toString() ?: return@forEach
+                val length = ContentMetadata.getContentLength(cache.getContentMetadata(key))
+                if (length > 0L && cache.isCached(key, 0L, length)) add(item.mediaId)
+            }
+        }
+    }
+
+    /**
+     * Whether every playable item in a collection is already available offline.
+     *
+     * This reads Media3's download index, so callers must invoke it away from the main thread.
+     * Keeping the rule here ensures albums, artists, playlists, stations and individual-song
+     * menus all agree about whether to offer Download or Delete from device.
+     */
+    fun areAllDownloaded(context: Context, items: Collection<MediaItem>): Boolean {
+        if (items.isEmpty()) return false
+        val ids = items.asSequence().map(MediaItem::mediaId).filter(String::isNotBlank).toSet()
+        return ids.isNotEmpty() && completedIds(context).containsAll(ids)
+    }
+
+    /** Reads the same index for one row/player item. Call off the main thread. */
+    fun isDownloaded(context: Context, item: MediaItem): Boolean =
+        item.mediaId.isNotBlank() && item.mediaId in completedIds(context)
 
     /** Bytes occupied by completed downloads, as opposed to incidentally cached streaming data. */
     fun downloadedBytes(context: Context): Long = try {

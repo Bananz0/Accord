@@ -17,6 +17,7 @@ import android.graphics.RectF
 import android.view.MotionEvent
 import android.view.ViewConfiguration
 import android.view.View
+import android.view.VelocityTracker
 import android.view.WindowInsets
 import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.constraintlayout.widget.ConstraintSet
@@ -42,6 +43,9 @@ import uk.akane.cupertino.popup.PopupMenuHost
 import uk.akane.cupertino.widget.dpToPx
 import uk.akane.cupertino.widget.image.SimpleImageView
 import uk.akane.cupertino.utils.AnimationUtils
+import uk.akane.accord.ui.MainActivity
+import uk.akane.accord.ui.components.ResistiveSwipeHaptics
+import uk.akane.accord.ui.components.resistedSwipeDistance
 import kotlin.math.abs
 import kotlin.math.absoluteValue
 import kotlin.math.roundToInt
@@ -68,6 +72,7 @@ class FloatingPanelLayout @JvmOverloads constructor(
     private var previewView: View
 
     private var flingValueAnimator: ValueAnimator? = null
+    private var previewSwipeAnimator: ValueAnimator? = null
     private var penultimateMotionTime = 0L
     private var penultimateMotionY = 0F
     private var lastMotionTime = 0L
@@ -332,7 +337,10 @@ class FloatingPanelLayout @JvmOverloads constructor(
         // Preview
         previewView.scaleX = lerp(1f, fullScreenView.width.toFloat() / previewView.width, fraction)
         previewView.scaleY = previewView.scaleX
-        previewView.translationY = -deltaY
+        val previewGestureX = if (fraction == 0F) previewSwipeOffsetX else 0F
+        val previewGestureY = if (fraction == 0F) previewSwipeOffsetY else 0F
+        previewView.translationX = previewGestureX
+        previewView.translationY = -deltaY + previewGestureY
 
         updateTransitionFraction(fraction)
 
@@ -343,10 +351,10 @@ class FloatingPanelLayout @JvmOverloads constructor(
         fullScreenView.pivotY = 0f
         fullScreenView.pivotX = fullScreenView.width / 2f
 
-        previewLeft = previewView.marginStart.toFloat()
-        previewTop = (fullScreenView.height - previewView.height - previewView.marginBottom).toFloat()
-        previewRight = fullScreenView.width.toFloat() - previewView.marginEnd
-        previewBottom = fullScreenView.height.toFloat() - previewView.marginBottom
+        previewLeft = previewView.marginStart.toFloat() + previewGestureX
+        previewTop = (fullScreenView.height - previewView.height - previewView.marginBottom).toFloat() + previewGestureY
+        previewRight = fullScreenView.width.toFloat() - previewView.marginEnd + previewGestureX
+        previewBottom = fullScreenView.height.toFloat() - previewView.marginBottom + previewGestureY
 
         fullLeft = 0f
         fullTop = 0f
@@ -394,8 +402,71 @@ class FloatingPanelLayout @JvmOverloads constructor(
         popupHelper.drawPopup(canvas)
     }
 
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        updatePreviewReleaseVelocity(ev)
+        val handled = super.dispatchTouchEvent(ev)
+        var recoveredPreviewGesture = false
+
+        // A child, the system navigation gesture, or a parent can consume the terminal event after
+        // this layout has already started moving the mini player. Keep a final safety net at the
+        // dispatch boundary so a swipe can never be left translated with no gesture owner.
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_UP -> if (previewSwipeAxis != PreviewSwipeAxis.NONE) {
+                previewChildGestureActive = false
+                previewChildGestureCandidate = false
+                endPreviewSwipeIfActive()
+                recoveredPreviewGesture = true
+            }
+
+            MotionEvent.ACTION_CANCEL -> if (hasActivePreviewSwipe()) {
+                cancelPreviewSwipeGesture()
+                recoveredPreviewGesture = true
+            }
+        }
+        if (ev.actionMasked == MotionEvent.ACTION_UP || ev.actionMasked == MotionEvent.ACTION_CANCEL) {
+            previewVelocityTracker?.recycle()
+            previewVelocityTracker = null
+        }
+        return handled || recoveredPreviewGesture
+    }
+
     override fun onInterceptTouchEvent(ev: MotionEvent?): Boolean {
-        return popupHelper.transformFraction == 1F
+        if (popupHelper.transformFraction == 1F) return true
+        if (ev == null || state != SlideStatus.COLLAPSED) return false
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                previewChildGestureCandidate =
+                    ev.x in previewLeft..previewRight && ev.y in previewTop..previewBottom
+                previewChildGestureActive = false
+                previewTouchDownX = ev.x
+                previewTouchDownY = ev.y
+            }
+            MotionEvent.ACTION_MOVE -> if (previewChildGestureCandidate) {
+                val dx = ev.x - previewTouchDownX
+                val dy = ev.y - previewTouchDownY
+                if (abs(dx) > touchSlop || abs(dy) > touchSlop) {
+                    val axis = when {
+                        abs(dx) > abs(dy) -> PreviewSwipeAxis.HORIZONTAL
+                        dy > 0F -> PreviewSwipeAxis.DOWN
+                        else -> PreviewSwipeAxis.NONE
+                    }
+                    if (axis != PreviewSwipeAxis.NONE) {
+                        previewSwipeAxis = axis
+                        previewChildGestureActive = true
+                        updatePreviewSwipeOffsets(dx, dy)
+                        return true
+                    }
+                    previewChildGestureCandidate = false
+                }
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                // Once interception starts, onTouchEvent must receive the matching terminal event.
+                // Clearing ownership here used to leave the mini player at its last drag offset.
+                if (previewChildGestureActive) return true
+                previewChildGestureCandidate = false
+            }
+        }
+        return false
     }
 
     /**
@@ -460,6 +531,30 @@ class FloatingPanelLayout @JvmOverloads constructor(
             return true
         }
         if (popupHelper.transformFraction != 0F) return true
+        // When a drag begins on the play/next buttons, interception starts after touch slop so a
+        // plain tap still belongs to the button. From that point this direct path owns the drag;
+        // GestureDetector did not receive its ACTION_DOWN and therefore cannot reconstruct it.
+        if (previewChildGestureActive) {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_MOVE -> updatePreviewSwipeOffsets(
+                    event.x - previewTouchDownX,
+                    event.y - previewTouchDownY
+                )
+                MotionEvent.ACTION_UP -> {
+                    updatePreviewSwipeOffsets(
+                        event.x - previewTouchDownX,
+                        event.y - previewTouchDownY
+                    )
+                    previewChildGestureActive = false
+                    previewChildGestureCandidate = false
+                    endPreviewSwipeIfActive()
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    cancelPreviewSwipeGesture()
+                }
+            }
+            return true
+        }
         return if (isInsideBoundingBox(event.x, event.y) || isDragging) {
             if (gestureDetector.onTouchEvent(event)) {
                 true
@@ -507,7 +602,9 @@ class FloatingPanelLayout @JvmOverloads constructor(
     ): Boolean {
         // A fling ends the gesture without onUp() ever running, so the artwork swipe has to be let
         // go of here too or the cover stays wherever the finger left it.
-        if (endCoverSwipeIfActive()) return true
+        if (endCoverSwipeIfActive(velocityX) ||
+            endPreviewSwipeIfActive(velocityX, velocityY)
+        ) return true
         coverSwipeRejected = false
         isDragging = false
         val isSlidingUp = (penultimateMotionY - lastMotionY) > 0
@@ -549,6 +646,8 @@ class FloatingPanelLayout @JvmOverloads constructor(
         distanceX: Float,
         distanceY: Float
     ): Boolean {
+        if (handlePreviewSwipe(e1, e2)) return true
+
         // A sideways drag that began on the artwork belongs to the player, not to this panel. It has
         // to be decided here rather than by a touch listener on the artwork itself: this panel owns
         // the gesture from the moment it starts, and a child that consumed the press to watch for a
@@ -618,7 +717,7 @@ class FloatingPanelLayout @JvmOverloads constructor(
     }
 
     private fun onUp() {
-        if (endCoverSwipeIfActive()) return
+        if (endCoverSwipeIfActive() || endPreviewSwipeIfActive()) return
         if (isDragging) {
             flingValueAnimator?.cancel()
             flingValueAnimator = null
@@ -732,7 +831,26 @@ class FloatingPanelLayout @JvmOverloads constructor(
         (previewView as? PreviewPlayer)?.setCover(drawable)
     }
 
+    /** Makes a dismissed mini player available again as soon as a new queue is started. */
+    fun showForPlayback() {
+        if (visibility == VISIBLE) return
+        visibility = VISIBLE
+        previewSwipeHaptics.reset()
+        previewSwipeAnimator?.cancel()
+        previewSwipeAnimator = null
+        previewSwipeOffsetX = 0F
+        previewSwipeOffsetY = 0F
+        if (fraction != 0F) fraction = 0F
+        updateTransform(0F)
+    }
+
+    override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
+        super.onWindowFocusChanged(hasWindowFocus)
+        if (!hasWindowFocus && hasActivePreviewSwipe()) resetPreviewSwipeImmediately()
+    }
+
     override fun onDetachedFromWindow() {
+        resetPreviewSwipeImmediately()
         onSlideListeners.clear()
         removeView(transitionImageView)
         transitionImageView = null
@@ -794,7 +912,7 @@ class FloatingPanelLayout @JvmOverloads constructor(
         fun onCoverSwipeMove(dx: Float)
 
         /** Called once when the finger lifts, with the final distance. */
-        fun onCoverSwipeEnd(dx: Float)
+        fun onCoverSwipeEnd(dx: Float, velocityX: Float)
     }
 
     var coverSwipeHandler: CoverSwipeHandler? = null
@@ -803,16 +921,307 @@ class FloatingPanelLayout @JvmOverloads constructor(
     private var coverSwipeRejected = false
     private var coverSwipeDx = 0F
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
+    private val minimumFlingVelocity = ViewConfiguration.get(context).scaledMinimumFlingVelocity
+
+    private enum class PreviewSwipeAxis { NONE, HORIZONTAL, DOWN }
+
+    private var previewSwipeAxis = PreviewSwipeAxis.NONE
+    private var previewSwipeRejected = false
+    private var previewSwipeRawX = 0F
+    private var previewSwipeRawY = 0F
+    private var previewSwipeOffsetX = 0F
+    private var previewSwipeOffsetY = 0F
+    private var previewChildGestureCandidate = false
+    private var previewChildGestureActive = false
+    private var previewTouchDownX = 0F
+    private var previewTouchDownY = 0F
+    private val previewSwipeHaptics = ResistiveSwipeHaptics()
+    private var previewVelocityTracker: VelocityTracker? = null
+    private var previewReleaseVelocityX = 0F
+    private var previewReleaseVelocityY = 0F
+
+    private fun updatePreviewReleaseVelocity(event: MotionEvent) {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                previewVelocityTracker?.recycle()
+                previewVelocityTracker = VelocityTracker.obtain().also { it.addMovement(event) }
+                previewReleaseVelocityX = 0F
+                previewReleaseVelocityY = 0F
+            }
+
+            MotionEvent.ACTION_MOVE -> previewVelocityTracker?.addMovement(event)
+
+            MotionEvent.ACTION_UP -> previewVelocityTracker?.let {
+                it.addMovement(event)
+                it.computeCurrentVelocity(1000)
+                previewReleaseVelocityX = it.xVelocity
+                previewReleaseVelocityY = it.yVelocity
+            }
+
+            MotionEvent.ACTION_CANCEL -> {
+                previewReleaseVelocityX = 0F
+                previewReleaseVelocityY = 0F
+            }
+        }
+    }
+
+    private fun hasActivePreviewSwipe(): Boolean =
+        previewSwipeAxis != PreviewSwipeAxis.NONE || previewChildGestureActive
+
+    private fun cancelPreviewSwipeGesture() {
+        previewSwipeHaptics.release(previewView)
+        previewChildGestureCandidate = false
+        previewChildGestureActive = false
+        previewSwipeRejected = false
+        previewSwipeAxis = PreviewSwipeAxis.NONE
+        previewSwipeRawX = 0F
+        previewSwipeRawY = 0F
+        previewReleaseVelocityX = 0F
+        previewReleaseVelocityY = 0F
+        isDragging = false
+        animatePreviewSwipe(0F, 0F)
+    }
+
+    private fun resetPreviewSwipeImmediately() {
+        previewSwipeHaptics.reset()
+        previewChildGestureCandidate = false
+        previewChildGestureActive = false
+        previewSwipeRejected = false
+        previewSwipeAxis = PreviewSwipeAxis.NONE
+        previewSwipeRawX = 0F
+        previewSwipeRawY = 0F
+        previewReleaseVelocityX = 0F
+        previewReleaseVelocityY = 0F
+        isDragging = false
+        previewSwipeAnimator?.cancel()
+        previewSwipeAnimator = null
+        previewSwipeOffsetX = 0F
+        previewSwipeOffsetY = 0F
+        updateTransform(fraction)
+    }
 
     /** @return true when a swipe was in progress and has now been handed back to the player. */
-    private fun endCoverSwipeIfActive(): Boolean {
+    private fun endCoverSwipeIfActive(velocityX: Float = previewReleaseVelocityX): Boolean {
         coverSwipeRejected = false
         if (!coverSwipeActive) return false
         coverSwipeActive = false
         isDragging = false
-        coverSwipeHandler?.onCoverSwipeEnd(coverSwipeDx)
+        coverSwipeHandler?.onCoverSwipeEnd(coverSwipeDx, velocityX)
         coverSwipeDx = 0F
         return true
+    }
+
+    /**
+     * The collapsed player is itself a carousel: left advances, right goes back, and a downward
+     * pull dismisses playback. Offsets are damped so the bar resists rather than leaving the finger.
+     */
+    private fun handlePreviewSwipe(e1: MotionEvent?, e2: MotionEvent): Boolean {
+        if (state != SlideStatus.COLLAPSED || e1 == null || previewSwipeRejected) return false
+        val startInsidePreview = e1.x in previewLeft..previewRight && e1.y in previewTop..previewBottom
+        if (!startInsidePreview) return false
+
+        val dx = e2.x - e1.x
+        val dy = e2.y - e1.y
+        if (previewSwipeAxis == PreviewSwipeAxis.NONE) {
+            if (abs(dx) <= touchSlop && abs(dy) <= touchSlop) return false
+            previewSwipeAxis = when {
+                abs(dx) > abs(dy) -> PreviewSwipeAxis.HORIZONTAL
+                dy > 0F -> PreviewSwipeAxis.DOWN
+                else -> {
+                    // An upward drag still expands the full player.
+                    previewSwipeRejected = true
+                    return false
+                }
+            }
+        }
+
+        updatePreviewSwipeOffsets(dx, dy)
+        return true
+    }
+
+    private fun updatePreviewSwipeOffsets(dx: Float, dy: Float) {
+        previewSwipeRawX = dx
+        previewSwipeRawY = dy
+        when (previewSwipeAxis) {
+            PreviewSwipeAxis.HORIZONTAL -> {
+                val limit = previewView.width * PREVIEW_MAX_HORIZONTAL_TRAVEL
+                val player = (activity as? MainActivity)?.getPlayer()
+                val actionAvailable = when {
+                    dx < 0F -> player?.hasNextMediaItem() == true
+                    dx > 0F -> player?.hasPreviousMediaItem() == true
+                    else -> false
+                }
+                previewSwipeHaptics.update(
+                    previewView,
+                    dx,
+                    previewView.width * PREVIEW_HORIZONTAL_THRESHOLD,
+                    actionAvailable,
+                )
+                previewSwipeOffsetX = resistedSwipeDistance(dx, limit, PREVIEW_SWIPE_FOLLOW)
+                previewSwipeOffsetY = 0F
+            }
+            PreviewSwipeAxis.DOWN -> {
+                previewSwipeOffsetX = 0F
+                val limit = previewView.height * PREVIEW_MAX_DOWN_TRAVEL
+                val downDistance = dy.coerceAtLeast(0F)
+                previewSwipeHaptics.update(
+                    previewView,
+                    downDistance,
+                    previewView.height * PREVIEW_DOWN_THRESHOLD,
+                )
+                previewSwipeOffsetY = resistedSwipeDistance(
+                    downDistance,
+                    limit,
+                    PREVIEW_SWIPE_FOLLOW,
+                )
+            }
+            PreviewSwipeAxis.NONE -> return
+        }
+        previewSwipeAnimator?.cancel()
+        previewSwipeAnimator = null
+        updateTransform(0F)
+    }
+
+    /** @return true when a collapsed-player swipe was active and has been completed. */
+    private fun endPreviewSwipeIfActive(
+        velocityX: Float = previewReleaseVelocityX,
+        velocityY: Float = previewReleaseVelocityY,
+    ): Boolean {
+        previewSwipeRejected = false
+        val axis = previewSwipeAxis
+        if (axis == PreviewSwipeAxis.NONE) return false
+        previewSwipeAxis = PreviewSwipeAxis.NONE
+        isDragging = false
+
+        val player = (activity as? MainActivity)?.getPlayer()
+        val flingThreshold = minimumFlingVelocity * PREVIEW_FLING_VELOCITY_MULTIPLIER
+        when (axis) {
+            PreviewSwipeAxis.HORIZONTAL -> {
+                val hasFling = abs(velocityX) >= flingThreshold
+                val releaseDirection = if (hasFling) velocityX else previewSwipeRawX
+                val distanceReached =
+                    abs(previewSwipeRawX) >= previewView.width * PREVIEW_HORIZONTAL_THRESHOLD
+                val canMove = when {
+                    releaseDirection < 0F -> player?.hasNextMediaItem() == true
+                    releaseDirection > 0F -> player?.hasPreviousMediaItem() == true
+                    else -> false
+                }
+                val committed = (distanceReached || hasFling) && canMove
+                if (committed) {
+                    if (releaseDirection < 0F) {
+                        previewSwipeHaptics.commit(previewView)
+                        player?.seekToNextMediaItem()
+                    } else {
+                        previewSwipeHaptics.commit(previewView)
+                        player?.seekToPreviousMediaItem()
+                    }
+                    val momentumTarget = if (releaseDirection < 0F) {
+                        -previewView.width * PREVIEW_MAX_HORIZONTAL_TRAVEL
+                    } else {
+                        previewView.width * PREVIEW_MAX_HORIZONTAL_TRAVEL
+                    }
+                    animatePreviewSwipe(momentumTarget, 0F, PREVIEW_MOMENTUM_MS) {
+                        animatePreviewSwipe(0F, 0F, PREVIEW_SETTLE_MS)
+                    }
+                } else {
+                    previewSwipeHaptics.release(previewView)
+                    val projectedRaw = previewSwipeRawX +
+                        velocityX * PREVIEW_MOMENTUM_PROJECTION_SECONDS
+                    val projectedOffset = resistedSwipeDistance(
+                        projectedRaw,
+                        previewView.width * PREVIEW_MAX_HORIZONTAL_TRAVEL,
+                        PREVIEW_SWIPE_FOLLOW,
+                    )
+                    if (abs(projectedOffset) > abs(previewSwipeOffsetX)) {
+                        animatePreviewSwipe(projectedOffset, 0F, PREVIEW_MOMENTUM_MS) {
+                            animatePreviewSwipe(0F, 0F, PREVIEW_SETTLE_MS)
+                        }
+                    } else {
+                        animatePreviewSwipe(0F, 0F, PREVIEW_SETTLE_MS)
+                    }
+                }
+            }
+            PreviewSwipeAxis.DOWN -> {
+                val hasDownFling = velocityY >= flingThreshold
+                if (previewSwipeRawY >= previewView.height * PREVIEW_DOWN_THRESHOLD || hasDownFling) {
+                    previewSwipeHaptics.commit(previewView)
+                    val dismissalTarget = previewView.height + previewView.marginBottom.toFloat()
+                    val remaining = (dismissalTarget - previewSwipeOffsetY).coerceAtLeast(0F)
+                    val duration = if (velocityY > 0F) {
+                        ((remaining / velocityY) * 1000F).toLong()
+                            .coerceIn(PREVIEW_DISMISS_MIN_MS, PREVIEW_DISMISS_MAX_MS)
+                    } else {
+                        PREVIEW_DISMISS_MAX_MS
+                    }
+                    animatePreviewSwipe(0F, dismissalTarget, duration) {
+                        player?.stop()
+                        player?.clearMediaItems()
+                        visibility = GONE
+                        previewSwipeOffsetX = 0F
+                        previewSwipeOffsetY = 0F
+                    }
+                } else {
+                    previewSwipeHaptics.release(previewView)
+                    val projectedRaw = (previewSwipeRawY +
+                        velocityY.coerceAtLeast(0F) * PREVIEW_MOMENTUM_PROJECTION_SECONDS)
+                        .coerceAtLeast(0F)
+                    val projectedOffset = resistedSwipeDistance(
+                        projectedRaw,
+                        previewView.height * PREVIEW_MAX_DOWN_TRAVEL,
+                        PREVIEW_SWIPE_FOLLOW,
+                    )
+                    if (projectedOffset > previewSwipeOffsetY) {
+                        animatePreviewSwipe(0F, projectedOffset, PREVIEW_MOMENTUM_MS) {
+                            animatePreviewSwipe(0F, 0F, PREVIEW_SETTLE_MS)
+                        }
+                    } else {
+                        animatePreviewSwipe(0F, 0F, PREVIEW_SETTLE_MS)
+                    }
+                }
+            }
+            PreviewSwipeAxis.NONE -> Unit
+        }
+        previewSwipeRawX = 0F
+        previewSwipeRawY = 0F
+        previewReleaseVelocityX = 0F
+        previewReleaseVelocityY = 0F
+        return true
+    }
+
+    private fun animatePreviewSwipe(
+        targetX: Float,
+        targetY: Float,
+        animationDuration: Long = DEFAULT_ANIMATION_DURATION,
+        onEnd: (() -> Unit)? = null,
+    ) {
+        previewSwipeAnimator?.cancel()
+        val startX = previewSwipeOffsetX
+        val startY = previewSwipeOffsetY
+        previewSwipeAnimator = ValueAnimator.ofFloat(0F, 1F).apply {
+            duration = animationDuration
+            interpolator = AnimationUtils.easingStandardInterpolator
+            addUpdateListener { animator ->
+                val progress = animator.animatedValue as Float
+                previewSwipeOffsetX = lerp(startX, targetX, progress)
+                previewSwipeOffsetY = lerp(startY, targetY, progress)
+                updateTransform(0F)
+            }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                private var wasCancelled = false
+
+                override fun onAnimationCancel(animation: android.animation.Animator) {
+                    wasCancelled = true
+                }
+
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    if (previewSwipeAnimator === animation) previewSwipeAnimator = null
+                    // A new drag cancels the previous settle. Its old dismissal callback must not
+                    // stop playback or hide the mini player after the new gesture has taken over.
+                    if (!wasCancelled) onEnd?.invoke()
+                }
+            })
+            start()
+        }
     }
 
     fun callUpPopup(
@@ -869,6 +1278,19 @@ class FloatingPanelLayout @JvmOverloads constructor(
         const val MAXIMUM_ANIMATION_TIME = 320L
         const val SPEED_FACTOR = 2F
         const val DEFAULT_ANIMATION_DURATION = (MINIMUM_ANIMATION_TIME + MAXIMUM_ANIMATION_TIME) / 2
+        private const val PREVIEW_SWIPE_FOLLOW = 0.56F
+        private const val PREVIEW_HORIZONTAL_THRESHOLD = 0.32F
+        private const val PREVIEW_DOWN_THRESHOLD = 0.68F
+        private const val PREVIEW_MAX_HORIZONTAL_TRAVEL =
+            PREVIEW_HORIZONTAL_THRESHOLD * PREVIEW_SWIPE_FOLLOW
+        private const val PREVIEW_MAX_DOWN_TRAVEL =
+            PREVIEW_DOWN_THRESHOLD * PREVIEW_SWIPE_FOLLOW
+        private const val PREVIEW_FLING_VELOCITY_MULTIPLIER = 1.35F
+        private const val PREVIEW_MOMENTUM_PROJECTION_SECONDS = 0.07F
+        private const val PREVIEW_MOMENTUM_MS = 70L
+        private const val PREVIEW_SETTLE_MS = 190L
+        private const val PREVIEW_DISMISS_MIN_MS = 90L
+        private const val PREVIEW_DISMISS_MAX_MS = 220L
     }
 
 }

@@ -27,6 +27,7 @@ open class FadingVerticalEdgeLayout : FrameLayout {
     private var gradientRectTop: Rect? = null
     private var gradientRectBottom: Rect? = null
     private var gradientDirtyFlags = 0
+    private var gradientOffsetBottom = 0
 
     constructor(context: Context?) : super(context!!) {
         init(null)
@@ -113,6 +114,7 @@ open class FadingVerticalEdgeLayout : FrameLayout {
     private var previousPaddingTop = 0
 
     override fun dispatchDraw(canvas: Canvas) {
+        updateGradientIfNecessary()
         if (previousPaddingBottom != paddingBottom || previousPaddingTop != paddingTop) {
             updateGradientIfNecessary()
             previousPaddingBottom = paddingBottom
@@ -170,7 +172,7 @@ open class FadingVerticalEdgeLayout : FrameLayout {
         val size =
             min(gradientSizeBottom.toDouble(), actualHeight.toDouble()).toInt()
         val l = getPaddingLeft()
-        val t = paddingTop + actualHeight - size
+        val t = paddingTop + actualHeight - size - gradientOffsetBottom
         val r = width - getPaddingRight()
         val b = t + size
         gradientRectBottom!![l, t, r] = b
@@ -184,6 +186,13 @@ open class FadingVerticalEdgeLayout : FrameLayout {
             Shader.TileMode.CLAMP
         )
         gradientPaintBottom!!.setShader(gradient)
+    }
+
+    fun setBottomFadeOffset(offset: Int) {
+        if (gradientOffsetBottom == offset) return
+        gradientOffsetBottom = offset
+        gradientDirtyFlags = gradientDirtyFlags or DIRTY_FLAG_BOTTOM
+        invalidate()
     }
 
     companion object {

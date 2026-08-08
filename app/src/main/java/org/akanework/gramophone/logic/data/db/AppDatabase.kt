@@ -32,7 +32,7 @@ const val APP_DATABASE_FILE_NAME = "app.db"
         CachedSong::class,
         PendingScrobble::class,
     ],
-    version = 4,
+    version = 5,
 )
 abstract class AppDatabase : RoomDatabase() {
 
@@ -106,6 +106,13 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** Retains Jellyfin's complete track credit instead of collapsing it to the first artist. */
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `$CACHED_SONG_TABLE_NAME` ADD COLUMN `trackArtists` TEXT")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -113,7 +120,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     APP_DATABASE_FILE_NAME
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     .build()
                     .apply { instance = this }
             }

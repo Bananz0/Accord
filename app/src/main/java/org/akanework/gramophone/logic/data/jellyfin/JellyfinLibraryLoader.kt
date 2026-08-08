@@ -36,7 +36,7 @@ import java.util.UUID
  * say - a server-side album list can contain albums whose tracks the user cannot see.
  */
 class JellyfinLibraryLoader(
-    private val api: ApiClient,
+    private val api: ApiClient? = null,
     private val idMap: JellyfinIdMap,
 ) {
 
@@ -54,6 +54,13 @@ class JellyfinLibraryLoader(
      * Returns null when nothing is cached yet. Stream and artwork URLs are regenerated here rather
      * than stored, because they embed the access token and would break after a re-login.
      */
+    fun loadFromCacheFast(dao: CachedSongDao, limit: Int = 100): LibraryStoreClass? {
+        val cached = dao.getInitialFast(limit)
+        if (cached.isEmpty()) return null
+        val entries = cached.map { row -> cachedToEntry(row) }
+        return LibraryGrouper.group(entries)
+    }
+
     fun loadFromCache(dao: CachedSongDao): LibraryStoreClass? {
         val cached = dao.getAll()
         if (cached.isEmpty()) return null
@@ -116,9 +123,10 @@ class JellyfinLibraryLoader(
      */
     private suspend fun fetchPageWithRetry(startIndex: Int): BaseItemDtoQueryResult {
         var lastError: Exception? = null
+        val client = checkNotNull(api) { "ApiClient is required for network sync" }
         repeat(MAX_PAGE_ATTEMPTS) { attempt ->
             try {
-                val response by api.itemsApi.getItems(
+                val response by client.itemsApi.getItems(
                     includeItemTypes = setOf(BaseItemKind.AUDIO),
                     recursive = true,
                     sortBy = setOf(ItemSortBy.SORT_NAME),
@@ -142,6 +150,11 @@ class JellyfinLibraryLoader(
     private fun toCachedSong(item: BaseItemDto): CachedSong? {
         val songId = idMap.intern(item.id.toString(), JellyfinId.TYPE_AUDIO) ?: return null
 
+        val trackArtists = item.artistItems
+            ?.mapNotNull { it.name?.trim()?.takeIf(String::isNotBlank) }
+            ?.ifEmpty { null }
+            ?: item.artists?.mapNotNull { it.trim().takeIf(String::isNotBlank) }
+            ?: emptyList()
         val artistItem = item.artistItems?.firstOrNull()
         val artistName = artistItem?.name ?: item.artists?.firstOrNull()
         val artistId = artistItem?.id?.let { idMap.intern(it.toString(), JellyfinId.TYPE_ARTIST) }
@@ -161,6 +174,8 @@ class JellyfinLibraryLoader(
             jellyfinId = item.id.toString(),
             title = item.name,
             artist = artistName,
+            trackArtists = trackArtists.distinctBy(String::lowercase).joinToString(TRACK_ARTIST_SEPARATOR)
+                .takeIf(String::isNotBlank),
             artistId = artistId,
             album = item.album,
             albumId = albumId,
@@ -225,6 +240,10 @@ class JellyfinLibraryLoader(
                         putInt(EXTRA_PLAY_COUNT, row.playCount)
                         putBoolean(EXTRA_IS_FAVOURITE, row.isFavourite)
                         row.lastPlayed?.let { putLong(EXTRA_LAST_PLAYED, it) }
+                        row.trackArtists
+                            ?.split(TRACK_ARTIST_SEPARATOR)
+                            ?.filter(String::isNotBlank)
+                            ?.let { putStringArrayList(EXTRA_TRACK_ARTISTS, ArrayList(it)) }
                     })
                     .build()
             ).build()
@@ -250,29 +269,33 @@ class JellyfinLibraryLoader(
      * bundles an FFmpeg decoder and relies on real container metadata for gapless playback, both of
      * which server-side transcoding would throw away.
      */
-    private fun streamUrl(row: CachedSong): String = api.audioApi.getAudioStreamUrl(
-        itemId = UUID.fromString(row.jellyfinId.toDashedUuid()),
-        container = row.container,
-        mediaSourceId = row.mediaSourceId,
-        static = true,
-    )
+    private fun streamUrl(row: CachedSong): String {
+        val client = api ?: JellyfinClientHolder.api() ?: return ""
+        return client.audioApi.getAudioStreamUrl(
+            itemId = UUID.fromString(row.jellyfinId.toDashedUuid()),
+            container = row.container,
+            mediaSourceId = row.mediaSourceId,
+            static = true,
+        )
+    }
 
     /**
      * Prefers the album's artwork so every track in an album shares one cache entry, and falls
      * back to a track-specific image when the album has none.
      */
     private fun artworkUrl(row: CachedSong): String? {
+        val client = api ?: JellyfinClientHolder.api() ?: return null
         val albumTag = row.albumImageTag
         val albumGuid = row.albumJellyfinId
         if (albumTag != null && albumGuid != null) {
-            return api.imageApi.getItemImageUrl(
+            return client.imageApi.getItemImageUrl(
                 itemId = UUID.fromString(albumGuid.toDashedUuid()),
                 imageType = ImageType.PRIMARY,
                 tag = albumTag,
             )
         }
         val ownTag = row.ownImageTag ?: return null
-        return api.imageApi.getItemImageUrl(
+        return client.imageApi.getItemImageUrl(
             itemId = UUID.fromString(row.jellyfinId.toDashedUuid()),
             imageType = ImageType.PRIMARY,
             tag = ownTag,
@@ -284,12 +307,14 @@ class JellyfinLibraryLoader(
         const val EXTRA_PLAY_COUNT = "JellyfinPlayCount"
         const val EXTRA_IS_FAVOURITE = "JellyfinIsFavourite"
         const val EXTRA_LAST_PLAYED = "JellyfinLastPlayed"
+        const val EXTRA_TRACK_ARTISTS = "JellyfinTrackArtists"
 
         private const val TAG = "JellyfinLibraryLoader"
         private const val PAGE_SIZE = 500
         private const val TICKS_PER_MILLISECOND = 10_000L
         private const val MAX_PAGE_ATTEMPTS = 3
         private const val RETRY_BASE_DELAY_MS = 1_000L
+        private const val TRACK_ARTIST_SEPARATOR = "\u001f"
 
         private val REQUESTED_FIELDS = setOf(
             ItemFields.GENRES,

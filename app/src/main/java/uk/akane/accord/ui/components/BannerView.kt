@@ -1,103 +1,106 @@
 package uk.akane.accord.ui.components
 
+import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Shader
-import android.graphics.SurfaceTexture
-import android.graphics.drawable.Drawable
-import android.media.MediaPlayer
 import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
+import android.text.TextUtils
 import android.util.AttributeSet
-import android.view.Surface
-import android.view.TextureView
-import android.widget.FrameLayout
+import android.view.View
+import android.view.animation.LinearInterpolator
 import androidx.core.content.res.ResourcesCompat
+import androidx.core.graphics.ColorUtils
 import androidx.core.graphics.withTranslation
-import androidx.core.net.toUri
 import uk.akane.accord.R
 import uk.akane.accord.logic.dp
 import uk.akane.accord.logic.sp
 import uk.akane.cupertino.widget.continuousRoundRect
 
+/**
+ * Unified Station Banner View supporting software-generated procedural shader animations
+ * (MESH, AURORA, RINGS) derived dynamically per station/playlist seed with pixel-perfect typography.
+ */
 class BannerView @JvmOverloads constructor(
     context: Context, attrs: AttributeSet? = null
-) : FrameLayout(context, attrs) {
+) : View(context, attrs) {
 
-    private var mediaPlayer: MediaPlayer? = null
-    private val textureView: TextureView = TextureView(context)
-    private var videoResId: Int = 0
-    private var placeholder: Drawable? = null
+    private val motion = ProceduralStationMotion()
+    private var shaderAnimator: ValueAnimator? = null
 
-    init {
-        addView(textureView, LayoutParams(
-            LayoutParams.MATCH_PARENT,
-            LayoutParams.MATCH_PARENT
-        ))
-
-        context.theme.obtainStyledAttributes(attrs, R.styleable.BannerView, 0, 0).apply {
-            try {
-                videoResId = getResourceId(R.styleable.BannerView_videoSrc, 0)
-                placeholder = ResourcesCompat.getDrawable(resources, getResourceId(R.styleable.BannerView_placeholder, 0), null)
-            } finally {
-                recycle()
-            }
-        }
-
-        textureView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-            override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
-                if (videoResId != 0) {
-                    playVideo(videoResId, Surface(surface))
-                }
-            }
-
-            override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {}
-            override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
-                releasePlayer()
-                return true
-            }
-
-            override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
-        }
-    }
-
-    private fun playVideo(resId: Int, surface: Surface) {
-        releasePlayer()
-        mediaPlayer = MediaPlayer().apply {
-            val uri = "android.resource://${context.packageName}/$resId".toUri()
-            setDataSource(context, uri)
-            setSurface(surface)
-            isLooping = true
-            setOnPreparedListener { start() }
-            prepareAsync()
-        }
-    }
-
-    private fun releasePlayer() {
-        mediaPlayer?.release()
-        mediaPlayer = null
-    }
+    private var textString: String = ""
+    private var gradientText: String = ""
 
     private val clipPath = Path()
     private val roundCornerSize = 18.dp.px
     private lateinit var linearGradient: LinearGradient
 
-    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
-        super.onLayout(changed, left, top, right, bottom)
+    private val gradientPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val bannerDrawable = ResourcesCompat.getDrawable(resources, R.drawable.ic_banner_logo, null)!!
+    private val bannerHeight = 14.dp.px
+    private val bannerWidth = (bannerDrawable.intrinsicWidth.toFloat() / bannerDrawable.intrinsicHeight.toFloat() * bannerHeight).toInt()
 
-        val width = measuredWidth
-        val size = width
+    private val titleTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = resources.getColor(R.color.systemWhite, null)
+        typeface = ResourcesCompat.getFont(context, R.font.inter_bold)
+        textSize = 21.sp.px
+    }
 
-        val childLeft = 0
-        val childTop = 0
-        val childRight = childLeft + size
-        val childBottom = childTop + size
+    private val subtitleTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = ColorUtils.setAlphaComponent(resources.getColor(R.color.systemWhite, null), 215)
+        typeface = ResourcesCompat.getFont(context, R.font.inter_medium)
+        textSize = 12.5.sp.px
+    }
+    private var titleLayout: StaticLayout? = null
+    private var subtitleLayout: StaticLayout? = null
 
-        textureView.layout(childLeft, childTop, childRight, childBottom)
+    /**
+     * Binds banner content dynamically.
+     * Calculates a unique procedural shader palette and style derived from [seed].
+     */
+    fun bind(
+        title: String,
+        artistsSummary: String? = null,
+        seed: String = title
+    ) {
+        this.textString = title
+        this.gradientText = artistsSummary.orEmpty()
+
+        val motionChanged = motion.bind(seed)
+        if (motionChanged && shaderAnimator != null) restartShaderAnimation()
+        updateGradientShader()
+        rebuildTextLayouts()
+        invalidate()
+    }
+
+    private fun startShaderAnimation() {
+        if (shaderAnimator != null) return
+        val start = motion.phase
+        shaderAnimator = ValueAnimator.ofFloat(start, start + 1f).apply {
+            duration = motion.durationMs
+            repeatCount = ValueAnimator.INFINITE
+            interpolator = LinearInterpolator()
+            addUpdateListener {
+                motion.phase = normalizePhase(it.animatedValue as Float)
+                postInvalidateOnAnimation()
+            }
+            start()
+        }
+    }
+
+    private fun restartShaderAnimation() {
+        releaseShaderAnimation()
+        if (isAttachedToWindow) startShaderAnimation()
+    }
+
+    private fun releaseShaderAnimation() {
+        shaderAnimator?.cancel()
+        shaderAnimator = null
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
@@ -108,20 +111,12 @@ class BannerView @JvmOverloads constructor(
             w.toFloat(), h.toFloat(),
             roundCornerSize
         )
-        linearGradient = LinearGradient(
-            0F, 0F,
-            measuredWidth.toFloat(), 0F,
-            intArrayOf(
-                resources.getColor(R.color.breezeGradientStart, null),
-                resources.getColor(R.color.breezeGradientEnd, null)
-            ),
-            null,
-            Shader.TileMode.CLAMP
-        )
-        gradientPaint.shader = linearGradient
-        val topOffset = 26.dp.px
-        val left = 26.dp.px
-        val top = topOffset
+        updateGradientShader()
+        motion.resize(w.toFloat(), w.toFloat())
+        rebuildTextLayouts()
+
+        val left = 18.dp.px
+        val top = 18.dp.px
         val right = left + bannerWidth
         val bottom = top + bannerHeight
 
@@ -130,111 +125,130 @@ class BannerView @JvmOverloads constructor(
             right.toInt(), bottom.toInt()
         )
 
-        placeholder?.setBounds(
-            0, 0,
-            w, w,
-        )
-
         bannerDrawable.setTint(
             resources.getColor(R.color.systemWhite, null)
         )
     }
 
-    private val gradientPaint = Paint().apply {
-        flags = Paint.ANTI_ALIAS_FLAG
+    private fun updateGradientShader() {
+        if (width <= 0) return
+        linearGradient = LinearGradient(
+            0F, width.toFloat(),
+            width.toFloat(), height.toFloat(),
+            intArrayOf(
+                motion.palette[0],
+                motion.palette[1]
+            ),
+            null,
+            Shader.TileMode.CLAMP
+        )
+        gradientPaint.shader = linearGradient
     }
 
-    private val bannerDrawable = ResourcesCompat.getDrawable(resources, R.drawable.ic_banner_logo, null)!!
-    private val bannerHeight = 14.dp.px
-    private val bannerWidth = (bannerDrawable.intrinsicWidth.toFloat() / bannerDrawable.intrinsicHeight.toFloat() * bannerHeight).toInt()
-
-    private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = resources.getColor(R.color.systemWhite, null)
-        typeface = ResourcesCompat.getFont(context, R.font.inter_medium)
-        textSize = 40.sp.px
-        textAlign = Paint.Align.LEFT
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        startShaderAnimation()
     }
-
-    private val textString = context.getString(R.string.waves_at_max)
 
     override fun onDetachedFromWindow() {
+        releaseShaderAnimation()
         super.onDetachedFromWindow()
-        releasePlayer()
     }
 
-    override fun dispatchDraw(canvas: Canvas) {
-        clipCanvas(canvas)
-        if (mediaPlayer?.isPlaying != true) {
-            drawPreview(canvas)
-        }
-        drawPreview(canvas)
-        super.dispatchDraw(canvas)
-        drawDrawable(canvas)
-        drawTitleText(canvas)
-        drawGradientText(canvas)
-    }
+    override fun onDraw(canvas: Canvas) {
+        if (width <= 0 || height <= 0) return
 
-    private fun clipCanvas(canvas: Canvas) {
+        canvas.save()
         canvas.clipPath(clipPath)
-        canvas.drawRect(
-            0F, measuredWidth.toFloat(),
-            measuredWidth.toFloat(), measuredHeight.toFloat(),
-            gradientPaint
-        )
+
+        // Draw top square shader artwork
+        drawProceduralShader(canvas)
+
+        // Draw bottom gradient info bar
+        drawBottomBar(canvas)
+
+        // Draw header logo, title, and subtitle text
+        drawLogo(canvas)
+        drawTitleText(canvas)
+        drawSubtitleText(canvas)
+
+        canvas.restore()
     }
 
-    private fun drawPreview(canvas: Canvas) {
-        placeholder?.draw(canvas)
+    private fun drawProceduralShader(canvas: Canvas) {
+        val w = width.toFloat()
+        val artHeight = w // Top area is square
+
+        motion.draw(canvas, w, artHeight)
     }
 
-    private fun drawDrawable(canvas: Canvas) {
+    private fun drawBottomBar(canvas: Canvas) {
+        val w = width.toFloat()
+        val artHeight = w
+        canvas.drawRect(0f, artHeight, w, height.toFloat(), gradientPaint)
+    }
+
+    private fun drawLogo(canvas: Canvas) {
         bannerDrawable.draw(canvas)
     }
 
-    private val gradientTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = resources.getColor(R.color.systemWhite, null)
-        typeface = ResourcesCompat.getFont(context, R.font.inter_regular)
-        textSize = 16.sp.px
-        textAlign = Paint.Align.LEFT
-    }
-
-    private val gradientText = "sasakure.UK、lasah、Sound Horizon、Mili、Toripiyo、Yunosuke、Powerless、…"
-
     private fun drawTitleText(canvas: Canvas) {
+        val layout = titleLayout ?: return
         val bounds = bannerDrawable.bounds
         val x = bounds.left.toFloat()
-        val yTop = bounds.bottom + 12.dp.px
-        val fm = textPaint.fontMetrics
-        val baseline = yTop - fm.ascent
+        val yTop = bounds.bottom + 10.dp.px
 
-        canvas.drawText(textString, x, baseline, textPaint)
+        canvas.withTranslation(x, yTop) {
+            layout.draw(this)
+        }
     }
 
-    private fun drawGradientText(canvas: Canvas) {
-        if (gradientText.isEmpty()) return
+    private fun drawSubtitleText(canvas: Canvas) {
+        val layout = subtitleLayout ?: return
 
-        val rectTop = measuredWidth
-        val rectBottom = measuredHeight
+        val rectTop = width.toFloat()
+        val rectBottom = height.toFloat()
         val rectHeight = rectBottom - rectTop
 
-        val maxWidth = measuredWidth - 32.dp.px
-
-        val staticLayout = StaticLayout.Builder.obtain(
-            gradientText, 0, gradientText.length, gradientTextPaint, maxWidth.toInt()
-        )
-            .setAlignment(Layout.Alignment.ALIGN_CENTER)
-            .setIncludePad(false)
-            .setMaxLines(3)
-            .setEllipsize(android.text.TextUtils.TruncateAt.END)
-            .setLineSpacing(2.5.sp.px, 1.0f)
-            .build()
-
-        val textHeight = staticLayout.height
-        val x = (measuredWidth - staticLayout.width) / 2f
+        val textHeight = layout.height
+        val x = (width - layout.width) / 2f
         val y = rectTop + (rectHeight - textHeight) / 2f
 
         canvas.withTranslation(x, y) {
-            staticLayout.draw(this)
+            layout.draw(this)
         }
+    }
+
+    /** Text shaping is content/size dependent, not animation dependent. */
+    private fun rebuildTextLayouts() {
+        if (width <= 0) return
+        val maxWidth = (width - 32.dp.px).coerceAtLeast(100f).toInt()
+        titleLayout = if (textString.isEmpty()) null else {
+            titleTextPaint.textSize = when {
+                textString.length > 20 -> 18.sp.px
+                textString.length > 10 -> 21.sp.px
+                else -> 24.sp.px
+            }
+            StaticLayout.Builder.obtain(textString, 0, textString.length, titleTextPaint, maxWidth)
+                .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+                .setIncludePad(false)
+                .setMaxLines(2)
+                .setEllipsize(TextUtils.TruncateAt.END)
+                .build()
+        }
+        subtitleLayout = if (gradientText.isEmpty()) null else {
+            StaticLayout.Builder.obtain(
+                gradientText, 0, gradientText.length, subtitleTextPaint, maxWidth
+            )
+                .setAlignment(Layout.Alignment.ALIGN_CENTER)
+                .setIncludePad(false)
+                .setMaxLines(2)
+                .setEllipsize(TextUtils.TruncateAt.END)
+                .build()
+        }
+    }
+
+    companion object {
+        private fun normalizePhase(value: Float): Float = ((value % 1f) + 1f) % 1f
     }
 }

@@ -25,6 +25,20 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent">
 
+            <uk.akane.accord.ui.components.CollageArtView
+                android:id="@+id/collageArt"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:visibility="gone" />
+
+            <ImageView
+                android:id="@+id/coverImage"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:contentDescription="@string/playlist_cover"
+                android:scaleType="centerCrop"
+                android:visibility="gone" />
+
             <ImageView
                 android:id="@+id/musicIcon"
                 android:layout_width="90dp"

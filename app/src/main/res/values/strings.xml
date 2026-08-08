@@ -173,6 +173,8 @@
     <string name="crash_thread" translatable="false">Thread</string>
     <string name="settings_trim_lyrics">Remove spaces around lyrics</string>
     <string name="playlist">Playlist</string>
+    <string name="mix">Mix</string>
+    <string name="station">Station</string>
     <string name="manuscript">Manuscript</string>
     <string name="confirm">Confirm</string>
     <string name="manuscript_quote">\"Manuscript\"</string>
@@ -451,6 +453,11 @@
     <string name="settings_category_downloads">Downloads</string>
     <string name="settings_downloads_summary">Offline music and cache</string>
     <string name="downloads_size">Downloaded music</string>
+    <string name="available_offline">Available offline</string>
+    <string name="main_artists">Main artists</string>
+    <string name="featured_artists">Featured artists</string>
+    <string name="search_source_jellyfin">Jellyfin</string>
+    <string name="search_source_lidarr">Lidarr</string>
     <string name="downloads_size_summary">%1$s stored offline</string>
     <string name="downloads_cache_size">Streaming cache</string>
     <string name="downloads_cache_size_summary">%1$s total on disk, including downloads</string>
@@ -515,6 +522,7 @@
     <string name="explore_more">Explore more</string>
     <string name="browse_by_name">Browse by name</string>
     <string name="no_tracks_available">No tracks available</string>
+    <string name="station_no_similar_tracks">No similar tracks are available for this station</string>
     <string name="no_tracks_available_subtitle">Accord obtained no tracks from your library.</string>
     <string name="failed_to_parse_lyric">Failed to parse lyrics</string>
     <string name="spk_channel_out_mono">Mono</string>
@@ -784,6 +792,13 @@
     <string name="queued">Added to queue</string>
     <string name="queued_next">Playing next</string>
     <string name="download_started">Downloading…</string>
+    <string name="collection_remove_from_device">Delete from device</string>
+    <string name="station_save_as_playlist">Save station as playlist</string>
+    <string name="collection_delete_from_server">Delete from server</string>
+    <string name="collection_delete_server_title">Delete %1$s from Jellyfin?</string>
+    <string name="collection_delete_server_message">This removes the playlist from the server. The songs stay in your library.</string>
+    <string name="collection_delete_server_failed">Could not delete the playlist from Jellyfin</string>
+    <string name="collection_deleted_from_server">Deleted from Jellyfin</string>
     <string name="remove_from_playlist">Remove from Playlist</string>
     <string name="removed_from_playlist">Removed from %1$s</string>
     <string name="autoplay_on">Infinity play on — similar music keeps going</string>
@@ -804,4 +819,5 @@
     <string name="share_song_text">%1$s — %2$s</string>
     <string name="share_lyrics_none">This track has no lyrics to share</string>
     <string name="go_to_album_missing">This song is not filed under an album</string>
+    <string name="go_to_artist_missing">This song has no artist information</string>
 </resources>

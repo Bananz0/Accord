@@ -10,6 +10,11 @@ import uk.akane.cupertino.popup.showPopupMenuFromAnchor
 import uk.akane.cupertino.popup.showPopupMenuFromAnchorRect
 import uk.akane.accord.logic.dp
 import uk.akane.accord.ui.MainActivity
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinDownloadManager
 
 object PlayerPopupMenu {
     private val popupAnchorOffset = 12.dp.px.toInt()
@@ -20,20 +25,30 @@ object PlayerPopupMenu {
      * entry - two of them change with state and all of them change with language - so the click
      * handler matches on this instead.
      */
-    fun build(resources: Resources, isFavourite: Boolean): PopupHelper.PopupEntries {
+    fun build(
+        resources: Resources,
+        isFavourite: Boolean,
+        isDownloaded: Boolean,
+    ): PopupHelper.PopupEntries {
         return PopupHelper.PopupMenuBuilder()
             .addMenuEntry(
                 resources, R.drawable.ic_info, R.string.popup_view_credits,
                 PlayerMenuActions.Action.VIEW_CREDITS
             )
             .addSpacer()
-            // Upstream's entry here deletes the song from the library. Every song this app plays
-            // belongs to a Jellyfin server shared with other clients, and a menu tap is no way to
-            // delete from one, so the destructive slot removes the offline copy instead.
-            .addDestructiveMenuEntry(
-                resources, R.drawable.ic_trash, R.string.song_menu_remove_download,
-                PlayerMenuActions.Action.REMOVE_DOWNLOAD
-            )
+            .apply {
+                if (isDownloaded) {
+                    addDestructiveMenuEntry(
+                        resources, R.drawable.ic_trash, R.string.collection_remove_from_device,
+                        PlayerMenuActions.Action.REMOVE_DOWNLOAD
+                    )
+                } else {
+                    addMenuEntry(
+                        resources, R.drawable.ic_download, R.string.download,
+                        PlayerMenuActions.Action.DOWNLOAD
+                    )
+                }
+            }
             // Upstream leaves every entry below on ic_square, a placeholder box, so the menu came up
             // with a column of empty squares. These are the closest real icons the app already has.
             .addMenuEntry(
@@ -77,13 +92,21 @@ object PlayerPopupMenu {
         onDismiss: (() -> Unit)? = null
     ) {
         val activity = anchorView.context.findMainActivity()
-        val entries = build(
-            anchorView.resources,
-            PlayerMenuActions.isFavourite(activity?.getPlayer()?.currentMediaItem)
-        )
-        val anchorOffsetY = if (showBelow) popupAnchorOffset else 0
-        val belowGap = if (showBelow) popupBelowGap else 0
-        host.showPopupMenuFromAnchor(
+        val item = activity?.getPlayer()?.currentMediaItem
+        if (activity == null || item == null) return
+        activity.lifecycleScope.launch {
+            val downloaded = withContext(Dispatchers.IO) {
+                JellyfinDownloadManager.isDownloaded(activity, item)
+            }
+            if (!anchorView.isAttachedToWindow) return@launch
+            val entries = build(
+                anchorView.resources,
+                PlayerMenuActions.isFavourite(item),
+                downloaded,
+            )
+            val anchorOffsetY = if (showBelow) popupAnchorOffset else 0
+            val belowGap = if (showBelow) popupBelowGap else 0
+            host.showPopupMenuFromAnchor(
             entries = entries,
             anchorView = anchorView,
             showBelow = showBelow,
@@ -93,7 +116,8 @@ object PlayerPopupMenu {
             backgroundView = backgroundView,
             onDismiss = onDismiss,
             onEntryClick = { entry -> dispatch(activity, entry) }
-        )
+            )
+        }
     }
 
     fun show(
@@ -105,13 +129,21 @@ object PlayerPopupMenu {
         onDismiss: (() -> Unit)? = null
     ) {
         val activity = anchorView.context.findMainActivity()
-        val entries = build(
-            anchorView.resources,
-            PlayerMenuActions.isFavourite(activity?.getPlayer()?.currentMediaItem)
-        )
-        val anchorOffsetY = if (showBelow) popupAnchorOffset else 0
-        val belowGap = if (showBelow) popupBelowGap else 0
-        host.showPopupMenuFromAnchorRect(
+        val item = activity?.getPlayer()?.currentMediaItem
+        if (activity == null || item == null) return
+        activity.lifecycleScope.launch {
+            val downloaded = withContext(Dispatchers.IO) {
+                JellyfinDownloadManager.isDownloaded(activity, item)
+            }
+            if (!anchorView.isAttachedToWindow) return@launch
+            val entries = build(
+                anchorView.resources,
+                PlayerMenuActions.isFavourite(item),
+                downloaded,
+            )
+            val anchorOffsetY = if (showBelow) popupAnchorOffset else 0
+            val belowGap = if (showBelow) popupBelowGap else 0
+            host.showPopupMenuFromAnchorRect(
             entries = entries,
             anchorView = anchorView,
             anchorRect = anchorRect,
@@ -122,7 +154,8 @@ object PlayerPopupMenu {
             backgroundView = backgroundView,
             onDismiss = onDismiss,
             onEntryClick = { entry -> dispatch(activity, entry) }
-        )
+            )
+        }
     }
 
     private fun dispatch(activity: MainActivity?, entry: PopupHelper.PopupEntry) {

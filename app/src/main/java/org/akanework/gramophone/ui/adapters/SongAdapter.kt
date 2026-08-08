@@ -229,7 +229,9 @@ class SongAdapter(
                 }
 
                 R.id.download_remove -> {
-                    JellyfinDownloadManager.remove(context, listOf(item))
+                    CoroutineScope(Dispatchers.IO).launch {
+                        JellyfinDownloadManager.remove(context, listOf(item))
+                    }
                     Toast.makeText(context, R.string.download_removed, Toast.LENGTH_SHORT).show()
                     true
                 }

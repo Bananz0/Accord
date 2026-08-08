@@ -26,6 +26,13 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content">
 
+                <uk.akane.accord.ui.components.StationArtView
+                    android:id="@+id/stationGeneratedArt"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:importantForAccessibility="no"
+                    android:visibility="gone" />
+
                 <ImageView
                     android:id="@+id/ivHeaderArt"
                     android:layout_width="match_parent"
@@ -69,9 +76,11 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"
+                        android:clickable="true"
+                        android:focusable="true"
                         android:text="Pearl Jam"
                         android:textAlignment="center"
-                        android:textColor="#E6FFFFFF"
+                        android:textColor="@color/accentColor"
                         android:textSize="16sp" />
 
                     <TextView
@@ -156,8 +165,8 @@
                     app:layout_constraintStart_toStartOf="parent"
                     app:layout_constraintEnd_toEndOf="parent" />
 
-                <androidx.recyclerview.widget.RecyclerView
-                    android:id="@+id/rvTracks"
+        <uk.akane.accord.ui.components.TrackSwipeRecyclerView
+            android:id="@+id/rvTracks"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:nestedScrollingEnabled="false"

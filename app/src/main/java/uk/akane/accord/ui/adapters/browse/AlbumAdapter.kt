@@ -5,6 +5,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.TextView
+import android.widget.Toast
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -23,6 +24,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import uk.akane.accord.R
 import uk.akane.accord.logic.dp
+import uk.akane.accord.logic.ArtistCredits
 import uk.akane.accord.ui.MainActivity
 import uk.akane.accord.ui.fragments.browse.AlbumDetailFragment
 import com.google.android.material.button.MaterialButton
@@ -82,7 +84,10 @@ class AlbumAdapter(
 
         playAll?.setOnClickListener {
             val mediaController = mainActivity.getPlayer() ?: return@setOnClickListener
-            if (latestSongList.isEmpty()) return@setOnClickListener
+            if (latestSongList.isEmpty()) {
+                Toast.makeText(mainActivity, R.string.no_tracks_available, Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
 
             mediaController.setMediaItems(latestSongList, /* startIndex */ 0, C.TIME_UNSET)
             mediaController.prepare()
@@ -91,7 +96,10 @@ class AlbumAdapter(
 
         shuffleAll?.setOnClickListener {
             val mediaController = mainActivity.getPlayer() ?: return@setOnClickListener
-            if (latestSongList.isEmpty()) return@setOnClickListener
+            if (latestSongList.isEmpty()) {
+                Toast.makeText(mainActivity, R.string.no_tracks_available, Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
 
             val shuffled = latestSongList.shuffled(Random(System.currentTimeMillis()))
             mediaController.setMediaItems(shuffled, /* startIndex */ 0, C.TIME_UNSET)
@@ -154,7 +162,7 @@ class AlbumAdapter(
 
             for (song in songs) {
                 val albumTitle = song.mediaMetadata.albumTitle?.toString()?.trim().orEmpty()
-                val artist = song.mediaMetadata.artist?.toString()?.trim().orEmpty()
+                val artist = ArtistCredits.primaryArtist(song)
 
                 // Fallbacks so grouping is stable
                 val safeAlbum = albumTitle.ifEmpty { "(Unknown Album)" }

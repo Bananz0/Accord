@@ -1,5 +1,9 @@
 package uk.akane.accord.ui.adapters
 
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.RectF
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
@@ -14,9 +18,12 @@ import coil3.load
 import uk.akane.accord.R
 import uk.akane.accord.logic.dp
 import uk.akane.accord.ui.components.QueueBlendView
+import uk.akane.accord.ui.components.ResistiveSwipeHaptics
+import uk.akane.accord.ui.components.resistedSwipeDistance
 import uk.akane.cupertino.utils.AnimationUtils.FASTEST_DURATION
 import java.util.Collections
 import kotlinx.coroutines.*
+import kotlin.math.abs
 
 data class QueueItem(val uid: Any, val mediaItem: MediaItem)
 
@@ -120,6 +127,10 @@ class QueuePreviewAdapter(
         return true
     }
 
+    fun itemAt(position: Int): QueueItem? = items.getOrNull(position)
+
+    fun indexOf(uid: Any): Int = items.indexOfFirst { it.uid == uid }
+
     class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val title: TextView = view.findViewById(R.id.title)
         val subtitle: TextView = view.findViewById(R.id.subtitle)
@@ -130,20 +141,31 @@ class QueuePreviewAdapter(
 }
 
 class QueueItemTouchHelperCallback(
-    private val adapter: QueuePreviewAdapter
+    private val adapter: QueuePreviewAdapter,
+    private val onRemove: (Int) -> Unit,
 ) : ItemTouchHelper.Callback() {
     private var currentDragViewHolder: RecyclerView.ViewHolder? = null
+    private var trackedSwipeHolder: RecyclerView.ViewHolder? = null
+    private var armedForRemoval = false
+    private var removalDispatched = false
+    private var pendingRemovalUid: Any? = null
+    private val swipeHaptics = ResistiveSwipeHaptics()
+    private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(90, 90, 96)
+    }
+    private var trashIcon: android.graphics.drawable.Drawable? = null
 
     override fun isLongPressDragEnabled(): Boolean = false
 
-    override fun isItemViewSwipeEnabled(): Boolean = false
+    override fun isItemViewSwipeEnabled(): Boolean = true
 
     override fun getMovementFlags(
         recyclerView: RecyclerView,
         viewHolder: RecyclerView.ViewHolder
     ): Int {
         val dragFlags = ItemTouchHelper.UP or ItemTouchHelper.DOWN
-        return makeMovementFlags(dragFlags, 0)
+        val swipeFlags = ItemTouchHelper.LEFT or ItemTouchHelper.RIGHT
+        return makeMovementFlags(dragFlags, swipeFlags)
     }
 
     override fun onMove(
@@ -154,7 +176,109 @@ class QueueItemTouchHelperCallback(
         return adapter.onItemMove(viewHolder.bindingAdapterPosition, target.bindingAdapterPosition)
     }
 
-    override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) = Unit
+    // The row always recoils before it is removed. ItemTouchHelper's completed-swipe path would
+    // throw it off-screen and make the reveal vanish separately from the row.
+    override fun getSwipeThreshold(viewHolder: RecyclerView.ViewHolder): Float = NEVER_SWIPE_AWAY
+
+    override fun getSwipeEscapeVelocity(defaultValue: Float): Float = Float.MAX_VALUE
+
+    override fun getSwipeVelocityThreshold(defaultValue: Float): Float = Float.MAX_VALUE
+
+    override fun getAnimationDuration(
+        recyclerView: RecyclerView,
+        animationType: Int,
+        animateDx: Float,
+        animateDy: Float,
+    ): Long = if (animationType == ItemTouchHelper.ANIMATION_TYPE_SWIPE_CANCEL) {
+        SWIPE_SETTLE_MS
+    } else {
+        super.getAnimationDuration(recyclerView, animationType, animateDx, animateDy)
+    }
+
+    override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
+        adapter.notifyItemChanged(viewHolder.bindingAdapterPosition)
+    }
+
+    override fun onChildDraw(
+        canvas: Canvas,
+        recyclerView: RecyclerView,
+        viewHolder: RecyclerView.ViewHolder,
+        dX: Float,
+        dY: Float,
+        actionState: Int,
+        isCurrentlyActive: Boolean,
+    ) {
+        if (actionState != ItemTouchHelper.ACTION_STATE_SWIPE) {
+            super.onChildDraw(
+                canvas, recyclerView, viewHolder, dX, dY, actionState, isCurrentlyActive
+            )
+            return
+        }
+
+        val view = viewHolder.itemView
+        val threshold = view.width * SWIPE_THRESHOLD
+        val damped = resistedSwipeDistance(dX, view.width * MAX_TRAVEL, SWIPE_FOLLOW)
+
+        if (damped != 0F) {
+            if (isCurrentlyActive) {
+                if (trackedSwipeHolder !== viewHolder) {
+                    trackedSwipeHolder = viewHolder
+                    armedForRemoval = false
+                    removalDispatched = false
+                    pendingRemovalUid = null
+                    adapter.onDragStart()
+                }
+                swipeHaptics.update(view, dX, threshold)
+                armedForRemoval = abs(dX) >= threshold
+            } else if (armedForRemoval && !removalDispatched) {
+                swipeHaptics.commit(view)
+                pendingRemovalUid = adapter.itemAt(viewHolder.bindingAdapterPosition)?.uid
+                removalDispatched = true
+            }
+
+            val cover = view.findViewById<View?>(R.id.cover)
+            val artworkStart = cover?.left ?: ICON_INSET_DP.dp.px.toInt()
+            val bounds = if (damped > 0F) {
+                RectF(
+                    (view.left + artworkStart).toFloat(), view.top.toFloat(),
+                    (view.left + damped).coerceAtLeast(view.left + artworkStart.toFloat()),
+                    view.bottom.toFloat(),
+                )
+            } else {
+                RectF(
+                    view.right + damped, view.top.toFloat(),
+                    view.right.toFloat(), view.bottom.toFloat(),
+                )
+            }
+            canvas.drawRoundRect(bounds, CORNER_RADIUS_DP.dp.px, CORNER_RADIUS_DP.dp.px, backgroundPaint)
+
+            val icon = trashIcon ?: androidx.core.content.res.ResourcesCompat.getDrawable(
+                recyclerView.resources, R.drawable.ic_trash, null
+            )?.also { trashIcon = it }
+            icon?.let {
+                val reveal = (abs(dX) / threshold).coerceIn(0F, 1F)
+                it.alpha = (255 * reveal).toInt()
+                it.setTint(Color.WHITE)
+                val size = ICON_SIZE_DP.dp.px.toInt()
+                val inset = ICON_INSET_DP.dp.px.toInt()
+                val centerY = (view.top + view.bottom) / 2
+                val centerX = if (damped > 0F) {
+                    view.left + artworkStart + (cover?.width ?: size) / 2
+                } else {
+                    view.right - inset - size / 2
+                }
+                it.setBounds(
+                    centerX - size / 2, centerY - size / 2,
+                    centerX + size / 2, centerY + size / 2,
+                )
+                it.draw(canvas)
+            }
+        }
+
+        super.onChildDraw(
+            canvas, recyclerView, viewHolder, damped, dY, actionState, isCurrentlyActive
+        )
+    }
 
     override fun onSelectedChanged(viewHolder: RecyclerView.ViewHolder?, actionState: Int) {
         super.onSelectedChanged(viewHolder, actionState)
@@ -186,6 +310,17 @@ class QueueItemTouchHelperCallback(
         super.clearView(recyclerView, viewHolder)
         adapter.onDragEnd()
 
+        swipeHaptics.release(viewHolder.itemView)
+        val removalUid = pendingRemovalUid
+        trackedSwipeHolder = null
+        armedForRemoval = false
+        removalDispatched = false
+        pendingRemovalUid = null
+        if (removalUid != null) {
+            val position = adapter.indexOf(removalUid)
+            if (position >= 0) onRemove(position)
+        }
+
         viewHolder.itemView.animate().cancel()
         viewHolder.itemView.background = null
         viewHolder.itemView.outlineProvider = ViewOutlineProvider.BACKGROUND
@@ -197,6 +332,17 @@ class QueueItemTouchHelperCallback(
             .alpha(1f)
             .setDuration(FASTEST_DURATION)
             .start()
+    }
+
+    companion object {
+        private const val NEVER_SWIPE_AWAY = 10F
+        private const val SWIPE_FOLLOW = 0.56F
+        private const val SWIPE_THRESHOLD = 0.32F
+        private const val MAX_TRAVEL = SWIPE_THRESHOLD * SWIPE_FOLLOW
+        private const val SWIPE_SETTLE_MS = 190L
+        private const val CORNER_RADIUS_DP = 12
+        private const val ICON_SIZE_DP = 22
+        private const val ICON_INSET_DP = 16
     }
 }
 

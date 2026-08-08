@@ -4,9 +4,12 @@ import android.content.Context
 import android.util.Log
 import androidx.media3.common.MediaItem
 import androidx.preference.PreferenceManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.akanework.gramophone.logic.data.db.AppDatabase
@@ -44,6 +47,20 @@ class JellyfinLibraryReader(private val context: Context) : LibraryReader {
 
     private val refreshLock = Mutex()
     private var loadedFromCache = false
+
+    init {
+        CoroutineScope(Dispatchers.IO).launch {
+            val db = AppDatabase.getInstance(context)
+            val cacheDao = db.cachedSongDao()
+            val loader = JellyfinLibraryLoader(api = null, idMap = JellyfinIdMap(db.jellyfinIdDao()))
+
+            val fullCached = runCatching { loader.loadFromCache(cacheDao) }.getOrNull()
+            if (fullCached != null) {
+                store.value = fullCached
+                loadedFromCache = true
+            }
+        }
+    }
 
     override val songListFlow: Flow<List<MediaItem>> = store.map { it?.songList ?: emptyList() }
     override val albumListFlow: Flow<List<Album>> =
