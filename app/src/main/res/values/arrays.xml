@@ -11,4 +11,24 @@
         <item>1</item>
         <item>2</item>
     </string-array>
+
+    <string-array name="cache_limit">
+        <item>@string/cache_limit_none</item>
+        <item>512 MB</item>
+        <item>1 GB</item>
+        <item>2 GB</item>
+        <item>5 GB</item>
+        <item>10 GB</item>
+        <item>20 GB</item>
+    </string-array>
+
+    <string-array name="cache_limit_val" translatable="false">
+        <item>0</item>
+        <item>536870912</item>
+        <item>1073741824</item>
+        <item>2147483648</item>
+        <item>5368709120</item>
+        <item>10737418240</item>
+        <item>21474836480</item>
+    </string-array>
 </resources>

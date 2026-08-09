@@ -20,6 +20,16 @@
             android:title="@string/downloads_cache_size"
             app:iconSpaceReserved="false" />
 
+        <DropDownPreference
+            android:defaultValue="0"
+            android:entries="@array/cache_limit"
+            android:entryValues="@array/cache_limit_val"
+            android:key="cache_size_limit"
+            android:layout="@layout/preference_dropdown_md"
+            android:summary="@string/downloads_cache_limit_summary"
+            android:title="@string/downloads_cache_limit"
+            app:iconSpaceReserved="false" />
+
         <Preference
             android:key="downloads_clear"
             android:layout="@layout/preference_basic"

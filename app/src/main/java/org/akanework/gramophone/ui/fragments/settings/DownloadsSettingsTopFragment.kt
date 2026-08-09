@@ -32,6 +32,12 @@ class DownloadsSettingsTopFragment : BasePreferenceFragment() {
 
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
         setPreferencesFromResource(R.xml.settings_downloads, rootKey)
+        // Applying the new ceiling immediately is the only way the choice is legible - the figures
+        // above it are what tells the user the setting did anything.
+        findPreference<Preference>("cache_size_limit")?.setOnPreferenceChangeListener { _, _ ->
+            view?.post { trimCache() }
+            true
+        }
     }
 
     override fun onResume() {
@@ -67,6 +73,26 @@ class DownloadsSettingsTopFragment : BasePreferenceFragment() {
                 R.string.downloads_cache_size_summary,
                 Formatter.formatFileSize(requireContext(), sizes.second)
             )
+        }
+    }
+
+    private fun trimCache() {
+        viewLifecycleOwner.lifecycleScope.launch {
+            val freed = withContext(Dispatchers.IO) {
+                JellyfinMediaCache.trimToLimit(requireContext())
+            }
+            if (!isAdded) return@launch
+            if (freed > 0L) {
+                Toast.makeText(
+                    requireContext(),
+                    getString(
+                        R.string.downloads_cache_trimmed,
+                        Formatter.formatFileSize(requireContext(), freed)
+                    ),
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+            refreshSizes()
         }
     }
 

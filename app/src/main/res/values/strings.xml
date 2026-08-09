@@ -240,6 +240,12 @@
     <string name="song_menu_unfavourite">Remove favourite</string>
     <string name="song_menu_favourite">Favourite</string>
     <string name="search_no_results">No results in your library</string>
+    <string name="search_lidarr_not_configured">Lidarr is not set up yet.\nAdd your server address and API key to search it for music you do not own.</string>
+    <string name="search_lidarr_incomplete">Lidarr is connected but still needs a root folder and quality profile before it can take requests.</string>
+    <string name="search_lidarr_unreachable">Could not reach Lidarr.\n%1$s</string>
+    <string name="search_lidarr_set_up">Set up Lidarr</string>
+    <string name="search_lidarr_open_settings">Open Lidarr settings</string>
+    <string name="search_lidarr_retry">Try again</string>
     <string name="no_lyrics">No lyrics for this track</string>
 
     <string name="music_quality_lossless">Lossless</string>
@@ -463,6 +469,10 @@
     <string name="downloads_size_summary">%1$s stored offline</string>
     <string name="downloads_cache_size">Streaming cache</string>
     <string name="downloads_cache_size_summary">%1$s total on disk, including downloads</string>
+    <string name="downloads_cache_limit">Cache limit</string>
+    <string name="cache_limit_none">No limit</string>
+    <string name="downloads_cache_limit_summary">Streamed music is deleted oldest first to stay under this. Downloads are never removed.</string>
+    <string name="downloads_cache_trimmed">Freed %1$s</string>
     <string name="downloads_clear">Remove all downloads</string>
     <string name="downloads_clear_summary">Delete every offline track. Streaming is unaffected.</string>
     <string name="downloads_clear_confirm">Remove all downloaded music from this device?</string>

@@ -66,6 +66,11 @@ object QueuePrefetcher {
                 ensureActive()
                 warmAudio(appContext, item)
             }
+            // Prefetching is the main way the cache grows, so it is also the natural place to hold
+            // it to the ceiling. Runs after the warm-up so a skip never waits on an eviction sweep.
+            ensureActive()
+            runCatching { JellyfinMediaCache.trimToLimit(appContext) }
+                .onFailure { Log.d(TAG, "Cache trim failed: $it") }
         }
     }
 
