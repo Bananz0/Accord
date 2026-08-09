@@ -146,7 +146,13 @@ class StationDetailFragment : SwitcherPostponeFragment(), FragmentSwitcherTransi
         val subtitle = requireArguments().getString(ARG_SUBTITLE).orEmpty()
         titleView.text = title
         generatedArt.visibility = View.VISIBLE
+        // Held still until the screen has settled. This field fills most of the display, and
+        // animating it while the fragment is still sliding in put a full-screen shader redraw on
+        // every frame of the transition - the reason opening a station stuttered where an album,
+        // which shows a plain bitmap, did not.
+        generatedArt.animated = false
         generatedArt.bind(title)
+        generatedArt.postDelayed({ generatedArt.animated = true }, HEADER_ANIMATION_DELAY_MS)
         headerArt.visibility = View.GONE
         artistView.text = subtitle
         // This layout is shared with albums, where the red subtitle is an artist link. A mix can
@@ -487,6 +493,9 @@ class StationDetailFragment : SwitcherPostponeFragment(), FragmentSwitcherTransi
         private const val ARG_COVER = "station_cover"
         private const val ARG_KIND = "station_kind"
         private const val SAVED_STATIONS_PREFS = "saved_generated_stations"
+
+        /** Comfortably past the switcher's enter transition, so the drift starts unnoticed. */
+        private const val HEADER_ANIMATION_DELAY_MS = 450L
 
         fun newInstance(
             title: String,

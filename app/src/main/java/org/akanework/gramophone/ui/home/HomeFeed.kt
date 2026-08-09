@@ -8,6 +8,7 @@ import org.akanework.gramophone.logic.data.lastfm.LastFmClient
 import org.akanework.gramophone.logic.data.lastfm.LastFmCredentialStore
 import uk.akane.accord.R
 import java.util.Calendar
+import kotlin.math.roundToInt
 
 enum class HomeSectionStyle { ROW, STATION }
 
@@ -46,6 +47,10 @@ object HomeFeed {
 
     /** How long an artist has to go unplayed before they count as worth resurfacing. */
     private const val QUIET_DAYS = 45L
+
+    /** Most distinct covers a collage will show, and the tile budget shared between them. */
+    private const val COLLAGE_SLICES = 6
+    private const val COLLAGE_BUDGET = 12
 
     data class ArtistInput(val title: String?, val songList: List<MediaItem>)
 
@@ -116,7 +121,7 @@ object HomeFeed {
                 subtitle = songs.mapNotNull { it.mediaMetadata.artist?.toString() }
                     .distinct().take(4).joinToString(", "),
                 cover = songs.firstNotNullOfOrNull { it.mediaMetadata.artworkUri },
-                collageCovers = songs.mapNotNull { it.mediaMetadata.artworkUri }.distinct().take(4),
+                collageCovers = songs.weightedCovers(),
                 songs = songs,
             )
         }.withoutNearDuplicates()
@@ -187,7 +192,7 @@ object HomeFeed {
                     title = "$title Mix",
                     subtitle = "Last played ${silentDays.describeGap()}",
                     cover = songs.firstNotNullOfOrNull { it.mediaMetadata.artworkUri },
-                    collageCovers = songs.mapNotNull { it.mediaMetadata.artworkUri }.distinct().take(4),
+                    collageCovers = songs.weightedCovers(),
                     songs = songs,
                 )
             },
@@ -339,7 +344,7 @@ object HomeFeed {
             title = title,
             subtitle = subtitle,
             cover = null,
-            collageCovers = selected.mapNotNull { it.mediaMetadata.artworkUri }.distinct().take(4),
+            collageCovers = selected.weightedCovers(),
             songs = selected,
         )
     }
@@ -401,7 +406,7 @@ object HomeFeed {
                     subtitle = songs.mapNotNull { it.mediaMetadata.albumTitle?.toString() }
                         .distinct().take(3).joinToString(", "),
                     cover = songs.firstNotNullOfOrNull { it.mediaMetadata.artworkUri },
-                    collageCovers = songs.mapNotNull { it.mediaMetadata.artworkUri }.distinct().take(4),
+                    collageCovers = songs.weightedCovers(),
                     songs = songs,
                 )
             },
@@ -445,7 +450,7 @@ object HomeFeed {
                     subtitle = songs.mapNotNull { it.mediaMetadata.artist?.toString() }
                         .distinct().take(4).joinToString(", "),
                     cover = songs.firstNotNullOfOrNull { it.mediaMetadata.artworkUri },
-                    collageCovers = songs.mapNotNull { it.mediaMetadata.artworkUri }.distinct().take(4),
+                    collageCovers = songs.weightedCovers(),
                     songs = songs,
                 )
             },
@@ -522,7 +527,7 @@ object HomeFeed {
                     subtitle = songs.mapNotNull { it.mediaMetadata.artist?.toString() }
                         .distinct().take(4).joinToString(", "),
                     cover = songs.firstNotNullOfOrNull { it.mediaMetadata.artworkUri },
-                    collageCovers = songs.mapNotNull { it.mediaMetadata.artworkUri }.distinct().take(4),
+                    collageCovers = songs.weightedCovers(),
                     songs = songs,
                 )
             },
@@ -571,7 +576,7 @@ object HomeFeed {
                         R.plurals.songs, artist.songList.size, artist.songList.size,
                     ),
                     cover = songs.firstNotNullOfOrNull { it.mediaMetadata.artworkUri },
-                    collageCovers = songs.mapNotNull { it.mediaMetadata.artworkUri }.distinct().take(4),
+                    collageCovers = songs.weightedCovers(),
                     songs = songs,
                 )
             },
@@ -634,6 +639,32 @@ object HomeFeed {
         mediaMetadata.extras?.getLong(JellyfinLibraryLoader.EXTRA_LAST_PLAYED, 0L) ?: 0L
 
     private fun MediaItem.addDate(): Long = mediaMetadata.extras?.getLong("AddDate", 0L) ?: 0L
+
+    /**
+     * Covers for a card's collage, each repeated in proportion to how much of the mix it is.
+     *
+     * The repeats are the point: [uk.akane.accord.ui.components.CollageArtView] sizes each tile by
+     * how often its cover appears, so a mix drawn mostly from one album shows that sleeve large
+     * rather than as several identical squares. Kept short because these are written to the feed
+     * cache, and a few tiles is all the artwork can show anyway.
+     */
+    private fun List<MediaItem>.weightedCovers(): List<Uri> {
+        val ranked = mapNotNull { it.mediaMetadata.artworkUri }
+            .groupingBy { it }
+            .eachCount()
+            .entries
+            .sortedByDescending { it.value }
+            .take(COLLAGE_SLICES)
+        if (ranked.isEmpty()) return emptyList()
+
+        val total = ranked.sumOf { it.value }
+        return ranked.flatMap { (uri, count) ->
+            val share = ((count.toDouble() / total) * COLLAGE_BUDGET)
+                .roundToInt()
+                .coerceAtLeast(1)
+            List(share) { uri }
+        }
+    }
 
     /** Round-robin artists so one prolific artist cannot consume an entire personal mix. */
     private fun List<MediaItem>.balancedByArtist(): List<MediaItem> {

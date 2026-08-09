@@ -25,6 +25,26 @@ class StationArtView @JvmOverloads constructor(
     private var animator: ValueAnimator? = null
 
     /**
+     * Whether the colour field drifts.
+     *
+     * Worth it on a full-screen header, wasteful on a list of thumbnails: every visible card was
+     * running its own infinite animator invalidating each frame, so the main thread was never idle
+     * on the home feed and a tap had to wait for the next gap to start a fragment transaction.
+     * That was the lag on opening a station that albums, being plain images, never had. At card
+     * size the drift is not visible anyway.
+     */
+    var animated: Boolean = true
+        set(value) {
+            if (field == value) return
+            field = value
+            if (value) {
+                if (isAttachedToWindow) startAnimation()
+            } else {
+                stopAnimation()
+            }
+        }
+
+    /**
      * @param seed anything stable for this station - its id. Drives both the palette and the style.
      */
     fun bind(seed: String) {
@@ -36,11 +56,16 @@ class StationArtView @JvmOverloads constructor(
         super.onAttachedToWindow()
         // Slow enough to read as drifting light rather than motion, and cheap: one float per frame
         // driving a shader that is rebuilt only while the card is on screen.
-        startAnimation()
+        if (animated) startAnimation()
+    }
+
+    private fun stopAnimation() {
+        animator?.cancel()
+        animator = null
     }
 
     private fun startAnimation() {
-        if (animator != null) return
+        if (animator != null || !animated) return
         val start = motion.phase
         animator = ValueAnimator.ofFloat(start, start + 1f).apply {
             duration = motion.durationMs

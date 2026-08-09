@@ -20,13 +20,15 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * Custom view that renders an asymmetric geometric mosaic collage of recent album covers.
- * - Top-Left (50% x 50%): 1st most recent album
- * - Top-Right Upper (50% x 25%): 2nd most recent album
- * - Top-Right Lower (50% x 25%): 3rd most recent album
- * - Bottom-Left (33.3% x 50%): 4th most recent album
- * - Bottom-Middle (33.3% x 50%): 5th most recent album
- * - Bottom-Right (33.3% x 50%): 6th most recent album
+ * A mosaic of the covers in a mix, where each cover's tile is sized by how much of the mix it is.
+ *
+ * The grid used to be six fixed slots filled in order, and any slot without its own cover repeated
+ * the first one - so a mix drawn mostly from one album showed that sleeve five or six times as
+ * separate tiles, which reads as a bug rather than as a collage.
+ *
+ * Now a cover appears once, and its share of the artwork matches its share of the mix: three
+ * appearances out of six is half the area, not six identical squares. A mix from a single album is
+ * simply that sleeve, full size.
  */
 class CollageArtView @JvmOverloads constructor(
     context: Context,
@@ -41,61 +43,63 @@ class CollageArtView @JvmOverloads constructor(
         style = Paint.Style.STROKE
     }
 
+    /** One entry per distinct cover, carrying how many of the supplied covers it accounted for. */
+    private class Slice(val uri: Uri, val weight: Int, var bitmap: Bitmap?)
+
     private var currentUris: List<Uri> = emptyList()
-    private var loadedBitmaps: Array<Bitmap?> = arrayOfNulls(6)
+    private var slices: List<Slice> = emptyList()
     private var loadJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.Main)
 
     companion object {
+        private const val MAX_SLICES = 6
         private val cache = android.util.LruCache<Uri, Bitmap>(30)
     }
 
+    /**
+     * @param uris the covers of the mix, duplicates included - the repeats are the weighting, so
+     *   passing a de-duplicated list gives every cover an equal share.
+     */
     fun setCovers(uris: List<Uri>) {
         if (currentUris == uris) return
         currentUris = uris
         loadJob?.cancel()
 
         if (uris.isEmpty()) {
-            loadedBitmaps.fill(null)
+            slices = emptyList()
             invalidate()
             return
         }
 
-        val targets = uris.take(6)
-        var missingAny = false
-        targets.forEachIndexed { i, uri ->
-            val cached = cache.get(uri)
-            if (cached != null) {
-                loadedBitmaps[i] = cached
-            } else {
-                loadedBitmaps[i] = null
-                missingAny = true
-            }
-        }
+        // Heaviest first so the biggest tile is the cover the mix actually leans on.
+        slices = uris.groupingBy { it }.eachCount()
+            .entries
+            .sortedByDescending { it.value }
+            .take(MAX_SLICES)
+            .map { (uri, count) -> Slice(uri, count, cache.get(uri)) }
         invalidate()
 
-        if (!missingAny) return
+        if (slices.all { it.bitmap != null }) return
 
         loadJob = scope.launch {
+            val pending = slices
             val fetched = withContext(Dispatchers.IO) {
-                targets.map { uri ->
-                    val existing = cache.get(uri)
-                    if (existing != null) return@map existing
-                    val request = ImageRequest.Builder(context)
-                        .data(uri)
-                        .size(256, 256)
-                        .build()
-                    val result = context.imageLoader.execute(request)
-                    if (result is SuccessResult) {
-                        val bmp = result.image.toBitmap()
-                        cache.put(uri, bmp)
-                        bmp
-                    } else null
+                pending.map { slice ->
+                    slice.bitmap ?: run {
+                        val request = ImageRequest.Builder(context)
+                            .data(slice.uri)
+                            .size(256, 256)
+                            .build()
+                        val result = context.imageLoader.execute(request)
+                        if (result is SuccessResult) {
+                            result.image.toBitmap().also { cache.put(slice.uri, it) }
+                        } else null
+                    }
                 }
             }
-            fetched.forEachIndexed { i, bitmap ->
-                if (i < 6) loadedBitmaps[i] = bitmap
-            }
+            // Discard if setCovers ran again while this was in flight.
+            if (slices !== pending) return@launch
+            pending.forEachIndexed { index, slice -> slice.bitmap = fetched[index] }
             invalidate()
         }
     }
@@ -110,40 +114,63 @@ class CollageArtView @JvmOverloads constructor(
         val h = height.toFloat()
         if (w <= 0f || h <= 0f) return
 
-        val tiles = calculateTileRects(w, h)
-
         paint.shader = null
         paint.color = 0xFF1A1A1C.toInt()
         canvas.drawRect(0f, 0f, w, h, paint)
 
-        var drawnAny = false
-        tiles.forEachIndexed { i, dst ->
-            val bitmap = loadedBitmaps.getOrNull(i)
-                ?: loadedBitmaps.firstOrNull { it != null }
-            if (bitmap != null) {
-                drawnAny = true
-                drawCenterCropped(canvas, bitmap, dst)
+        val drawable = slices.filter { it.bitmap != null }
+        if (drawable.isEmpty()) return
+
+        val tiles = tileRects(RectF(0f, 0f, w, h), drawable.map { it.weight.toFloat() })
+        tiles.forEachIndexed { index, rect ->
+            drawable[index].bitmap?.let { drawCenterCropped(canvas, it, rect) }
+        }
+        // Only interior edges need a seam; the outer border is the card's own boundary.
+        if (tiles.size > 1) tiles.forEach { canvas.drawRect(it, linePaint) }
+    }
+
+    /**
+     * Splits [bounds] into one rect per weight, each with an area proportional to its weight.
+     *
+     * Slice-and-dice: halve the weights into two groups of roughly equal total, cut the rectangle
+     * across its longer side in that ratio, and recurse into each half. Cutting the longer side
+     * keeps tiles near-square rather than letting a heavy cover become a thin band, which matters
+     * because these are album sleeves.
+     */
+    private fun tileRects(bounds: RectF, weights: List<Float>): List<RectF> {
+        if (weights.size <= 1) return listOf(bounds)
+
+        val total = weights.sum()
+        if (total <= 0f) return listOf(bounds)
+
+        // Split point closest to half the total weight, keeping at least one on each side.
+        var running = 0f
+        var splitAt = 0
+        var bestDelta = Float.MAX_VALUE
+        for (index in 0 until weights.size - 1) {
+            running += weights[index]
+            val delta = kotlin.math.abs(running - total / 2f)
+            if (delta < bestDelta) {
+                bestDelta = delta
+                splitAt = index + 1
             }
         }
 
-        if (drawnAny) {
-            canvas.drawLine(w * 0.5f, 0f, w * 0.5f, h * 0.5f, linePaint)
-            canvas.drawLine(w * 0.5f, h * 0.25f, w, h * 0.25f, linePaint)
-            canvas.drawLine(0f, h * 0.5f, w, h * 0.5f, linePaint)
-            canvas.drawLine(w * (1f / 3f), h * 0.5f, w * (1f / 3f), h, linePaint)
-            canvas.drawLine(w * (2f / 3f), h * 0.5f, w * (2f / 3f), h, linePaint)
-        }
-    }
+        val firstWeights = weights.subList(0, splitAt)
+        val secondWeights = weights.subList(splitAt, weights.size)
+        val firstFraction = firstWeights.sum() / total
 
-    private fun calculateTileRects(w: Float, h: Float): Array<RectF> {
-        return arrayOf(
-            RectF(0f, 0f, w * 0.5f, h * 0.5f),
-            RectF(w * 0.5f, 0f, w, h * 0.25f),
-            RectF(w * 0.5f, h * 0.25f, w, h * 0.5f),
-            RectF(0f, h * 0.5f, w * (1f / 3f), h),
-            RectF(w * (1f / 3f), h * 0.5f, w * (2f / 3f), h),
-            RectF(w * (2f / 3f), h * 0.5f, w, h)
-        )
+        val (firstBounds, secondBounds) = if (bounds.width() >= bounds.height()) {
+            val cut = bounds.left + bounds.width() * firstFraction
+            RectF(bounds.left, bounds.top, cut, bounds.bottom) to
+                RectF(cut, bounds.top, bounds.right, bounds.bottom)
+        } else {
+            val cut = bounds.top + bounds.height() * firstFraction
+            RectF(bounds.left, bounds.top, bounds.right, cut) to
+                RectF(bounds.left, cut, bounds.right, bounds.bottom)
+        }
+
+        return tileRects(firstBounds, firstWeights) + tileRects(secondBounds, secondWeights)
     }
 
     private fun drawCenterCropped(canvas: Canvas, bitmap: Bitmap, dst: RectF) {

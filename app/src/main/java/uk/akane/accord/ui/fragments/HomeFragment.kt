@@ -8,6 +8,7 @@ import android.view.ViewGroup
 import android.widget.TextView
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.updatePadding
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
@@ -91,6 +92,16 @@ class HomeFragment: Fragment() {
         rootView.findViewById<RecyclerView>(R.id.home_sections).apply {
             layoutManager = LinearLayoutManager(context)
             adapter = ConcatAdapter(headerAdapter, sectionAdapter)
+            // The layout reserved only the nav bar's height, so the mini player sat over the last
+            // row's labels and they sprang back out of reach when dragged up. bottomHeight is the
+            // nav bar and the player together, and is recomputed when the insets land because the
+            // player sits above the gesture bar.
+            clipToPadding = false
+            updatePadding(bottom = (requireActivity() as MainActivity).bottomHeight)
+            ViewCompat.setOnApplyWindowInsetsListener(this) { v, insets ->
+                v.updatePadding(bottom = (requireActivity() as MainActivity).bottomHeight)
+                insets
+            }
         }
 
         observeLibrarySync()
