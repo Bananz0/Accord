@@ -31,13 +31,6 @@
             app:iconSpaceReserved="false"
             app:showSeekBarValue="true" />
 
-        <Preference
-            android:key="blacklist"
-            android:layout="@layout/preference_basic"
-            android:summary="@string/settings_blacklist_folder_summary"
-            android:title="@string/settings_blacklist_folder"
-            app:iconSpaceReserved="false" />
-
     </PreferenceCategory>
 
     <PreferenceCategory

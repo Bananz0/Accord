@@ -365,7 +365,7 @@ class JellyfinLoginActivity : AppCompatActivity() {
 
     private fun finishAuthentication(result: LoginResult) = when (result) {
         is LoginResult.Success -> {
-            startActivity(Intent(this, MainActivity::class.java))
+            startActivity(Intent(this, uk.akane.accord.ui.MainActivity::class.java))
             finish()
         }
 

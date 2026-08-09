@@ -85,12 +85,6 @@ import org.akanework.gramophone.logic.GramophonePlaybackService.Companion.SERVIC
 import org.akanework.gramophone.logic.GramophonePlaybackService.Companion.SERVICE_QUERY_TIMER
 import org.akanework.gramophone.logic.GramophonePlaybackService.Companion.SERVICE_SET_TIMER
 import org.akanework.gramophone.logic.utils.MediaStoreUtils
-import org.akanework.gramophone.ui.LibraryViewModel
-import org.akanework.gramophone.ui.MainActivity
-import org.akanework.gramophone.ui.components.CustomTextView
-import org.akanework.gramophone.ui.components.FullBottomSheet
-import org.akanework.gramophone.ui.fragments.BaseWrapperFragment
-import org.akanework.gramophone.ui.fragments.settings.MainSettingsFragment
 import java.io.File
 import kotlin.reflect.KClass
 import androidx.core.view.WindowCompat
@@ -525,19 +519,6 @@ inline fun SharedPreferences.getStringSetStrict(key: String, defValue: Set<Strin
     return use { getStringSet(key, defValue) }
 }
 
-tailrec fun Fragment.findParentFragmentByType(type: KClass<out Fragment>): Fragment? {
-    val parentFragment = parentFragment
-    return when {
-        parentFragment == null -> null
-        type.isInstance(parentFragment) -> parentFragment
-        else -> parentFragment.findParentFragmentByType(type)
-    }
-}
-
-fun Fragment.findBaseWrapperFragment(): BaseWrapperFragment? {
-    return findParentFragmentByType(BaseWrapperFragment::class) as? BaseWrapperFragment
-}
-
 fun Context.resourceUri(resourceId: Int): Uri = with(resources) {
     Uri.Builder()
         .scheme(ContentResolver.SCHEME_ANDROID_RESOURCE)
@@ -547,157 +528,6 @@ fun Context.resourceUri(resourceId: Int): Uri = with(resources) {
         .build()
 }
 
-fun TextView.animateText(targetColor: Int, interpolator: TimeInterpolator) {
-    val colorAnimator = ValueAnimator.ofArgb(textColors.defaultColor, targetColor)
-    colorAnimator.addUpdateListener { animation ->
-        val animatedValue = animation.animatedValue as Int
-        setTextColor(animatedValue)
-    }
-    colorAnimator.doOnEnd {
-        setTextColor(targetColor)
-    }
-    colorAnimator.duration = FullBottomSheet.LYRIC_SCROLL_DURATION
-    colorAnimator.interpolator = interpolator
-    colorAnimator.start()
-}
-
-fun CustomTextView.resetShader(interpolator: TimeInterpolator) {
-    val colorAnimator = ValueAnimator.ofArgb(colors.first(), colors.last())
-    colorAnimator.addUpdateListener { animation ->
-        val animatedValue = animation.animatedValue as Int
-        val animatedFadeColors = intArrayOf(animatedValue, animatedValue, animatedValue, animatedValue, colors.last())
-        updateGradient(animatedFadeColors)
-        setProgress(currentProgress)
-    }
-    colorAnimator.doOnEnd {
-        setDefaultGradient()
-        setProgress(0f)
-    }
-    colorAnimator.duration = FullBottomSheet.LYRIC_SCROLL_DURATION
-    colorAnimator.interpolator = interpolator
-    colorAnimator.start()
-}
-
-fun View.scaleText(targetScale: Float, interpolator: TimeInterpolator) {
-    val animator = ValueAnimator.ofFloat(scaleX, targetScale)
-    animator.addUpdateListener { animation ->
-        val animatedValue = animation.animatedValue as Float
-        scaleX = animatedValue
-        scaleY = animatedValue
-    }
-    animator.doOnEnd {
-        scaleX = targetScale
-        scaleY = targetScale
-    }
-    animator.duration = FullBottomSheet.LYRIC_SCROLL_DURATION
-    animator.interpolator = interpolator
-    animator.start()
-}
-
-fun View.scaleText(scale: Float) {
-    scaleX = scale
-    scaleY = scale
-}
-
-fun MaterialToolbar.applyGeneralMenuItem(
-    fragment: Fragment,
-    libraryViewModel: LibraryViewModel
-) {
-    this.setOnMenuItemClickListener { handleGeneralMenuItem(it, fragment, libraryViewModel) }
-}
-
-/**
- * The shared handler behind the equalizer / refresh / settings menu.
- *
- * Split out of [applyGeneralMenuItem] so a screen that presents the menu from its own button - the
- * home header, whose circular actions replace the toolbar's overflow affordance - can reuse the
- * exact same behaviour instead of duplicating it.
- */
-@SuppressLint("StringFormatInvalid", "StringFormatMatches")
-fun handleGeneralMenuItem(
-    item: MenuItem,
-    fragment: Fragment,
-    libraryViewModel: LibraryViewModel
-): Boolean {
-    run {
-        when (item.itemId) {
-            R.id.equalizer -> {
-                val intent = Intent(android.media.audiofx.AudioEffect.ACTION_DISPLAY_AUDIO_EFFECT_CONTROL_PANEL).apply {
-                    putExtra(android.media.audiofx.AudioEffect.EXTRA_PACKAGE_NAME, fragment.requireContext().packageName)
-                    putExtra(android.media.audiofx.AudioEffect.EXTRA_AUDIO_SESSION,
-                        (fragment.requireActivity() as MainActivity).getPlayer()?.getSessionId())
-                    putExtra(android.media.audiofx.AudioEffect.EXTRA_CONTENT_TYPE,
-                        android.media.audiofx.AudioEffect.CONTENT_TYPE_MUSIC)
-                }
-                try {
-                    (fragment.requireActivity() as MainActivity).startingActivity.launch(intent)
-                } catch (_: ActivityNotFoundException) {
-                    // Let's show a toast here if no system inbuilt EQ was found.
-                    Toast.makeText(
-                        fragment.requireContext(),
-                        R.string.equalizer_not_found,
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-            }
-
-            R.id.refresh -> {
-                val activity = fragment.requireActivity() as MainActivity
-                val playerLayout = activity.playerBottomSheet
-                activity.updateLibrary(force = true) {
-                    val snackBar =
-                        Snackbar.make(
-                            fragment.requireView(),
-                            fragment.getString(
-                                R.string.refreshed_songs,
-                                libraryViewModel.mediaItemList.value!!.size,
-                            ),
-                            Snackbar.LENGTH_LONG,
-                        )
-                    snackBar.setAction(R.string.dismiss) {
-                        snackBar.dismiss()
-                    }
-
-                    /*
-                     * Let's override snack bar's color here so it would
-                     * adapt dark mode.
-                     */
-                    snackBar.setBackgroundTint(
-                        MaterialColors.getColor(
-                            snackBar.view,
-                            com.google.android.material.R.attr.colorSurface,
-                        ),
-                    )
-                    snackBar.setActionTextColor(
-                        MaterialColors.getColor(
-                            snackBar.view,
-                            com.google.android.material.R.attr.colorPrimary,
-                        ),
-                    )
-                    snackBar.setTextColor(
-                        MaterialColors.getColor(
-                            snackBar.view,
-                            com.google.android.material.R.attr.colorOnSurface,
-                        ),
-                    )
-
-                    // Set an anchor for snack bar.
-                    if (playerLayout.visible && playerLayout.actuallyVisible)
-                        snackBar.anchorView = playerLayout
-                    snackBar.show()
-                }
-            }
-
-            R.id.settings -> {
-                (fragment.requireActivity() as MainActivity).playerBottomSheet.shouldRetractBottomNavigation(true)
-                (fragment.requireActivity() as MainActivity).startFragment(MainSettingsFragment())
-            }
-
-            else -> throw IllegalStateException()
-        }
-    }
-    return true
-}
 
 @RequiresApi(Build.VERSION_CODES.TIRAMISU)
 fun Context.hasImagePermission() =
@@ -736,11 +566,3 @@ inline fun hasScopedStorageWithMediaTypes(): Boolean =
 inline fun mayThrowForegroundServiceStartNotAllowed(): Boolean =
     Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
             Build.VERSION.SDK_INT <= Build.VERSION_CODES.S_V2
-
-inline fun Sequence<View>.getTextViews(
-    crossinline action: (CustomTextView) -> Unit
-) {
-    this.forEach {
-        if (it is CustomTextView) action.invoke(it)
-    }
-}

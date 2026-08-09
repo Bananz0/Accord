@@ -129,17 +129,6 @@
             </intent-filter>
         </activity>
 
-        <!--
-            Kept registered but no longer the entry point, so the screens that have not been ported
-            across yet can still be reached while the port finishes. Goes away with the old UI.
-        -->
-        <activity
-            android:name="org.akanework.gramophone.ui.MainActivity"
-            android:exported="false"
-            android:launchMode="singleTop"
-            android:theme="@style/Theme.Splash"
-            android:windowSoftInputMode="adjustPan" />
-
         <receiver
             android:name="androidx.media3.session.MediaButtonReceiver"
             android:exported="true">

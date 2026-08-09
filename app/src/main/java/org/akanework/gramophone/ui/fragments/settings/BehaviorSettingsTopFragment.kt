@@ -53,15 +53,11 @@ class BehaviorSettingsTopFragment : BasePreferenceFragment() {
     }
 
     override fun onPreferenceTreeClick(preference: Preference): Boolean {
-        if (preference.key == "blacklist") {
-            val supportFragmentManager = requireActivity().supportFragmentManager
-            supportFragmentManager
-                .beginTransaction()
-                .addToBackStack(System.currentTimeMillis().toString())
-                .hide(supportFragmentManager.fragments.let { it[it.size - 1] })
-                .add(R.id.container, BlacklistSettingsFragment())
-                .commit()
-        }
+        // The blacklist entry that used to live here pushed into the old shell's R.id.container.
+        // Accord's own settings list owns that row now and pushes the fragment through the
+        // switcher, so keeping a second copy here meant two routes to one screen, one of them
+        // targeting a container that no longer exists.
+
         // Prior to Android 13, this changes a setting which changes MediaStoreUtils behaviour
         // Android 13 and later, this displays state of images permission granted/denied
         if (hasScopedStorageWithMediaTypes() && preference.key == "album_covers") {

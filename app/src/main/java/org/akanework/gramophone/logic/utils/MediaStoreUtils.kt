@@ -51,7 +51,6 @@ import org.akanework.gramophone.logic.hasScopedStorageV1
 import org.akanework.gramophone.logic.hasScopedStorageV2
 import org.akanework.gramophone.logic.hasScopedStorageWithMediaTypes
 import org.akanework.gramophone.logic.putIfAbsentSupport
-import org.akanework.gramophone.logic.utils.DatabaseUtils.getPrivatePlaylist
 import org.akanework.gramophone.logic.utils.LrcUtils.Label
 import org.akanework.gramophone.ui.LibraryViewModel
 import java.io.File
@@ -724,7 +723,8 @@ object MediaStoreUtils {
             libraryViewModel.folderStructure.value = pairObject.folderStructure
             libraryViewModel.shallowFolderStructure.value = pairObject.shallowFolder
             libraryViewModel.allFolderSet.value = pairObject.folders
-            getPrivatePlaylist(libraryViewModel, context)
+            // The private-playlist pass went with DatabaseUtils and the old UI: those playlists
+            // were MediaStore-backed, and the library is the Jellyfin server now.
             Log.d("TAG", "FINISHED BUILDING!")
             then?.let { it() }
         }

@@ -13,7 +13,7 @@ import org.akanework.gramophone.logic.enableEdgeToEdgePaddingListener
 abstract class BaseSettingFragment(
     private val str: Int,
     private val fragmentCreator: () -> BasePreferenceFragment
-) : BaseFragment(false) {
+) : BaseFragment() {
     override fun onCreateView(
         inflater: LayoutInflater,
         container: ViewGroup?,

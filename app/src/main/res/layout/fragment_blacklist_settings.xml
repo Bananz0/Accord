@@ -17,6 +17,7 @@
 
 <androidx.coordinatorlayout.widget.CoordinatorLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent">
 
@@ -76,25 +77,30 @@
         android:orientation="vertical"
         app:layout_behavior="@string/appbar_scrolling_view_behavior">
 
-        <com.google.android.material.textfield.TextInputLayout
-            android:id="@+id/blacklist_filter_layout"
-            style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
+        <!--
+            A plain EditText, not a TextInputLayout: this screen is hosted under Accord's theme,
+            which does not descend from Theme.MaterialComponents, and the Material text field
+            asserts on that at inflation time rather than degrading.
+        -->
+        <EditText
+            android:id="@+id/blacklist_filter"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginHorizontal="16dp"
             android:layout_marginTop="8dp"
+            android:background="@drawable/search_bar_background"
+            android:drawableStart="@drawable/ic_search"
+            android:drawablePadding="10dp"
             android:hint="@string/blacklist_filter_hint"
-            app:startIconDrawable="@drawable/ic_search">
-
-            <com.google.android.material.textfield.TextInputEditText
-                android:id="@+id/blacklist_filter"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:imeOptions="actionSearch"
-                android:inputType="text"
-                android:maxLines="1" />
-
-        </com.google.android.material.textfield.TextInputLayout>
+            android:imeOptions="actionSearch"
+            android:inputType="text"
+            android:maxLines="1"
+            android:paddingHorizontal="14dp"
+            android:paddingVertical="12dp"
+            android:textColor="?attr/colorOnSurface"
+            android:textColorHint="?attr/colorOnSurfaceVariant"
+            android:textSize="16sp"
+            tools:ignore="Autofill,LabelFor" />
 
         <org.akanework.gramophone.logic.ui.MyRecyclerView
             android:id="@+id/recyclerview"
