@@ -137,16 +137,11 @@
 
                     <com.google.android.material.textfield.TextInputLayout
                         android:id="@+id/server_url_layout"
-                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="12dp"
                         android:layout_marginHorizontal="18dp"
                         android:hint="@string/jellyfin_server_url"
-                        app:boxCornerRadiusBottomEnd="14dp"
-                        app:boxCornerRadiusBottomStart="14dp"
-                        app:boxCornerRadiusTopEnd="14dp"
-                        app:boxCornerRadiusTopStart="14dp"
+                        app:boxBackgroundMode="none"
                         app:endIconContentDescription="@string/paste_from_clipboard"
                         app:endIconDrawable="@drawable/ic_paste"
                         app:endIconMode="custom">
@@ -158,6 +153,7 @@
                             android:fontFamily="@font/inter_regular"
                             android:imeOptions="actionDone"
                             android:inputType="textUri"
+                            android:paddingVertical="12dp"
                             android:singleLine="true" />
                     </com.google.android.material.textfield.TextInputLayout>
 
@@ -218,20 +214,37 @@
             android:paddingTop="72dp"
             android:paddingBottom="40dp">
 
+            <!--
+                The heading is the task, not the address. A server name is usually a domain, and
+                at 34sp it wrapped mid-word into something that read like a broken title; it
+                belongs on the quiet line underneath, where a long one can simply ellipsize.
+            -->
             <TextView
-                android:id="@+id/server_name"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:fontFamily="@font/inter_bold"
                 android:includeFontPadding="false"
+                android:text="@string/jellyfin_sign_in"
                 android:textColor="@color/onSurfaceColor"
                 android:textSize="34sp" />
+
+            <TextView
+                android:id="@+id/server_name"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:ellipsize="end"
+                android:fontFamily="@font/inter_regular"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:textColor="@color/onSurfaceColorInactive"
+                android:textSize="17sp" />
 
             <TextView
                 android:id="@+id/change_server"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
+                android:layout_marginTop="6dp"
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:fontFamily="@font/inter_semibold"
                 android:includeFontPadding="false"
@@ -281,18 +294,18 @@
                         app:dividerColor="@color/bottomNavigationDividerColor"
                         app:dividerThickness="0.25dp" />
 
+                    <!--
+                        Borderless. An outlined box drawn on the card put a second surface inside
+                        the first; a plain field separated by the same hairline the rest of the
+                        card uses says the same thing with one less edge.
+                    -->
                     <com.google.android.material.textfield.TextInputLayout
                         android:id="@+id/username_layout"
-                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="16dp"
                         android:layout_marginHorizontal="18dp"
                         android:hint="@string/jellyfin_username"
-                        app:boxCornerRadiusBottomEnd="14dp"
-                        app:boxCornerRadiusBottomStart="14dp"
-                        app:boxCornerRadiusTopEnd="14dp"
-                        app:boxCornerRadiusTopStart="14dp">
+                        app:boxBackgroundMode="none">
 
                         <com.google.android.material.textfield.TextInputEditText
                             android:id="@+id/username"
@@ -301,21 +314,25 @@
                             android:fontFamily="@font/inter_regular"
                             android:imeOptions="actionNext"
                             android:inputType="text"
+                            android:paddingVertical="12dp"
                             android:singleLine="true" />
                     </com.google.android.material.textfield.TextInputLayout>
 
-                    <com.google.android.material.textfield.TextInputLayout
-                        android:id="@+id/password_layout"
-                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
+                    <com.google.android.material.divider.MaterialDivider
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="12dp"
+                        android:layout_marginStart="18dp"
+                        android:alpha="0.5"
+                        app:dividerColor="@color/bottomNavigationDividerColor"
+                        app:dividerThickness="0.25dp" />
+
+                    <com.google.android.material.textfield.TextInputLayout
+                        android:id="@+id/password_layout"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
                         android:layout_marginHorizontal="18dp"
                         android:hint="@string/jellyfin_password"
-                        app:boxCornerRadiusBottomEnd="14dp"
-                        app:boxCornerRadiusBottomStart="14dp"
-                        app:boxCornerRadiusTopEnd="14dp"
-                        app:boxCornerRadiusTopStart="14dp"
+                        app:boxBackgroundMode="none"
                         app:endIconMode="password_toggle">
 
                         <com.google.android.material.textfield.TextInputEditText
@@ -325,6 +342,7 @@
                             android:fontFamily="@font/inter_regular"
                             android:imeOptions="actionDone"
                             android:inputType="textPassword"
+                            android:paddingVertical="12dp"
                             android:singleLine="true" />
                     </com.google.android.material.textfield.TextInputLayout>
 
@@ -343,19 +361,22 @@
                 app:backgroundTint="@color/accentColor"
                 app:cornerRadius="26dp" />
 
+            <!--
+                Text, not a second filled pill. Quick Connect is the alternative to signing in,
+                not an equal action, and two full-width buttons stacked made the choice look like
+                a coin toss.
+            -->
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/quick_connect"
-                style="@style/Widget.Material3.Button.OutlinedButton"
+                style="@style/Widget.Material3.Button.TextButton"
                 android:layout_width="match_parent"
-                android:layout_height="52dp"
-                android:layout_marginTop="10dp"
+                android:layout_height="48dp"
+                android:layout_marginTop="6dp"
                 android:fontFamily="@font/inter_semibold"
                 android:text="@string/jellyfin_quick_connect"
-                android:textColor="@color/onSurfaceColor"
+                android:textColor="@color/accentColor"
                 android:textSize="16sp"
-                android:visibility="gone"
-                app:cornerRadius="26dp"
-                app:strokeColor="@color/secondaryOverlayColor" />
+                android:visibility="gone" />
 
             <com.google.android.material.progressindicator.LinearProgressIndicator
                 android:id="@+id/progress"
