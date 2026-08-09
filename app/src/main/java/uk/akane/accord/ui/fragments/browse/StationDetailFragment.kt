@@ -151,7 +151,6 @@ class StationDetailFragment : SwitcherPostponeFragment(), FragmentSwitcherTransi
         // every frame of the transition - the reason opening a station stuttered where an album,
         // which shows a plain bitmap, did not.
         generatedArt.animated = false
-        generatedArt.setFullFrameRate()
         generatedArt.bind(title)
         generatedArt.postDelayed({ generatedArt.animated = true }, HEADER_ANIMATION_DELAY_MS)
         headerArt.visibility = View.GONE

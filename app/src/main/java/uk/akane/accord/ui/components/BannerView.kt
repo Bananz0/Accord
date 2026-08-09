@@ -1,6 +1,5 @@
 package uk.akane.accord.ui.components
 
-import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.LinearGradient
@@ -13,7 +12,6 @@ import android.text.TextPaint
 import android.text.TextUtils
 import android.util.AttributeSet
 import android.view.View
-import android.view.animation.LinearInterpolator
 import androidx.core.content.res.ResourcesCompat
 import androidx.core.graphics.ColorUtils
 import androidx.core.graphics.withTranslation
@@ -28,10 +26,15 @@ import uk.akane.cupertino.widget.continuousRoundRect
  */
 class BannerView @JvmOverloads constructor(
     context: Context, attrs: AttributeSet? = null
-) : View(context, attrs) {
+) : View(context, attrs), ProceduralMotionTicker.Host {
 
     private val motion = ProceduralStationMotion()
-    private var shaderAnimator: ValueAnimator? = null
+
+    override val motionDurationMs: Long get() = motion.durationMs
+
+    override var motionPhase: Float
+        get() = motion.phase
+        set(value) { motion.phase = value }
 
     private var textString: String = ""
     private var gradientText: String = ""
@@ -71,37 +74,15 @@ class BannerView @JvmOverloads constructor(
         this.textString = title
         this.gradientText = artistsSummary.orEmpty()
 
-        val motionChanged = motion.bind(seed)
-        if (motionChanged && shaderAnimator != null) restartShaderAnimation()
+        if (motion.bind(seed)) ProceduralMotionTicker.resetPhase(this)
         updateGradientShader()
         rebuildTextLayouts()
         invalidate()
     }
 
-    private fun startShaderAnimation() {
-        if (shaderAnimator != null) return
-        val start = motion.phase
-        shaderAnimator = ValueAnimator.ofFloat(start, start + 1f).apply {
-            duration = motion.durationMs
-            repeatCount = ValueAnimator.INFINITE
-            interpolator = LinearInterpolator()
-            addUpdateListener {
-                motion.phase = normalizePhase(it.animatedValue as Float)
-                postInvalidateOnAnimation()
-            }
-            start()
-        }
-    }
+    override fun isMotionAttached(): Boolean = isAttachedToWindow
 
-    private fun restartShaderAnimation() {
-        releaseShaderAnimation()
-        if (isAttachedToWindow) startShaderAnimation()
-    }
-
-    private fun releaseShaderAnimation() {
-        shaderAnimator?.cancel()
-        shaderAnimator = null
-    }
+    override fun invalidateMotion() = invalidate()
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
@@ -147,11 +128,11 @@ class BannerView @JvmOverloads constructor(
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        startShaderAnimation()
+        ProceduralMotionTicker.register(this)
     }
 
     override fun onDetachedFromWindow() {
-        releaseShaderAnimation()
+        ProceduralMotionTicker.unregister(this)
         super.onDetachedFromWindow()
     }
 
@@ -248,7 +229,4 @@ class BannerView @JvmOverloads constructor(
         }
     }
 
-    companion object {
-        private fun normalizePhase(value: Float): Float = ((value % 1f) + 1f) % 1f
-    }
 }
