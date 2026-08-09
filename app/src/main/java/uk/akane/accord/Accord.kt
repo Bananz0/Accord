@@ -29,11 +29,9 @@ import okio.buffer
 import okio.source
 import org.lsposed.hiddenapibypass.LSPass
 import org.akanework.gramophone.logic.data.library.BlacklistStore
-import org.akanework.gramophone.logic.data.library.CompositeLibraryReader
 import org.akanework.gramophone.logic.data.library.FilteredLibraryReader
 import org.akanework.gramophone.logic.data.library.JellyfinLibraryReader
 import org.akanework.gramophone.logic.data.library.LibraryReader
-import org.akanework.gramophone.logic.data.library.MediaStoreLibraryReader
 import uk.akane.accord.logic.hasScopedStorageWithMediaTypes
 import uk.akane.libphonograph.Constants
 import uk.akane.libphonograph.reader.FlowReader
@@ -97,13 +95,6 @@ open class Accord : Application(), SingletonImageLoader.Factory {
     lateinit var unfilteredReader: LibraryReader
         private set
 
-    private lateinit var flowReader: FlowReader
-
-    val minSongLengthSecondsFlow = MutableStateFlow<Long>(0)
-    val blackListSetFlow = MutableStateFlow<Set<String>>(setOf())
-    val shouldUseEnhancedCoverReadingFlow = if (hasScopedStorageWithMediaTypes()) null else
-        MutableStateFlow<Boolean?>(true)
-
     init {
         LSPass.setHiddenApiExemptions("")
         if (BuildConfig.DEBUG)
@@ -118,26 +109,12 @@ open class Accord : Application(), SingletonImageLoader.Factory {
 
     override fun onCreate() {
         super.onCreate()
-        flowReader = FlowReader(
-            this,
-            MutableStateFlow(0),
-            blackListSetFlow,
-            if (hasScopedStorageWithMediaTypes()) MutableStateFlow(null) else
-                shouldUseEnhancedCoverReadingFlow!!,
-            // TODO: Change this into a setting later
-            minSongLengthSecondsFlow,
-            MutableStateFlow(true),
-            "gramophoneAlbumCover"
-        )
+        // The Jellyfin server is the library. There is no local half to merge in: reading the
+        // device would mean asking for storage access this app has no use for.
         jellyfinReader = JellyfinLibraryReader(this)
         blacklist = BlacklistStore(this)
-        // Server first: it is the larger collection here, and the reason this fork exists. Local
-        // files still show up underneath it for anyone who keeps some on the device.
-        // Wrapped last so every screen reading `reader` gets the blacklist applied for free.
-        unfilteredReader = CompositeLibraryReader(
-            jellyfinReader,
-            MediaStoreLibraryReader(flowReader),
-        )
+        unfilteredReader = jellyfinReader
+        // Wrapped so every screen reading `reader` gets the blacklist applied for free.
         reader = FilteredLibraryReader(unfilteredReader, blacklist)
     }
 

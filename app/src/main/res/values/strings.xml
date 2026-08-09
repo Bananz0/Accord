@@ -260,7 +260,7 @@
 
     <!-- Setup wizard, Jellyfin page (replaces upstream's media permission page). -->
     <string name="setup_jellyfin_title">Connect your library</string>
-    <string name="setup_jellyfin_desc">Accord plays the music on your Jellyfin server. Sign in to get started.</string>
+    <string name="setup_jellyfin_desc">Accord is a Jellyfin client. Sign in to your server and your library comes with you.</string>
     <string name="setup_jellyfin_server">Server</string>
     <string name="setup_jellyfin_server_desc">Find your Jellyfin server and sign in</string>
     <string name="setup_jellyfin_server_connected">Connected</string>
@@ -269,7 +269,7 @@
     <string name="setup_jellyfin_account_connected">Signed in</string>
     <string name="setup_jellyfin_connect">Connect</string>
     <string name="setup_jellyfin_connected">Done</string>
-    <string name="setup_jellyfin_note">Music stored on this device is picked up as well, if you allow access later in Settings.</string>
+    <string name="setup_jellyfin_note">Everything you play comes from your server. Accord never reads music off this device, so it asks for no storage access.</string>
     <string name="sync_in_progress">Syncing library…</string>
     <string name="sync_progress">Syncing library… %1$d of %2$d</string>
     <string name="new_songs">New songs</string>
@@ -504,19 +504,11 @@
     <string name="top_picks">Top Picks</string>
     <string name="btn_continue">Continue</string>
     <string name="welcome_to">Welcome to</string>
-    <string name="welcome_page_introduction">Play local songs and playlists ad-free on your Android device. Download music to listen offline. Experience sound all around you with Spatial Audio.</string>
-    <string name="disclaimer">Accord is a freeware and an offline app. Accord will not send any of your data online or use them for any purposes. Accord source code is published online with GPL-3.0 licenses. Certain restrictions are applied.</string>
+    <string name="welcome_page_introduction">Your Jellyfin library, ad-free on your Android device. Stream everything on your server, download what you want offline, and hear it all around you with Spatial Audio.</string>
+    <string name="disclaimer">Accord is freeware. It talks to your Jellyfin server and the services you connect yourself, and sends your data nowhere else. Accord source code is published online with GPL-3.0 licenses. Certain restrictions are applied.</string>
     <string name="check_source_code"><a href="https://github.com/AkaneFoundation/Accord"><u>Check source code …</u></a></string>
-    <string name="need_permissions">Need permissions</string>
-    <string name="permission_title_desc">Permissions are needed in order to play your music normally. Please check the description for each entry.</string>
-    <string name="storage">Storage</string>
-    <string name="storage_desc">Allow access to your music</string>
     <string name="music">Music</string>
     <string name="Album">Album</string>
-    <string name="album_desc">Allow access to your album cover</string>
-    <string name="album_cover_special_desc">Without the album permission, we can only read your album cover vaguely.</string>
-    <string name="allow">Allow</string>
-    <string name="allowed">Allowed</string>
     <string name="sort">Sort</string>
     <string name="play">Play</string>
     <string name="whats_new_in_accord">What\'s new in Accord</string>

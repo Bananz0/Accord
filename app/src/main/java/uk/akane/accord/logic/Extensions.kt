@@ -479,13 +479,8 @@ fun Context.isDarkMode(): Boolean =
     resources.configuration.uiMode and
             Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
 
-fun Context.isAlbumPermissionGranted() =
-    (hasMediaPermissionSeparation() && (checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED)) ||
-            (!hasMediaPermissionSeparation() && isEssentialPermissionGranted())
-
-fun Context.isEssentialPermissionGranted() =
-    (!hasMediaPermissionSeparation() && (checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED)) ||
-            (hasMediaPermissionSeparation() && (checkSelfPermission(Manifest.permission.READ_MEDIA_AUDIO) == PackageManager.PERMISSION_GRANTED))
+// The media-permission helpers that lived here are gone with local library support: the app reads
+// its library from Jellyfin and never touches device storage, so there is nothing to check.
 
 @RequiresApi(Build.VERSION_CODES.TIRAMISU)
 fun Context.hasNotificationPermission() =

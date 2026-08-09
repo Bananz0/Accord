@@ -19,23 +19,11 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!--
-        Local library access. This fork had dropped these when it moved to a Jellyfin-backed
-        library, but the Accord screens read the local library through libPhonograph, and its setup
-        wizard blocks on READ_MEDIA_AUDIO - without it the app never gets past the permission page.
-        Local files and the Jellyfin library are meant to coexist, so these come back.
+        No media permissions. The library is the Jellyfin server and nothing else, so there is
+        nothing on the device to read - and a music app that asks for storage access it never uses
+        is asking the user to take a claim on trust. The profile picture uses PickVisualMedia,
+        which hands back a single chosen image without any permission at all.
     -->
-    <!-- Read music files (Android 13 and later) (includes .lrc and thumbnails) -->
-    <uses-permission
-        android:name="android.permission.READ_MEDIA_AUDIO"
-        android:minSdkVersion="33" />
-    <!-- Read cover files, never requested by the UI but honoured for users who grant it -->
-    <uses-permission
-        android:name="android.permission.READ_MEDIA_IMAGES"
-        android:minSdkVersion="33"
-        tools:ignore="PhotoAndVideoPolicy" />
-    <uses-permission
-        android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED"
-        android:minSdkVersion="34" />
 
     <application
         android:name="org.akanework.gramophone.logic.GramophoneApplication"

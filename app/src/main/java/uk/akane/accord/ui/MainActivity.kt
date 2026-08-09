@@ -29,7 +29,6 @@ import uk.akane.accord.Accord
 import uk.akane.accord.R
 import uk.akane.accord.logic.enableEdgeToEdgeProperly
 import uk.akane.accord.logic.isDarkMode
-import uk.akane.accord.logic.isEssentialPermissionGranted
 import uk.akane.accord.logic.utils.CalculationUtils.lerp
 import uk.akane.accord.logic.utils.UiUtils
 import uk.akane.accord.setupwizard.fragments.SetupWizardFragment

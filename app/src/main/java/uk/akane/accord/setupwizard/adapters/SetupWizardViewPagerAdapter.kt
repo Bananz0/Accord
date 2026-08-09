@@ -18,8 +18,8 @@ class SetupWizardViewPagerAdapter(
     override fun createFragment(position: Int): Fragment =
         when (position) {
             0 -> WelcomePageFragment()
-            // Upstream's PermissionPageFragment sat here. It is still in the tree, but this app
-            // needs a server before it needs local storage access.
+            // Upstream asked for storage permission here. This app has no local library to read,
+            // so the server takes that slot: it is the only thing setup actually needs.
             1 -> JellyfinPageFragment()
             // The services this fork adds. Optional, but asked about here rather than discovered
             // months later at the moment one of them is needed.

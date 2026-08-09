@@ -10,7 +10,6 @@ import androidx.viewpager2.widget.ViewPager2
 import com.google.android.material.button.MaterialButton
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinCredentialStore
 import uk.akane.accord.R
-import uk.akane.accord.logic.isEssentialPermissionGranted
 import uk.akane.accord.logic.setCurrentItemInterpolated
 import uk.akane.accord.setupwizard.adapters.SetupWizardViewPagerAdapter
 import uk.akane.accord.ui.MainActivity
