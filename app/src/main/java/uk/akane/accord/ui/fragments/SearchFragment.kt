@@ -45,6 +45,7 @@ import uk.akane.accord.ui.components.TrackSwipeActions
 import androidx.core.view.updatePadding
 import org.akanework.gramophone.logic.data.lidarr.LidarrClient
 import org.akanework.gramophone.logic.data.lidarr.LidarrCredentialStore
+import org.akanework.gramophone.ui.fragments.settings.LidarrSettingsFragment
 import uk.akane.accord.ui.components.LidarrSetupPrompt
 import uk.akane.accord.ui.components.performPressHaptic
 
@@ -64,7 +65,9 @@ class SearchFragment: Fragment() {
     private lateinit var searchInputDetail: EditText
 
     private lateinit var searchResults: RecyclerView
+    private lateinit var searchStatus: View
     private lateinit var searchEmpty: TextView
+    private lateinit var searchStatusAction: TextView
     private lateinit var resultsAdapter: SearchResultsAdapter
     private lateinit var lidarrResultsAdapter: LidarrSearchResultsAdapter
 
@@ -138,7 +141,9 @@ class SearchFragment: Fragment() {
         resetTabRevealState()
 
         searchResults = detailedSearchContainer.findViewById(R.id.search_results)
+        searchStatus = detailedSearchContainer.findViewById(R.id.search_status)
         searchEmpty = detailedSearchContainer.findViewById(R.id.search_empty)
+        searchStatusAction = detailedSearchContainer.findViewById(R.id.search_status_action)
         resultsAdapter = SearchResultsAdapter { (activity as? MainActivity)?.getPlayer() }
         lidarrResultsAdapter = LidarrSearchResultsAdapter(::requestLidarrAlbum)
         searchResults.layoutManager = LinearLayoutManager(requireContext())
@@ -231,7 +236,9 @@ class SearchFragment: Fragment() {
         if (query.isEmpty()) {
             resultsAdapter.submit(emptyList())
             lidarrResultsAdapter.submit(emptyList())
-            searchEmpty.visibility = View.GONE
+            // An empty box is exactly when a broken Lidarr is worth saying out loud - waiting for a
+            // query to report it means the user types something first and blames the search.
+            if (isAppleTabSelected) hideStatus() else showLidarrSetupStatusIfNeeded()
             return
         }
         pendingQuery = viewLifecycleOwner.lifecycleScope.launch {
@@ -252,33 +259,103 @@ class SearchFragment: Fragment() {
                         .toList()
                 }
                 resultsAdapter.submit(matches)
-                searchEmpty.text = getString(R.string.search_no_results)
-                searchEmpty.visibility = if (matches.isEmpty()) View.VISIBLE else View.GONE
+                if (matches.isEmpty()) showStatus(getString(R.string.search_no_results))
+                else hideStatus()
             } else {
                 searchLidarr(query)
             }
         }
     }
 
-    private suspend fun searchLidarr(query: String) {
-        val store = LidarrCredentialStore(requireContext())
-        if (store.serverUrl.isNullOrBlank() || store.apiKey.isNullOrBlank()) {
-            lidarrResultsAdapter.submit(emptyList())
-            searchEmpty.setText(R.string.requests_no_lidarr)
-            searchEmpty.visibility = View.VISIBLE
-            return
+    /**
+     * Shows the background message, optionally with a tappable line under it.
+     *
+     * Everything that can leave this screen with nothing to show goes through here so the list and
+     * the message can never both be visible, and so a dead end always offers the way out of it.
+     */
+    private fun showStatus(
+        message: CharSequence,
+        actionText: CharSequence? = null,
+        action: (() -> Unit)? = null,
+    ) {
+        searchEmpty.text = message
+        if (actionText != null && action != null) {
+            searchStatusAction.text = actionText
+            searchStatusAction.visibility = View.VISIBLE
+            searchStatusAction.setOnClickListener {
+                it.performPressHaptic()
+                action()
+            }
+        } else {
+            searchStatusAction.visibility = View.GONE
+            searchStatusAction.setOnClickListener(null)
         }
+        searchStatus.visibility = View.VISIBLE
+    }
+
+    private fun hideStatus() {
+        searchStatus.visibility = View.GONE
+        searchStatusAction.setOnClickListener(null)
+    }
+
+    /**
+     * Reports an unusable Lidarr on the empty Lidarr tab, and says which kind of unusable it is.
+     *
+     * Missing credentials and missing profiles need different actions - the first cannot be guessed
+     * and the second is discovered from the server - so they are not collapsed into one message.
+     *
+     * @return true if a message was shown.
+     */
+    private fun showLidarrSetupStatusIfNeeded(): Boolean {
+        val store = LidarrCredentialStore(requireContext())
+        return when {
+            store.serverUrl.isNullOrBlank() || store.apiKey.isNullOrBlank() -> {
+                showStatus(
+                    getString(R.string.search_lidarr_not_configured),
+                    getString(R.string.search_lidarr_set_up),
+                ) { openLidarrSettings() }
+                true
+            }
+            !store.isConfigured() -> {
+                showStatus(
+                    getString(R.string.search_lidarr_incomplete),
+                    getString(R.string.search_lidarr_open_settings),
+                ) { openLidarrSettings() }
+                true
+            }
+            else -> {
+                hideStatus()
+                false
+            }
+        }
+    }
+
+    private fun openLidarrSettings() {
+        (activity as? MainActivity)?.fragmentSwitcherView
+            ?.addFragmentToCurrentStack(LidarrSettingsFragment())
+    }
+
+    private suspend fun searchLidarr(query: String) {
+        lidarrResultsAdapter.submit(emptyList())
+        if (showLidarrSetupStatusIfNeeded()) return
+
+        val store = LidarrCredentialStore(requireContext())
         val result = withContext(Dispatchers.IO) {
             runCatching { LidarrClient(store).searchAlbums(query) }
         }
         result.onSuccess { albums ->
             lidarrResultsAdapter.submit(albums)
-            searchEmpty.setText(R.string.requests_no_results)
-            searchEmpty.visibility = if (albums.isEmpty()) View.VISIBLE else View.GONE
-        }.onFailure {
+            if (albums.isEmpty()) showStatus(getString(R.string.requests_no_results))
+            else hideStatus()
+        }.onFailure { error ->
             lidarrResultsAdapter.submit(emptyList())
-            searchEmpty.text = it.message ?: getString(R.string.requests_failed)
-            searchEmpty.visibility = View.VISIBLE
+            showStatus(
+                getString(
+                    R.string.search_lidarr_unreachable,
+                    error.message ?: getString(R.string.requests_failed),
+                ),
+                getString(R.string.search_lidarr_retry),
+            ) { runQuery(searchInputDetail.text?.toString().orEmpty()) }
         }
     }
 

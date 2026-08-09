@@ -134,13 +134,18 @@
         android:background="@color/bottomNavigationDividerColor" />
 
 
-    <!-- Content Area -->
-    <LinearLayout
+    <!--
+        Content Area.
+
+        A frame rather than a column: the status block has to sit over the list and centre itself in
+        the whole area. Stacked vertically, the results list claimed every pixel and the message
+        below it was laid out with no height left, so it never appeared however it was toggled.
+    -->
+    <FrameLayout
         android:id="@+id/content_container"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:orientation="vertical"
         android:background="@color/surfaceColor">
 
         <!--
@@ -153,18 +158,44 @@
             android:layout_height="match_parent"
             android:clipToPadding="false" />
 
-        <TextView
-            android:id="@+id/search_empty"
+        <LinearLayout
+            android:id="@+id/search_status"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="48dp"
-            android:fontFamily="@font/inter_regular"
+            android:layout_gravity="center"
             android:gravity="center"
-            android:text="@string/search_no_results"
-            android:textColor="@color/onSurfaceColorInactive"
-            android:textSize="16sp"
-            android:visibility="gone" />
+            android:orientation="vertical"
+            android:paddingHorizontal="40dp"
+            android:visibility="gone">
 
-    </LinearLayout>
+            <TextView
+                android:id="@+id/search_empty"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="@font/inter_regular"
+                android:gravity="center"
+                android:lineSpacingExtra="3sp"
+                android:text="@string/search_no_results"
+                android:textColor="@color/onSurfaceColorInactive"
+                android:textSize="16sp" />
+
+            <TextView
+                android:id="@+id/search_status_action"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:fontFamily="@font/inter_semibold"
+                android:gravity="center"
+                android:includeFontPadding="false"
+                android:paddingHorizontal="12dp"
+                android:paddingVertical="8dp"
+                android:textColor="@color/accentColor"
+                android:textSize="16sp"
+                android:visibility="gone" />
+
+        </LinearLayout>
+
+    </FrameLayout>
 
 </LinearLayout>
