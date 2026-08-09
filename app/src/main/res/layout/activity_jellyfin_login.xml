@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/login_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/contrast_colorBackground">
+    android:background="@color/surfaceColor">
 
     <!--
         Step one: which server. Servers broadcasting on the local network appear on their own, so

@@ -11,6 +11,9 @@ import android.widget.ImageView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.net.toUri
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.updatePadding
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -99,6 +102,7 @@ class JellyfinLoginActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_jellyfin_login)
         bindViews()
+        applyWindowInsets()
 
         discoveredList.layoutManager = LinearLayoutManager(this)
         discoveredList.adapter = discoveredAdapter
@@ -361,6 +365,28 @@ class JellyfinLoginActivity : AppCompatActivity() {
             boxes.addView(cell)
         }
         return view
+    }
+
+    /**
+     * Keeps the form clear of the system bars and, more importantly, of the keyboard.
+     *
+     * `adjustResize` alone did not do it: the window is laid out edge to edge, so the IME arrives
+     * as an inset rather than as a smaller window, and the password field - the last thing above
+     * the fold - ended up underneath the keyboard with no way to scroll to it. Padding the root by
+     * whichever of the navigation bar or the keyboard is taller gives the ScrollViews a real
+     * bottom to scroll against, so the focused field comes into view by itself.
+     */
+    private fun applyWindowInsets() {
+        val root = findViewById<View>(R.id.login_root)
+        ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+            view.updatePadding(
+                top = bars.top,
+                bottom = maxOf(bars.bottom, ime.bottom),
+            )
+            insets
+        }
     }
 
     private fun finishAuthentication(result: LoginResult) = when (result) {
