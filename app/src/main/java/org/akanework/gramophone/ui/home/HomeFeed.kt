@@ -42,6 +42,11 @@ object HomeFeed {
     private const val MIX_SIZE = 50
     private const val MIN_MIX_SIZE = 5
 
+    private const val MILLIS_PER_DAY = 24L * 60L * 60L * 1000L
+
+    /** How long an artist has to go unplayed before they count as worth resurfacing. */
+    private const val QUIET_DAYS = 45L
+
     data class ArtistInput(val title: String?, val songList: List<MediaItem>)
 
     fun build(
@@ -54,12 +59,166 @@ object HomeFeed {
         return buildList {
             jumpBackIn(context, library)?.let(::add)
             madeForYou(context, library, artists)?.let(::add)
+            becauseYouListenedTo(library, artists)?.let(::add)
             recentlyAddedAlbums(context, library)?.let(::add)
             topMixes(context, artists)?.let(::add)
             genreMixes(library)?.let(::add)
             finishYourAlbums(library)?.let(::add)
+            backInRotation(artists)?.let(::add)
+            neverPlayedAlbums(library)?.let(::add)
             decadeMixes(library)?.let(::add)
         }
+    }
+
+    /**
+     * One mix per artist worth building around, each seeded by that artist but reaching past them.
+     *
+     * Distinct from [topMixes], which stays inside a single artist's catalogue. These lean outward:
+     * roughly a third of the mix is the seed artist and the rest is drawn from the genres they sit
+     * in, which is the part that makes the row worth opening rather than a second artist shelf.
+     */
+    private fun becauseYouListenedTo(
+        library: List<MediaItem>,
+        artists: List<ArtistInput>,
+    ): HomeSection? {
+        val seeds = artists
+            .filter { it.title?.isNotBlank() == true && it.songList.size >= 3 }
+            .filter { artist -> artist.songList.any { it.playCount() > 0 } }
+            .sortedByDescending { artist -> artist.songList.sumOf { it.playCount() } }
+            .take(ROW_SIZE)
+        if (seeds.isEmpty()) return null
+
+        val cards = seeds.mapNotNull { seed ->
+            val seedName = seed.title ?: return@mapNotNull null
+            val seedKey = seedName.normaliseForMatch()
+            val seedGenres = seed.songList.mapNotNull { it.genreKey() }.toSet()
+
+            val core = seed.songList
+                .sortedByDescending { it.playCount() }
+                .take(MIX_SIZE / 3)
+            val neighbours = library
+                .filter { it.artistKey() != seedKey && it.genreKey() in seedGenres }
+                .stableShuffle(weeklySeed("because_$seedKey"))
+                .balancedByArtist()
+
+            val songs = (core + neighbours).distinctBy { it.mediaId }.take(MIX_SIZE)
+            if (songs.size < MIN_MIX_SIZE) return@mapNotNull null
+
+            HomeCard(
+                title = phrase(
+                    "because_card_$seedKey",
+                    "Because you listened to $seedName",
+                    "More like $seedName",
+                    "Inspired by $seedName",
+                    "In the world of $seedName",
+                    "If you like $seedName",
+                ),
+                subtitle = songs.mapNotNull { it.mediaMetadata.artist?.toString() }
+                    .distinct().take(4).joinToString(", "),
+                cover = songs.firstNotNullOfOrNull { it.mediaMetadata.artworkUri },
+                collageCovers = songs.mapNotNull { it.mediaMetadata.artworkUri }.distinct().take(4),
+                songs = songs,
+            )
+        }.withoutNearDuplicates()
+        if (cards.isEmpty()) return null
+
+        return HomeSection(
+            id = "because_you_listened_v2",
+            title = phrase(
+                "because_section",
+                "Because you listened",
+                "Built from your favourites",
+                "Started from what you play",
+                "Following your taste",
+            ),
+            subtitle = phrase(
+                "because_section_sub",
+                "Each mix starts with an artist you play and travels outward",
+                "Seeded by the artists you return to, then widened",
+                "One artist as a starting point, not the whole mix",
+            ),
+            cards = cards,
+        )
+    }
+
+    /**
+     * Artists with real history that have gone quiet, ranked by how long they have been silent.
+     *
+     * Deliberately not [finishYourAlbums]: that is about unheard tracks, this is about music the
+     * user demonstrably liked and simply stopped reaching for.
+     */
+    private fun backInRotation(artists: List<ArtistInput>): HomeSection? {
+        val now = System.currentTimeMillis()
+        val stale = artists
+            .filter { it.title?.isNotBlank() == true && it.songList.size >= MIN_MIX_SIZE }
+            .mapNotNull { artist ->
+                val plays = artist.songList.sumOf { it.playCount() }
+                if (plays < 3) return@mapNotNull null
+                val lastPlayed = artist.songList.maxOf { it.lastPlayed() }
+                if (lastPlayed <= 0L) return@mapNotNull null
+                val silentDays = (now - lastPlayed) / MILLIS_PER_DAY
+                if (silentDays < QUIET_DAYS) null else Triple(artist, lastPlayed, silentDays)
+            }
+            .sortedByDescending { it.third }
+            .take(ROW_SIZE)
+        if (stale.isEmpty()) return null
+
+        return HomeSection(
+            id = "back_in_rotation_v2",
+            title = phrase(
+                "back_in_rotation",
+                "Back in rotation",
+                "You used to play these",
+                "Long time no listen",
+                "Worth another spin",
+            ),
+            subtitle = phrase(
+                "back_in_rotation_sub",
+                "Artists you loved that have gone quiet",
+                "Plenty of history here, and nothing recent",
+                "These have not come up in a while",
+            ),
+            cards = stale.map { (artist, _, silentDays) ->
+                val title = artist.title.orEmpty()
+                val songs = artist.songList
+                    .stableShuffle(weeklySeed("stale_$title"))
+                    .take(MIX_SIZE)
+                HomeCard(
+                    title = "$title Mix",
+                    subtitle = "Last played ${silentDays.describeGap()}",
+                    cover = songs.firstNotNullOfOrNull { it.mediaMetadata.artworkUri },
+                    collageCovers = songs.mapNotNull { it.mediaMetadata.artworkUri }.distinct().take(4),
+                    songs = songs,
+                )
+            },
+        )
+    }
+
+    /** Whole albums that have never been touched - the part of a library that stays invisible. */
+    private fun neverPlayedAlbums(library: List<MediaItem>): HomeSection? {
+        val albums = library.toAlbumGroups()
+            .filter { (_, tracks) -> tracks.size >= 4 && tracks.all { it.playCount() == 0 } }
+            .sortedBy { (key, _) -> stableHash(weeklySeed("unplayed_albums"), key) }
+            .take(ROW_SIZE)
+        if (albums.isEmpty()) return null
+
+        return HomeSection(
+            id = "never_played_albums_v2",
+            title = phrase(
+                "never_played",
+                "Still unopened",
+                "Never played",
+                "Waiting for a first listen",
+                "The unexplored shelf",
+            ),
+            subtitle = phrase(
+                "never_played_sub",
+                "Albums in your library you have not started",
+                "Nothing here has ever been played",
+                "Full records, still untouched",
+            ),
+            cards = albums.map { (_, tracks) -> tracks.toAlbumCard() },
+        )
     }
 
     /**
@@ -97,12 +256,12 @@ object HomeFeed {
 
         val cards = listOfNotNull(
             mixCard(
-                title = "Personal anthems",
+                title = phrase("card_anthems", "Personal anthems", "Your greatest hits", "On repeat"),
                 subtitle = "Your biggest songs, balanced across the artists you love",
                 songs = played.sortedByDescending { it.playCount() }.balancedByArtist(),
             ),
             mixCard(
-                title = "Current rotation",
+                title = phrase("card_rotation", "Current rotation", "Lately", "This era"),
                 subtitle = "The music defining your recent listening",
                 songs = played.filter { it.lastPlayed() > 0L }
                     .sortedByDescending { it.lastPlayed() }
@@ -122,14 +281,14 @@ object HomeFeed {
                     .balancedByArtist(),
             ),
             mixCard(
-                title = "Deep cuts",
+                title = phrase("card_deep_cuts", "Deep cuts", "Hidden gems", "The B-sides"),
                 subtitle = "Less-played tracks from the artists already in your orbit",
                 songs = library.filter { item ->
                     item.artistKey() in topArtistNames && item.playCount() <= 1
                 }.stableShuffle(weeklySeed("deep_cuts")),
             ),
             mixCard(
-                title = "New to you",
+                title = phrase("card_new_to_you", "New to you", "Unheard territory", "Worth a try"),
                 subtitle = "Unplayed tracks close to the genres you return to",
                 songs = library.filter { item ->
                     item.playCount() == 0 &&
@@ -162,7 +321,12 @@ object HomeFeed {
         return HomeSection(
             id = "made_for_you_v2",
             title = context.getString(R.string.home_made_for_you),
-            subtitle = "Distinct mixes built from different parts of your listening",
+            subtitle = phrase(
+                "made_for_you_sub",
+                "Distinct mixes built from different parts of your listening",
+                "Nine ways into your own library",
+                "Each one drawn from a different signal",
+            ),
             cards = cards,
             style = HomeSectionStyle.STATION,
         )
@@ -204,7 +368,12 @@ object HomeFeed {
         return HomeSection(
             id = "recently_added_albums_v2",
             title = context.getString(R.string.mix_recently_added),
-            subtitle = "The newest records in your library",
+            subtitle = phrase(
+                "recently_added_sub",
+                "The newest records in your library",
+                "Fresh off the server",
+                "Just landed",
+            ),
             cards = albums.map { (_, tracks) -> tracks.toAlbumCard() },
         )
     }
@@ -253,8 +422,19 @@ object HomeFeed {
 
         return HomeSection(
             id = "genre_mixes_v2",
-            title = "Your genre mixes",
-            subtitle = "Each mix stays inside a different sound in your library",
+            title = phrase(
+                "genre_mixes",
+                "Your genre mixes",
+                "By the sound of it",
+                "Pick a lane",
+                "Sorted by sound",
+            ),
+            subtitle = phrase(
+                "genre_mixes_sub",
+                "Each mix stays inside a different sound in your library",
+                "One mix per corner of your collection",
+                "No genre-hopping - each stays put",
+            ),
             cards = genres.map { entries ->
                 val displayName = entries.first().second
                 val songs = entries.map { it.third }
@@ -291,8 +471,19 @@ object HomeFeed {
 
         return HomeSection(
             id = "finish_your_albums_v2",
-            title = "Finish what you started",
-            subtitle = "Unheard tracks from albums you have already begun",
+            title = phrase(
+                "finish_albums",
+                "Finish what you started",
+                "You are halfway through",
+                "Pick up where you left off",
+                "Unfinished business",
+            ),
+            subtitle = phrase(
+                "finish_albums_sub",
+                "Unheard tracks from albums you have already begun",
+                "The parts of these records you have not reached",
+                "Started but not finished",
+            ),
             cards = cards,
         )
     }
@@ -311,8 +502,19 @@ object HomeFeed {
 
         return HomeSection(
             id = "decade_mixes_v2",
-            title = "Time capsules",
-            subtitle = "A separate playlist for every era in your collection",
+            title = phrase(
+                "decade_mixes",
+                "Time capsules",
+                "By the decade",
+                "Rewind",
+                "Eras",
+            ),
+            subtitle = phrase(
+                "decade_mixes_sub",
+                "A separate playlist for every era in your collection",
+                "Your library, split by when it was made",
+                "One mix per decade you own",
+            ),
             cards = decades.map { (decade, tracks) ->
                 val songs = tracks.stableShuffle(weeklySeed("decade_$decade")).take(MIX_SIZE)
                 HomeCard(
@@ -462,6 +664,26 @@ object HomeFeed {
             }
             if (!isNearDuplicate) add(candidate)
         }
+    }
+
+    /**
+     * Picks one of several ways of saying the same thing, fixed for the day.
+     *
+     * The wording changes between days so the feed does not read as the same printed page every
+     * morning, but never changes within one - which keeps it consistent with the cached copy the
+     * home screen renders on a cold start, and stops a title swapping under the user mid-scroll.
+     */
+    private fun phrase(key: String, vararg options: String): String {
+        if (options.isEmpty()) return ""
+        val index = (stableHash(dailySeed("phrase"), key).toULong() % options.size.toULong()).toInt()
+        return options[index]
+    }
+
+    private fun Long.describeGap(): String = when {
+        this >= 365 -> "over a year ago"
+        this >= 60 -> "${this / 30} months ago"
+        this >= 30 -> "a month ago"
+        else -> "$this days ago"
     }
 
     private fun dailySeed(prefix: String): String {
