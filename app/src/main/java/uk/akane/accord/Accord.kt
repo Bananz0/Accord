@@ -28,7 +28,9 @@ import okio.Path.Companion.toOkioPath
 import okio.buffer
 import okio.source
 import org.lsposed.hiddenapibypass.LSPass
+import org.akanework.gramophone.logic.data.library.BlacklistStore
 import org.akanework.gramophone.logic.data.library.CompositeLibraryReader
+import org.akanework.gramophone.logic.data.library.FilteredLibraryReader
 import org.akanework.gramophone.logic.data.library.JellyfinLibraryReader
 import org.akanework.gramophone.logic.data.library.LibraryReader
 import org.akanework.gramophone.logic.data.library.MediaStoreLibraryReader
@@ -82,6 +84,19 @@ open class Accord : Application(), SingletonImageLoader.Factory {
     lateinit var jellyfinReader: JellyfinLibraryReader
         private set
 
+    /** Shared with the blacklist settings page, which writes what [reader] then filters by. */
+    lateinit var blacklist: BlacklistStore
+        private set
+
+    /**
+     * The library before the blacklist is applied.
+     *
+     * Only the blacklist page should want this: listing from [reader] would hide the very entries
+     * somebody needs to see in order to unblock them.
+     */
+    lateinit var unfilteredReader: LibraryReader
+        private set
+
     private lateinit var flowReader: FlowReader
 
     val minSongLengthSecondsFlow = MutableStateFlow<Long>(0)
@@ -115,9 +130,15 @@ open class Accord : Application(), SingletonImageLoader.Factory {
             "gramophoneAlbumCover"
         )
         jellyfinReader = JellyfinLibraryReader(this)
+        blacklist = BlacklistStore(this)
         // Server first: it is the larger collection here, and the reason this fork exists. Local
         // files still show up underneath it for anyone who keeps some on the device.
-        reader = CompositeLibraryReader(jellyfinReader, MediaStoreLibraryReader(flowReader))
+        // Wrapped last so every screen reading `reader` gets the blacklist applied for free.
+        unfilteredReader = CompositeLibraryReader(
+            jellyfinReader,
+            MediaStoreLibraryReader(flowReader),
+        )
+        reader = FilteredLibraryReader(unfilteredReader, blacklist)
     }
 
     override fun newImageLoader(context: PlatformContext): ImageLoader {

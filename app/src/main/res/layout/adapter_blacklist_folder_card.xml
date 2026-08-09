@@ -16,19 +16,38 @@
         android:layout_height="wrap_content"
         app:buttonTint="?colorOnSurface" />
 
-    <TextView
-        android:id="@+id/title"
+    <LinearLayout
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_gravity="center_vertical"
         android:layout_weight="1"
-        android:fontFamily="sans-serif"
+        android:orientation="vertical"
         android:paddingTop="12dp"
-        android:paddingBottom="12dp"
-        android:singleLine="true"
-        android:textColor="?attr/colorOnSurface"
-        android:textFontWeight="500"
-        android:textSize="16sp"
-        tools:text="/storage/0/emulated/Downloads/Ringtone/Every" />
+        android:paddingBottom="12dp">
+
+        <TextView
+            android:id="@+id/title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="sans-serif"
+            android:singleLine="true"
+            android:textColor="?attr/colorOnSurface"
+            android:textFontWeight="500"
+            android:textSize="16sp"
+            tools:text="/storage/0/emulated/Downloads/Ringtone/Every" />
+
+        <TextView
+            android:id="@+id/subtitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="sans-serif"
+            android:singleLine="true"
+            android:textColor="?attr/colorOnSurfaceVariant"
+            android:textSize="13sp"
+            android:visibility="gone"
+            tools:text="Miles Davis"
+            tools:visibility="visible" />
+
+    </LinearLayout>
 
 </LinearLayout>
