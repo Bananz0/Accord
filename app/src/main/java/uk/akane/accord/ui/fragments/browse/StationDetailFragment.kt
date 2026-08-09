@@ -151,6 +151,7 @@ class StationDetailFragment : SwitcherPostponeFragment(), FragmentSwitcherTransi
         // every frame of the transition - the reason opening a station stuttered where an album,
         // which shows a plain bitmap, did not.
         generatedArt.animated = false
+        generatedArt.setFullFrameRate()
         generatedArt.bind(title)
         generatedArt.postDelayed({ generatedArt.animated = true }, HEADER_ANIMATION_DELAY_MS)
         headerArt.visibility = View.GONE
@@ -325,12 +326,10 @@ class StationDetailFragment : SwitcherPostponeFragment(), FragmentSwitcherTransi
 
     private fun saveAsPlaylist() {
         if (saveInProgress) return
+        // The control is a toggle, so the second press has to be the way back out. It used to
+        // report that the playlist already existed, which left the tick with nothing to undo it.
         if (savedPlaylistId != null) {
-            Toast.makeText(
-                requireContext(),
-                getString(R.string.add_to_playlist_created, titleView.text),
-                Toast.LENGTH_SHORT
-            ).show()
+            promptDeleteFromServer()
             return
         }
         val tracks = currentTracks
@@ -413,7 +412,9 @@ class StationDetailFragment : SwitcherPostponeFragment(), FragmentSwitcherTransi
             if (deleted) {
                 savedPlaylistId = null
                 forgetSavedStation(titleView.text?.toString().orEmpty())
-                navigationBar.isAddButtonChecked = false
+                // Animated, so the tick runs back into the plus and the removal is legible as the
+                // undo of the save rather than the button silently changing shape.
+                navigationBar.setAddButtonChecked(false, animate = true, haptic = true)
                 navigationBar.shouldDrawAddButton = true
                 Toast.makeText(
                     requireContext(), R.string.collection_deleted_from_server, Toast.LENGTH_SHORT

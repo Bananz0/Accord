@@ -88,9 +88,20 @@ class NavigationBar @JvmOverloads constructor(
     private val ellipsisColor = accentColor
     private val ellipsisDrawable = ResourcesCompat.getDrawable(resources, R.drawable.ic_ellipsis_navigation_bar, null)!!
 
-    private val addDrawable = ResourcesCompat.getDrawable(resources, R.drawable.ic_plus, null)!!
-    private val addCheckedDrawable =
-        ResourcesCompat.getDrawable(resources, R.drawable.ic_checkmark, null)!!
+    /**
+     * The save control's mark, drawn as two strokes rather than two drawables.
+     *
+     * It used to crossfade ic_plus into ic_checkmark, which meant both were on screen together for
+     * a third of the animation - the plus wearing a red slash - and the two never lined up, because
+     * the tick's glyph is smaller than the plus's and sits high in its own viewport. One pair of
+     * strokes whose endpoints travel from the cross to the tick cannot show two marks at once, is
+     * the same weight throughout, and runs backwards to unsave for free.
+     */
+    private val addMarkPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
 
     private val chevronColor = accentColor
     private val chevronDrawable = ResourcesCompat.getDrawable(resources, R.drawable.ic_chevron_left, null)!!
@@ -590,39 +601,13 @@ class NavigationBar @JvmOverloads constructor(
                 ellipsisBackgroundPaint
             )
 
-            val progress = addButtonCheckProgress.coerceIn(0F, 1F)
-            val plusProgress = (progress / 0.58F).coerceIn(0F, 1F)
-            val checkProgress = ((progress - 0.22F) / 0.78F).coerceIn(0F, 1F)
-            val iconCenterX = (addDrawableLeft + addDrawableRight) / 2F
-            val iconCenterY = (addDrawableTop + addDrawableBottom) / 2F
-            val iconTint = ColorUtils.blendARGB(accent, accentColor, progress)
-
-            addDrawable.setBounds(
-                addDrawableLeft, addDrawableTop, addDrawableRight.toInt(), addDrawableBottom.toInt()
+            drawAddMark(
+                canvas = canvas,
+                centerX = (addDrawableLeft + addDrawableRight) / 2F,
+                centerY = (addDrawableTop + addDrawableBottom) / 2F,
+                radius = iconSize / 2F,
+                plusColor = accent,
             )
-            addDrawable.setTint(iconTint)
-            addDrawable.alpha = ((1F - plusProgress) * 255).toInt().coerceIn(0, 255)
-            canvas.withSave {
-                val scale = 1F - 0.48F * plusProgress
-                scale(scale, scale, iconCenterX, iconCenterY)
-                rotate(35F * plusProgress, iconCenterX, iconCenterY)
-                addDrawable.draw(this)
-            }
-
-            addCheckedDrawable.setBounds(
-                addDrawableLeft, addDrawableTop, addDrawableRight.toInt(), addDrawableBottom.toInt()
-            )
-            addCheckedDrawable.setTint(accentColor)
-            addCheckedDrawable.alpha = (checkProgress * 255).toInt().coerceIn(0, 255)
-            canvas.withSave {
-                val scale = 0.54F + 0.46F * checkProgress
-                scale(scale, scale, iconCenterX, iconCenterY)
-                addCheckedDrawable.draw(this)
-            }
-
-            // Drawables are shared objects, so leave their alpha ready for non-animated frames.
-            addDrawable.alpha = 255
-            addCheckedDrawable.alpha = 255
 
             addButtonBounds.set(
                 addLeft,
@@ -656,6 +641,62 @@ class NavigationBar @JvmOverloads constructor(
             ellipsisRight,
             ellipsisBottom
         )
+    }
+
+    /**
+     * Draws the save mark somewhere between a plus and a tick, per [addButtonCheckProgress].
+     *
+     * Two strokes, whose four endpoints travel from the cross to the tick. The horizontal arm
+     * becomes the tick's short arm and the vertical becomes its long one, so the mark stays a
+     * single continuous shape the whole way across and there is never a frame with two marks on it.
+     * Running the progress back down to zero plays the same path in reverse, which is what makes
+     * unsaving read as undoing the save rather than as a different animation.
+     */
+    private fun drawAddMark(
+        canvas: Canvas,
+        centerX: Float,
+        centerY: Float,
+        radius: Float,
+        plusColor: Int,
+    ) {
+        val progress = addButtonCheckProgress.coerceIn(0F, 1.08F)
+        // Eased so the arms swing decisively and settle, rather than crawling through the middle
+        // where the shape reads as neither mark.
+        val t = progress.coerceIn(0F, 1F).let { it * it * (3F - 2F * it) }
+
+        fun lerp(from: Float, to: Float) = from + (to - from) * t
+
+        // Endpoints in units of the icon's half-size, so the mark scales with the button.
+        // Arm one: the plus's horizontal bar, becoming the tick's short lower-left arm.
+        val a1x = lerp(-0.70F, -0.62F)
+        val a1y = lerp(0F, 0.04F)
+        val a2x = lerp(0.70F, -0.17F)
+        val a2y = lerp(0F, 0.46F)
+        // Arm two: the plus's vertical bar, becoming the tick's long upper-right arm.
+        val b1x = lerp(0F, -0.17F)
+        val b1y = lerp(-0.70F, 0.46F)
+        val b2x = lerp(0F, 0.68F)
+        val b2y = lerp(0.70F, -0.46F)
+
+        addMarkPaint.color = ColorUtils.blendARGB(plusColor, accentColor, t)
+        addMarkPaint.strokeWidth = radius * 0.26F
+
+        canvas.withSave {
+            // A touch of overshoot scale carries the spring from the interpolator into the mark
+            // itself, so the tick lands rather than simply arriving.
+            val scale = 1F + (progress - t) * 0.35F
+            scale(scale, scale, centerX, centerY)
+            drawLine(
+                centerX + a1x * radius, centerY + a1y * radius,
+                centerX + a2x * radius, centerY + a2y * radius,
+                addMarkPaint,
+            )
+            drawLine(
+                centerX + b1x * radius, centerY + b1y * radius,
+                centerX + b2x * radius, centerY + b2y * radius,
+                addMarkPaint,
+            )
+        }
     }
 
     private var renderNodeWidth = 0

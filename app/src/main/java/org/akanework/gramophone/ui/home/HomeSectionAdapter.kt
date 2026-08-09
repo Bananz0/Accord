@@ -128,11 +128,6 @@ class HomeSectionAdapter(
             holder.subtitle?.visibility =
                 if (card.subtitle.isNullOrBlank()) View.GONE else View.VISIBLE
 
-            // Static in a list. See StationArtView.animated: a screenful of these each invalidating
-            // every frame kept the main thread busy, which is what made opening a station feel
-            // slower and less smooth than opening an album.
-            holder.art?.animated = false
-
             if (section?.style == HomeSectionStyle.STATION) {
                 holder.art?.bind(card.title)
             } else {
