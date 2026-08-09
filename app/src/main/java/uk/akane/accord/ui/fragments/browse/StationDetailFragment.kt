@@ -343,7 +343,9 @@ class StationDetailFragment : SwitcherPostponeFragment(), FragmentSwitcherTransi
         }
 
         saveInProgress = true
-        navigationBar.shouldDrawAddButton = false
+        // The button stays on screen for the whole round trip. Hiding it here is what made the
+        // mark vanish, reappear, and only then morph: three separate events for one action, when
+        // the morph alone is the feedback.
         val playlistTitle = titleView.text?.toString()?.trim().orEmpty()
         viewLifecycleOwner.lifecycleScope.launch {
             val result = runCatching {
@@ -356,7 +358,6 @@ class StationDetailFragment : SwitcherPostponeFragment(), FragmentSwitcherTransi
                 saveInProgress = false
                 savedPlaylistId = saved.id
                 rememberSavedStation(saved.title, tracks, saved.id)
-                navigationBar.shouldDrawAddButton = true
                 navigationBar.setAddButtonChecked(true, animate = true, haptic = true)
                 Toast.makeText(
                     requireContext(),
@@ -365,7 +366,6 @@ class StationDetailFragment : SwitcherPostponeFragment(), FragmentSwitcherTransi
                 ).show()
             }.onFailure {
                 saveInProgress = false
-                navigationBar.shouldDrawAddButton = true
                 navigationBar.setAddButtonChecked(false, animate = true, haptic = false)
                 Toast.makeText(
                     requireContext(),
