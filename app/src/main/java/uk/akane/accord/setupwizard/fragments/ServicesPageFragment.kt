@@ -1,7 +1,6 @@
 package uk.akane.accord.setupwizard.fragments
 
 import android.os.Bundle
-import android.text.InputType
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -13,6 +12,8 @@ import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.textfield.TextInputEditText
+import com.google.android.material.textfield.TextInputLayout
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -21,6 +22,7 @@ import org.akanework.gramophone.logic.data.lidarr.LidarrClient
 import org.akanework.gramophone.logic.data.lidarr.LidarrCredentialStore
 import uk.akane.accord.R
 import uk.akane.accord.ui.components.LidarrSetupPrompt
+import uk.akane.accord.ui.components.enablePasteInto
 
 /**
  * The wizard's third page: the services beyond the library itself.
@@ -95,65 +97,71 @@ class ServicesPageFragment : Fragment() {
     private fun askLidarr() {
         val context = requireContext()
         val store = LidarrCredentialStore(context)
-        val address = EditText(context).apply {
-            hint = getString(R.string.setup_services_lidarr_address_hint)
-            setText(store.serverUrl.orEmpty())
-            inputType = InputType.TYPE_TEXT_VARIATION_URI
-            setSingleLine()
-        }
-        val key = EditText(context).apply {
-            hint = getString(R.string.setup_services_lidarr_key_hint)
-            setText(store.apiKey.orEmpty())
-            setSingleLine()
-        }
-        val container = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            val pad = (24 * resources.displayMetrics.density).toInt()
-            setPadding(pad, pad / 2, pad, 0)
-            addView(address)
-            addView(key)
-        }
+        val content = layoutInflater.inflate(R.layout.dialog_lidarr_server, null)
+        val addressLayout = content.findViewById<TextInputLayout>(R.id.server_url_layout)
+        val keyLayout = content.findViewById<TextInputLayout>(R.id.api_key_layout)
+        val address = content.findViewById<TextInputEditText>(R.id.server_url)
+        val key = content.findViewById<TextInputEditText>(R.id.api_key)
+        val status = content.findViewById<TextView>(R.id.status)
+        address.setText(store.serverUrl.orEmpty())
+        key.setText(store.apiKey.orEmpty())
+        addressLayout.enablePasteInto(address)
+        keyLayout.enablePasteInto(key)
 
-        MaterialAlertDialogBuilder(context)
+        val dialog = MaterialAlertDialogBuilder(context)
             .setTitle(R.string.settings_category_lidarr)
-            .setView(container)
+            .setView(content)
             .setNegativeButton(android.R.string.cancel, null)
-            .setPositiveButton(R.string.setup_services_connect) { _, _ ->
+            .setPositiveButton(R.string.setup_services_connect, null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val url = address.text?.toString()?.trim().orEmpty()
                 val apiKey = key.text?.toString()?.trim().orEmpty()
-                if (url.isEmpty() || apiKey.isEmpty()) return@setPositiveButton
-                store.serverUrl = url
-                store.apiKey = apiKey
-                verifyLidarr(store)
+                addressLayout.error = if (url.isEmpty()) getString(R.string.lidarr_error_empty) else null
+                keyLayout.error = if (apiKey.isEmpty()) getString(R.string.lidarr_error_empty) else null
+                if (url.isEmpty() || apiKey.isEmpty()) return@setOnClickListener
+
+                store.updateServer(url, apiKey)
+                status.visibility = View.VISIBLE
+                status.setText(R.string.lidarr_testing)
+                dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).isEnabled = false
+                verifyLidarr(store) { result ->
+                    if (!isAdded) return@verifyLidarr
+                    dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).isEnabled = true
+                    result.onSuccess {
+                        dialog.dismiss()
+                        refreshState()
+                        Toast.makeText(
+                            requireContext(), R.string.setup_services_lidarr_ready, Toast.LENGTH_SHORT
+                        ).show()
+                    }.onFailure {
+                        status.text = it.message ?: getString(R.string.lidarr_error_generic)
+                    }
+                }
             }
-            .show()
+        }
+        dialog.show()
     }
 
     /**
      * Confirms the address and key work before going after the defaults, so a typo is reported as a
      * typo rather than as "could not read the options".
      */
-    private fun verifyLidarr(store: LidarrCredentialStore) {
+    private fun verifyLidarr(
+        store: LidarrCredentialStore,
+        onResult: (Result<String>) -> Unit,
+    ) {
         viewLifecycleOwner.lifecycleScope.launch {
-            val version = withContext(Dispatchers.IO) {
+            val result = withContext(Dispatchers.IO) {
                 runCatching { LidarrClient(store).testConnection() }
             }
-            if (!isAdded) return@launch
-            version.onFailure {
-                Toast.makeText(
-                    requireContext(),
-                    it.message ?: getString(R.string.lidarr_setup_unreachable),
-                    Toast.LENGTH_LONG
-                ).show()
+            if (result.isFailure) {
+                onResult(result)
                 return@launch
             }
-            // Everything else Lidarr needs is something Lidarr can be asked about.
-            LidarrSetupPrompt.ensureConfigured(requireContext(), viewLifecycleOwner) {
-                refreshState()
-                Toast.makeText(
-                    requireContext(), R.string.setup_services_lidarr_ready, Toast.LENGTH_SHORT
-                ).show()
-            }
+            val configured = LidarrSetupPrompt.autoConfigure(requireContext())
+            onResult(configured.map { result.getOrThrow() })
         }
     }
 

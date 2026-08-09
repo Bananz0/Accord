@@ -34,6 +34,7 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import uk.akane.accord.R
+import uk.akane.accord.ui.components.enablePasteInto
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinClientHolder
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinPlugins
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinUserImage
@@ -121,6 +122,7 @@ class JellyfinLoginActivity : AppCompatActivity() {
         discoveredList = findViewById(R.id.discovered_servers)
         discoveryProgress = findViewById(R.id.discovery_progress)
         serverUrlField = findViewById(R.id.server_url)
+        findViewById<TextInputLayout>(R.id.server_url_layout).enablePasteInto(serverUrlField)
         connectButton = findViewById(R.id.connect)
         serverProgress = findViewById(R.id.server_progress)
         serverStatus = findViewById(R.id.server_status)

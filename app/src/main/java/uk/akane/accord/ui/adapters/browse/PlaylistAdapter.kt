@@ -70,11 +70,7 @@ class PlaylistAdapter(
                         }
                 }
                 launch {
-                    val fresh = withContext(Dispatchers.IO) {
-                        JellyfinPlaylists.list(mainActivity)
-                    }
-                    if (fresh.isNotEmpty()) remotePlaylists = fresh
-                    submitPlaylists(latestPlaylists, latestSongs, remotePlaylists)
+                    refreshRemotePlaylists()
                 }
                 launch {
                     lovedTrackKeys = LastFmLovedLibrary.refreshKeys(mainActivity)
@@ -134,6 +130,15 @@ class PlaylistAdapter(
     }
 
     override fun getItemCount(): Int = list.size
+
+    /** Refreshes immediately after an import instead of waiting for the screen to be recreated. */
+    fun refreshRemotePlaylists() {
+        fragment.viewLifecycleOwner.lifecycleScope.launch {
+            val fresh = withContext(Dispatchers.IO) { JellyfinPlaylists.list(mainActivity) }
+            remotePlaylists = fresh
+            submitPlaylists(latestPlaylists, latestSongs, remotePlaylists)
+        }
+    }
 
     class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val favoriteMarker: ImageView = view.findViewById(R.id.favorite_marker)

@@ -3,11 +3,10 @@ package org.akanework.gramophone.logic.data.spotify
 import android.content.Context
 import android.util.Log
 import androidx.media3.common.MediaItem
-import org.akanework.gramophone.logic.data.db.AppDatabase
-import org.akanework.gramophone.logic.data.db.entity.Playlist
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinPlaylists
 
 /**
- * Recreates a Spotify playlist locally out of the user's own Jellyfin tracks.
+ * Recreates a Spotify playlist on Jellyfin out of the user's own Jellyfin tracks.
  *
  * Nothing is copied from Spotify but names: each track is looked up in the library, and the playlist
  * that results points at files the user already owns. Anything not in the library is simply reported
@@ -26,6 +25,7 @@ object SpotifyPlaylistImporter {
         val matched: Int,
         val missing: Int,
         val missingTracks: List<SpotifyClient.Track> = emptyList(),
+        val remotePlaylistId: String? = null,
     )
 
     /**
@@ -40,41 +40,41 @@ object SpotifyPlaylistImporter {
         library: List<MediaItem>,
     ): Result {
         val index = buildIndex(library)
-        val matched = LinkedHashSet<Long>()
+        val matched = LinkedHashSet<String>()
         val missingTracks = mutableListOf<SpotifyClient.Track>()
 
         tracks.forEach { track ->
-            val localId = index.find(track)
-            if (localId == null) {
+            val mediaId = index.find(track)
+            if (mediaId == null) {
                 missingTracks += track
             } else {
-                // A Spotify playlist can list the same track twice; a local playlist should not.
-                matched.add(localId)
+                // A Spotify playlist can list the same track twice; an imported playlist should not.
+                matched.add(mediaId)
             }
         }
 
-        if (matched.isNotEmpty()) {
-            val database = AppDatabase.getInstance(context)
-            val playlistDao = database.playlistDao()
-            val mediaItemDao = database.mediaItemDao()
-            // Named for where it came from, so it is obvious later which playlists are imports.
-            val name = "$playlistName (Spotify)"
-            // Playlist ids are not auto-generated, so one has to be allocated here. Inserting with
-            // id 0 collides with the "favourite" playlist, and addPlaylist ignores conflicts, so
-            // the row would be dropped without a word and the tracks attached to nothing.
-            val playlistId = (playlistDao.getAllPlaylists()
-                .maxOfOrNull { it.playlist.playlistId } ?: 0L) + 1L
-            playlistDao.addPlaylist(Playlist(playlistId, name, null))
-            matched.forEach { localId ->
-                mediaItemDao.addMediaItem(
-                    org.akanework.gramophone.logic.data.db.entity.MediaItem(localId)
-                )
-                mediaItemDao.addMediaItemToPlaylist(playlistId, localId)
+        val remoteId = matched.takeIf { it.isNotEmpty() }?.let { mediaIds ->
+            val existing = JellyfinPlaylists.list(context)
+                .firstOrNull { it.name.equals(playlistName, ignoreCase = true) }
+            if (existing == null) {
+                JellyfinPlaylists.create(context, playlistName, mediaIds.toList())
+            } else {
+                // Re-importing is an additive sync: newly available tracks appear without creating
+                // another entry point or deleting edits the user made to the Jellyfin playlist.
+                val current = JellyfinPlaylists.items(context, existing.id, library)
+                    .mapTo(HashSet()) { it.mediaId }
+                val additions = mediaIds.filterNot { it in current }
+                if (additions.isNotEmpty() && !JellyfinPlaylists.addTo(context, existing.id, additions)) {
+                    null
+                } else {
+                    existing.id
+                }
             }
         }
+        if (matched.isNotEmpty() && remoteId == null) error("Jellyfin could not create $playlistName")
 
         Log.d(TAG, "Imported $playlistName: ${matched.size} matched, ${missingTracks.size} missing")
-        return Result(playlistName, matched.size, missingTracks.size, missingTracks)
+        return Result(playlistName, matched.size, missingTracks.size, missingTracks, remoteId)
     }
 
     private fun buildIndex(library: List<MediaItem>) = LibraryIndex(library)
@@ -89,12 +89,12 @@ object SpotifyPlaylistImporter {
      */
     private class LibraryIndex(library: List<MediaItem>) {
 
-        private val byTitleAndArtist = HashMap<String, Long>()
-        private val byTitle = HashMap<String, MutableList<Long>>()
+        private val byTitleAndArtist = HashMap<String, String>()
+        private val byTitle = HashMap<String, MutableList<String>>()
 
         init {
             library.forEach { item ->
-                val id = item.mediaId.toLongOrNull() ?: return@forEach
+                val id = item.mediaId.takeIf { it.isNotBlank() } ?: return@forEach
                 val title = item.mediaMetadata.title?.toString()?.normalise() ?: return@forEach
                 val artist = item.mediaMetadata.artist?.toString()?.normalise().orEmpty()
                 byTitleAndArtist.putIfAbsent("$title|$artist", id)
@@ -102,7 +102,7 @@ object SpotifyPlaylistImporter {
             }
         }
 
-        fun find(track: SpotifyClient.Track): Long? {
+        fun find(track: SpotifyClient.Track): String? {
             val title = track.title.normalise()
             val artist = track.artist.normalise()
             byTitleAndArtist["$title|$artist"]?.let { return it }

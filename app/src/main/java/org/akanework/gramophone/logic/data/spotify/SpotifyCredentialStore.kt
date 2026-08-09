@@ -16,18 +16,15 @@ import uk.akane.accord.BuildConfig
  * without shipping a client secret - there is nowhere on a phone to keep one that the phone's owner
  * cannot read. Only the client id is needed, and it is not a secret.
  *
- * No client id ships with the app for the same reason as Last.fm: a shared id is a shared quota, and
- * one abusive user gets it revoked for everybody. Supply one from `package.properties` or paste it
- * into the Spotify settings screen.
+ * The client id is application configuration, not user configuration. It is supplied by the build
+ * through `package.properties`; the user only links or unlinks their account.
  */
 class SpotifyCredentialStore(context: Context) {
 
     private val prefs: SharedPreferences = openPreferences(context)
 
-    var clientId: String
-        get() = prefs.getString(KEY_CLIENT_ID, null)?.takeIf { it.isNotBlank() }
-            ?: BuildConfig.SPOTIFY_CLIENT_ID
-        set(value) = prefs.edit().putString(KEY_CLIENT_ID, value.trim()).apply()
+    val clientId: String
+        get() = BuildConfig.SPOTIFY_CLIENT_ID
 
     var accessToken: String?
         get() = prefs.getString(KEY_ACCESS_TOKEN, null)
@@ -124,7 +121,6 @@ class SpotifyCredentialStore(context: Context) {
         private const val ENCRYPTED_PREFS_NAME = "spotify_credentials"
         private const val FALLBACK_PREFS_NAME = "spotify_credentials_plain"
 
-        private const val KEY_CLIENT_ID = "client_id"
         private const val KEY_ACCESS_TOKEN = "access_token"
         private const val KEY_REFRESH_TOKEN = "refresh_token"
         private const val KEY_EXPIRES_AT = "expires_at"

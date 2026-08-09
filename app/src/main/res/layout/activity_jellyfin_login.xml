@@ -106,7 +106,10 @@
                 app:boxCornerRadiusBottomEnd="14dp"
                 app:boxCornerRadiusBottomStart="14dp"
                 app:boxCornerRadiusTopEnd="14dp"
-                app:boxCornerRadiusTopStart="14dp">
+                app:boxCornerRadiusTopStart="14dp"
+                app:endIconMode="custom"
+                app:endIconDrawable="@drawable/ic_paste"
+                app:endIconContentDescription="@string/paste_from_clipboard">
 
                 <com.google.android.material.textfield.TextInputEditText
                     android:id="@+id/server_url"

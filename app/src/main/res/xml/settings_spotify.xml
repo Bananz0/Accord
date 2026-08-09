@@ -12,26 +12,6 @@
             android:title="@string/spotify_account"
             app:iconSpaceReserved="false" />
 
-        <Preference
-            android:key="spotify_client_id"
-            android:layout="@layout/preference_basic"
-            android:summary="@string/spotify_client_id_summary"
-            android:title="@string/spotify_client_id"
-            app:iconSpaceReserved="false" />
-
-    </PreferenceCategory>
-
-    <PreferenceCategory
-        android:layout="@layout/preference_category_md"
-        android:title="@string/spotify_category_import">
-
-        <Preference
-            android:key="spotify_import"
-            android:layout="@layout/preference_basic"
-            android:summary="@string/spotify_import_summary"
-            android:title="@string/spotify_import"
-            app:iconSpaceReserved="false" />
-
     </PreferenceCategory>
 
 </PreferenceScreen>

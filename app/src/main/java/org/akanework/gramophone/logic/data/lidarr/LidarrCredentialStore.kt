@@ -33,6 +33,27 @@ class LidarrCredentialStore(context: Context) {
         set(value) = prefs.edit().putString(KEY_API_KEY, value?.trim()).apply()
 
     /**
+     * Saves the only two values a person must provide. Changing either invalidates the discovered
+     * defaults because profile ids and root paths belong to one particular Lidarr instance.
+     */
+    fun updateServer(serverUrl: String, apiKey: String) {
+        val normalizedUrl = serverUrl.trim().trimEnd('/')
+        val normalizedKey = apiKey.trim()
+        val serverChanged = this.serverUrl != normalizedUrl || this.apiKey != normalizedKey
+        prefs.edit().apply {
+            putString(KEY_SERVER_URL, normalizedUrl)
+            putString(KEY_API_KEY, normalizedKey)
+            if (serverChanged) {
+                remove(KEY_ROOT_FOLDER)
+                remove(KEY_QUALITY_PROFILE)
+                remove(KEY_METADATA_PROFILE)
+                remove(KEY_QUALITY_PROFILE_NAME)
+                remove(KEY_METADATA_PROFILE_NAME)
+            }
+        }.apply()
+    }
+
+    /**
      * Where Lidarr should put new music, and how it should grade it.
      *
      * Lidarr rejects an add that does not name all three, and the valid values differ per instance,

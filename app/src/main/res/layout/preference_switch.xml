@@ -28,8 +28,9 @@
         android:layout_height="match_parent"
         android:baselineAligned="false"
         android:orientation="horizontal"
-        android:paddingHorizontal="24dp"
-        android:paddingVertical="20dp">
+        android:minHeight="54dp"
+        android:paddingHorizontal="14dp"
+        android:paddingVertical="6dp">
 
         <include layout="@layout/preference_icon" />
 
@@ -37,7 +38,7 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_gravity="center_vertical"
-            android:layout_marginEnd="16dp"
+            android:layout_marginEnd="8dp"
             android:layout_weight="1"
             android:orientation="vertical">
 
@@ -45,17 +46,21 @@
                 android:id="@android:id/title"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:fontFamily="@font/inter_regular"
+                android:includeFontPadding="false"
                 android:textColor="?attr/colorOnSurface"
-                android:textSize="19sp"
+                android:textSize="16sp"
                 tools:text="Title" />
 
             <TextView
                 android:id="@android:id/summary"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="1dp"
+                android:layout_marginTop="2dp"
+                android:fontFamily="@font/inter_regular"
+                android:includeFontPadding="false"
                 android:textColor="?attr/colorOnSurfaceVariant"
-                android:textSize="15sp"
+                android:textSize="13sp"
                 tools:text="Summary" />
 
         </LinearLayout>

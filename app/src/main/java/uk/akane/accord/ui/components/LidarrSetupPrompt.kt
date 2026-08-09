@@ -4,7 +4,6 @@ import android.content.Context
 import android.widget.Toast
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.lifecycleScope
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -13,19 +12,20 @@ import org.akanework.gramophone.logic.data.lidarr.LidarrCredentialStore
 import uk.akane.accord.R
 
 /**
- * Asks for the Lidarr settings a request needs, at the moment it needs them.
+ * Discovers the Lidarr settings a request needs, at the moment it needs them.
  *
  * Lidarr will not accept an album without a root folder, a quality profile and a metadata profile.
  * Being told to go to the settings screen and find three fields is a worse answer than being asked
  * for them, particularly when Lidarr can say what the choices are.
  *
- * Everything offered here is read from the server, and where there is only one sensible answer it is
- * taken without asking - a single root folder is not a decision.
+ * Everything here is read from the server. The root with the most available space is selected and
+ * Lidarr's first quality and metadata profiles are used. Settings can still offer advanced
+ * overrides, but first-run setup never asks users to interpret server-internal profile ids.
  */
 object LidarrSetupPrompt {
 
     /**
-     * Makes sure the defaults are set, prompting if they are not.
+     * Makes sure the defaults are set, discovering them if they are not.
      *
      * @param onReady run once everything needed is stored - the request that triggered this can then
      *   go ahead. Not called if the user backs out.
@@ -47,132 +47,49 @@ object LidarrSetupPrompt {
         }
 
         owner.lifecycleScope.launch {
-            val client = LidarrClient(store)
-            val options = withContext(Dispatchers.IO) {
-                runCatching {
-                    Options(
-                        rootFolders = client.rootFolders(),
-                        quality = client.qualityProfiles(),
-                        metadata = client.metadataProfiles(),
-                    )
-                }.getOrNull()
-            }
-            if (options == null) {
-                Toast.makeText(context, R.string.lidarr_setup_unreachable, Toast.LENGTH_LONG).show()
-                return@launch
-            }
-            askRootFolder(context, store, options, onReady)
+            val result = autoConfigure(context)
+            if (result.isSuccess) onReady()
+            else Toast.makeText(
+                context,
+                result.exceptionOrNull()?.message ?: context.getString(R.string.lidarr_setup_unreachable),
+                Toast.LENGTH_LONG,
+            ).show()
         }
     }
 
-    private class Options(
+    private data class Options(
         val rootFolders: List<LidarrClient.RootFolder>,
         val quality: List<LidarrClient.Profile>,
         val metadata: List<LidarrClient.Profile>,
     )
 
-    private fun askRootFolder(
-        context: Context,
-        store: LidarrCredentialStore,
-        options: Options,
-        onReady: () -> Unit,
-    ) {
-        val current = store.rootFolderPath
-        if (!current.isNullOrBlank()) {
-            askQuality(context, store, options, onReady)
-            return
-        }
-        val folders = options.rootFolders
-        if (folders.isEmpty()) {
-            Toast.makeText(context, R.string.lidarr_setup_no_root, Toast.LENGTH_LONG).show()
-            return
-        }
-        if (folders.size == 1) {
-            // One option is not a choice; taking it silently is what the user would have done.
-            store.rootFolderPath = folders.first().path
-            askQuality(context, store, options, onReady)
-            return
-        }
-        MaterialAlertDialogBuilder(context)
-            .setTitle(R.string.lidarr_setup_root_title)
-            .setItems(folders.map { it.path }.toTypedArray()) { _, which ->
-                store.rootFolderPath = folders[which].path
-                askQuality(context, store, options, onReady)
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
-    }
+    /** Fetches and saves deterministic defaults. Safe to call again after Lidarr changes. */
+    suspend fun autoConfigure(context: Context): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val store = LidarrCredentialStore(context)
+            val client = LidarrClient(store)
+            val options = Options(
+                rootFolders = client.rootFolders().filter { it.path.isNotBlank() },
+                quality = client.qualityProfiles().filter { it.id > 0 },
+                metadata = client.metadataProfiles().filter { it.id > 0 },
+            )
+            val root = options.rootFolders.maxByOrNull { it.freeSpaceBytes ?: Long.MIN_VALUE }
+                ?: error(context.getString(R.string.lidarr_setup_no_root))
+            val quality = options.quality.firstOrNull()
+                ?: error(context.getString(R.string.lidarr_setup_no_profiles))
+            val metadata = options.metadata.firstOrNull()
+                ?: error(context.getString(R.string.lidarr_setup_no_profiles))
 
-    private fun askQuality(
-        context: Context,
-        store: LidarrCredentialStore,
-        options: Options,
-        onReady: () -> Unit,
-    ) {
-        if (store.qualityProfileId > 0) {
-            askMetadata(context, store, options, onReady)
-            return
+            val currentRoot = options.rootFolders.firstOrNull { it.path == store.rootFolderPath }
+            val currentQuality = options.quality.firstOrNull { it.id == store.qualityProfileId }
+            val currentMetadata = options.metadata.firstOrNull { it.id == store.metadataProfileId }
+            store.rootFolderPath = (currentRoot ?: root).path
+            store.qualityProfileId = (currentQuality ?: quality).id
+            store.qualityProfileName = (currentQuality ?: quality).name
+            store.metadataProfileId = (currentMetadata ?: metadata).id
+            store.metadataProfileName = (currentMetadata ?: metadata).name
+            store.publishConfiguredFlag(context)
+            check(store.isConfigured()) { context.getString(R.string.lidarr_setup_incomplete) }
         }
-        pickProfile(
-            context,
-            R.string.lidarr_setup_quality_title,
-            options.quality,
-        ) { profile ->
-            store.qualityProfileId = profile.id
-            store.qualityProfileName = profile.name
-            askMetadata(context, store, options, onReady)
-        }
-    }
-
-    private fun askMetadata(
-        context: Context,
-        store: LidarrCredentialStore,
-        options: Options,
-        onReady: () -> Unit,
-    ) {
-        if (store.metadataProfileId > 0) {
-            finish(context, store, onReady)
-            return
-        }
-        pickProfile(
-            context,
-            R.string.lidarr_setup_metadata_title,
-            options.metadata,
-        ) { profile ->
-            store.metadataProfileId = profile.id
-            store.metadataProfileName = profile.name
-            finish(context, store, onReady)
-        }
-    }
-
-    private fun pickProfile(
-        context: Context,
-        titleRes: Int,
-        profiles: List<LidarrClient.Profile>,
-        onPicked: (LidarrClient.Profile) -> Unit,
-    ) {
-        if (profiles.isEmpty()) {
-            Toast.makeText(context, R.string.lidarr_setup_no_profiles, Toast.LENGTH_LONG).show()
-            return
-        }
-        if (profiles.size == 1) {
-            onPicked(profiles.first())
-            return
-        }
-        MaterialAlertDialogBuilder(context)
-            .setTitle(titleRes)
-            .setItems(profiles.map { it.name }.toTypedArray()) { _, which ->
-                onPicked(profiles[which])
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
-    }
-
-    private fun finish(context: Context, store: LidarrCredentialStore, onReady: () -> Unit) {
-        if (!store.isConfigured()) {
-            Toast.makeText(context, R.string.lidarr_setup_incomplete, Toast.LENGTH_LONG).show()
-            return
-        }
-        onReady()
     }
 }

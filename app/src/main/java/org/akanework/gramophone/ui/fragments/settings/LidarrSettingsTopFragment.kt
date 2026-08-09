@@ -9,6 +9,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.preference.Preference
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.textfield.TextInputEditText
+import com.google.android.material.textfield.TextInputLayout
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -17,6 +18,8 @@ import org.akanework.gramophone.logic.data.lidarr.LidarrClient
 import org.akanework.gramophone.logic.data.lidarr.LidarrCredentialStore
 import org.akanework.gramophone.ui.fragments.BasePreferenceFragment
 import org.akanework.gramophone.ui.fragments.BaseSettingFragment
+import uk.akane.accord.ui.components.LidarrSetupPrompt
+import uk.akane.accord.ui.components.enablePasteInto
 
 class LidarrSettingsFragment : BaseSettingFragment(
     R.string.settings_category_lidarr,
@@ -75,7 +78,11 @@ class LidarrSettingsTopFragment : BasePreferenceFragment() {
         val view = layoutInflater.inflate(R.layout.dialog_lidarr_server, null)
         val urlField = view.findViewById<TextInputEditText>(R.id.server_url)
         val keyField = view.findViewById<TextInputEditText>(R.id.api_key)
+        val urlLayout = view.findViewById<TextInputLayout>(R.id.server_url_layout)
+        val keyLayout = view.findViewById<TextInputLayout>(R.id.api_key_layout)
         val status = view.findViewById<TextView>(R.id.status)
+        urlLayout.enablePasteInto(urlField)
+        keyLayout.enablePasteInto(keyField)
 
         viewLifecycleOwner.lifecycleScope.launch {
             val existing = withContext(Dispatchers.IO) {
@@ -107,20 +114,23 @@ class LidarrSettingsTopFragment : BasePreferenceFragment() {
                         }
                         status.visibility = View.VISIBLE
                         status.setText(R.string.lidarr_testing)
+                        dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE)
+                            .isEnabled = false
                         viewLifecycleOwner.lifecycleScope.launch {
                             val result = withContext(Dispatchers.IO) {
                                 val store = LidarrCredentialStore(requireContext())
-                                store.serverUrl = url
-                                store.apiKey = key
+                                store.updateServer(url, key)
                                 try {
                                     val version = LidarrClient(store).testConnection()
-                                    store.publishConfiguredFlag(requireContext())
+                                    LidarrSetupPrompt.autoConfigure(requireContext()).getOrThrow()
                                     Result.success(version)
                                 } catch (e: Exception) {
                                     Result.failure(e)
                                 }
                             }
                             if (!isAdded) return@launch
+                            dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE)
+                                .isEnabled = true
                             result.fold(
                                 onSuccess = {
                                     dialog.dismiss()
