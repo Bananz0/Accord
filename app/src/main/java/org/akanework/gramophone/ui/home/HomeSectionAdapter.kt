@@ -9,7 +9,6 @@ import android.widget.TextView
 import androidx.media3.common.C
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.LinearLayoutManager
-import androidx.core.view.isVisible
 import androidx.recyclerview.widget.RecyclerView
 import coil3.load
 import uk.akane.accord.R
@@ -36,7 +35,7 @@ class HomeSectionAdapter(
      * the Accord home passes a handler that opens the station instead, so there is somewhere to see
      * the tracks and pick a starting point.
      */
-    private val onCardClick: ((HomeSection, HomeCard, View?, android.graphics.drawable.Drawable?) -> Unit)? = null
+    private val onCardClick: ((HomeSection, HomeCard) -> Unit)? = null
 ) : RecyclerView.Adapter<HomeSectionAdapter.ViewHolder>() {
 
     private val sections = mutableListOf<HomeSection>()
@@ -153,13 +152,7 @@ class HomeSectionAdapter(
                 it.performPressHaptic()
                 val handler = onCardClick
                 if (handler != null) {
-                    // The artwork view rather than the whole card: the morph flies the art into
-                    // the detail header, and starting it from the tile including its caption would
-                    // stretch the wrong rectangle.
-                    val artView = holder.art?.takeIf { v -> v.isVisible }
-                        ?: holder.collageArt?.takeIf { v -> v.isVisible }
-                        ?: holder.cover?.takeIf { v -> v.isVisible }
-                    section?.let { s -> handler(s, card, artView, holder.cover?.drawable) }
+                    section?.let { handler(it, card) }
                 } else if (card.songs.isNotEmpty()) {
                     player()?.apply {
                         setMediaItems(card.songs, card.startIndex, C.TIME_UNSET)

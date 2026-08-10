@@ -28,7 +28,6 @@ import org.akanework.gramophone.logic.data.jellyfin.JellyfinDownloadManager
 import uk.akane.accord.R
 import uk.akane.accord.logic.ArtistCredits
 import uk.akane.accord.ui.MainActivity
-import uk.akane.accord.ui.components.HeroMorph
 import uk.akane.accord.ui.components.NavigationBar
 import uk.akane.cupertino.navigation.SwitcherPostponeFragment
 import kotlin.random.Random
@@ -158,11 +157,10 @@ class AlbumDetailFragment : SwitcherPostponeFragment() {
 
         // Released here rather than once tracks have been matched. This fragment postpones its
         // switcher animation, and the release used to sit inside the library-emission handler - so
-        // an album whose tracks never resolved, or resolved late, left the screen postponed
-        // forever and the tap did nothing at all. The header is complete from the arguments; the
-        // track list can fill in behind it, which is what the station screen already does.
+        // an album whose tracks never resolved, or resolved late, stayed postponed forever and the
+        // tap did nothing at all. The header is complete from the arguments; the track list fills
+        // in behind it, which is what the station screen already does.
         notifyContentLoaded()
-        HeroMorph.fadeInChrome(titleView, artistView, playButton, shuffleButton)
 
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {

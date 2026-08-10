@@ -25,7 +25,6 @@ import org.akanework.gramophone.ui.home.HomeSection
 import org.akanework.gramophone.ui.home.HomeSectionAdapter
 import uk.akane.accord.R
 import uk.akane.accord.logic.ArtistCredits
-import uk.akane.accord.ui.components.HeroMorph
 import uk.akane.accord.ui.MainActivity
 import uk.akane.accord.ui.adapters.LibraryHeadAdapter
 import uk.akane.accord.ui.components.NavigationBar
@@ -48,12 +47,8 @@ class LibraryFragment: Fragment() {
 
         collectionAdapter = HomeSectionAdapter(
             player = { (activity as? MainActivity)?.getPlayer() },
-            onCardClick = { _, card, artView, cover ->
-                val activity = activity as? MainActivity
-                if (activity != null && artView != null && cover != null) {
-                    HeroMorph.play(activity, artView, albumArt = cover)
-                }
-                activity?.fragmentSwitcherView?.addFragmentToCurrentStack(
+            onCardClick = { _, card ->
+                (activity as? MainActivity)?.fragmentSwitcherView?.addFragmentToCurrentStack(
                     AlbumDetailFragment.newInstance(card.title, card.subtitle.orEmpty())
                 )
             },

@@ -32,7 +32,6 @@ import uk.akane.accord.logic.isDarkMode
 import uk.akane.accord.logic.utils.CalculationUtils.lerp
 import uk.akane.accord.logic.utils.UiUtils
 import uk.akane.accord.setupwizard.fragments.SetupWizardFragment
-import uk.akane.accord.ui.components.HeroMorph
 import uk.akane.accord.ui.components.player.FloatingPanelLayout
 import uk.akane.accord.ui.components.performPressHaptic
 import uk.akane.accord.ui.fragments.BrowseFragment
@@ -150,11 +149,6 @@ class MainActivity : AppCompatActivity() {
         floatingPanelLayout = findViewById(R.id.floating)
         shrinkContainerLayout = findViewById(R.id.shrink_container)
         fragmentSwitcherView = findViewById(R.id.switcher)
-
-        // One hook for every way back: the return button, the system gesture, predictive back and
-        // the switcher's own edge swipe all take different paths out, and wiring them separately
-        // meant the in-app swipe left without retracing the artwork.
-        fragmentSwitcherView.onBackNavigationStart = { HeroMorph.playReverse(this) }
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackStarted(backEvent: BackEventCompat) {
