@@ -47,7 +47,15 @@ object JellyfinDownloadManager {
                     appContext,
                     JellyfinMediaCache.databaseProvider(appContext),
                     JellyfinMediaCache.get(appContext),
-                    OkHttpDataSource.Factory(JellyfinClientHolder.mediaHttpClient()),
+                    // Downloads ask for the download quality, never the streaming one. Keeping
+                    // music offline is a question about disk, and somebody capping playback on
+                    // mobile data has said nothing about what they want stored - nor should a
+                    // download started on the train be permanently worse than one started at home.
+                    StreamQualityResolver.factory(
+                        context = appContext,
+                        upstream = OkHttpDataSource.Factory(JellyfinClientHolder.mediaHttpClient()),
+                        quality = { StreamQuality.downloadQuality(appContext) },
+                    ),
                     Executors.newFixedThreadPool(PARALLEL_DOWNLOADS)
                 ).apply {
                     maxParallelDownloads = PARALLEL_DOWNLOADS
@@ -79,7 +87,13 @@ object JellyfinDownloadManager {
             DownloadService.sendAddDownload(
                 context,
                 GramophoneDownloadService::class.java,
-                DownloadRequest.Builder(id, uri).build(),
+                DownloadRequest.Builder(id, uri)
+                    // Stated rather than derived from the URI. The resolver keys each quality
+                    // separately, and everything that spares downloads - the cache ceiling, the
+                    // eviction after a server-side edit - recognises them by cache key. A download
+                    // whose key nobody could predict would be the first thing trimmed away.
+                    .setCustomCacheKey(downloadCacheKey(context, uri))
+                    .build(),
                 /* foreground = */ false
             )
         } catch (e: Exception) {
@@ -88,6 +102,13 @@ object JellyfinDownloadManager {
             Log.w(TAG, "Could not queue download for $id", e)
         }
     }
+
+    /** The cache key a download will occupy, at whatever quality downloads are set to. */
+    private fun downloadCacheKey(context: Context, uri: Uri): String =
+        StreamQualityResolver.resolve(
+            androidx.media3.datasource.DataSpec(uri),
+            StreamQuality.downloadQuality(context),
+        ).key ?: uri.toString()
 
     fun remove(context: Context, items: List<MediaItem>) {
         items.forEach { item ->
@@ -148,9 +169,15 @@ object JellyfinDownloadManager {
             addAll(completed)
             items.forEach { item ->
                 if (item.mediaId.isBlank() || item.mediaId in completed) return@forEach
-                val key = item.getUri()?.toString() ?: return@forEach
-                val length = ContentMetadata.getContentLength(cache.getContentMetadata(key))
-                if (length > 0L && cache.isCached(key, 0L, length)) add(item.mediaId)
+                val uri = item.getUri()?.toString() ?: return@forEach
+                // Any quality counts as available. A track fully cached at 256 plays offline just
+                // as well as one cached untouched, and telling the user it is missing because the
+                // setting has since changed would be a lie about what is on the device.
+                val playable = StreamQualityResolver.allCacheKeys(uri).any { key ->
+                    val length = ContentMetadata.getContentLength(cache.getContentMetadata(key))
+                    length > 0L && cache.isCached(key, 0L, length)
+                }
+                if (playable) add(item.mediaId)
             }
         }
     }
