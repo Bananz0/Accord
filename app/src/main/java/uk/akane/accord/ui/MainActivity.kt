@@ -42,6 +42,8 @@ import uk.akane.accord.ui.viewmodels.MediaControllerViewModel
 import uk.akane.cupertino.navigation.FragmentSwitcherView
 import uk.akane.cupertino.utils.AnimationUtils
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.withStateAtLeast
+import androidx.lifecycle.Lifecycle
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinUserImage
 import android.media.AudioManager
 import android.view.KeyEvent
@@ -63,7 +65,15 @@ class MainActivity : AppCompatActivity() {
     private lateinit var bottomNavigationView: BottomNavigationView
     private lateinit var floatingPanelLayout: FloatingPanelLayout
     private lateinit var shrinkContainerLayout: MaterialCardView
-    private lateinit var screenCorners: UiUtils.ScreenCorners
+    /**
+     * The display's corner radii, refined once window insets arrive.
+     *
+     * Square by default rather than lateinit. The real values are only knowable from the insets
+     * dispatched to the bottom navigation bar, and anything that draws before that dispatch - a
+     * cold launch onto a locked screen gets there first - would otherwise touch an uninitialised
+     * property and take the app down. Square corners for the first frame are not worth a crash.
+     */
+    private var screenCorners = UiUtils.ScreenCorners(0f, 0f, 0f, 0f)
     lateinit var fragmentSwitcherView: FragmentSwitcherView
 
     private var bottomInset: Int = 0
@@ -353,7 +363,15 @@ class MainActivity : AppCompatActivity() {
         val rootView = findViewById<ViewGroup>(android.R.id.content)
         rootView.addView(container)
 
-        container.post {
+        // Deferred until the activity is at least started, not merely until the container has been
+        // laid out. A post alone commits whenever the next frame happens to arrive, and if the
+        // activity was stopped in between - which is what launching onto a locked screen does - the
+        // transaction lands after onSaveInstanceState and FragmentManager throws. Waiting for
+        // STARTED also keeps the setup wizard, which is the fragment this usually carries:
+        // committing with state loss instead would have dropped it and left a signed-out app
+        // showing an empty library with no way to sign in.
+        lifecycleScope.launch {
+            lifecycle.withStateAtLeast(Lifecycle.State.STARTED) {}
             supportFragmentManager.beginTransaction()
                 .replace(container.id, fragment)
                 .runOnCommit {
