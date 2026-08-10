@@ -78,10 +78,13 @@ class JellyfinLibraryLoader(
      *
      * @param dao when given, the synced library replaces the cache so the next launch is instant.
      * @param onProgress invoked with (loaded, total) as pages arrive.
+     * @param onPartial invoked with the library built so far, so a first run is playable long
+     *   before it is complete. Coalesced - see [PARTIAL_EMIT_INTERVAL_MS].
      */
     suspend fun load(
         dao: CachedSongDao? = null,
         onProgress: ((Int, Int) -> Unit)? = null,
+        onPartial: ((LibraryStoreClass) -> Unit)? = null,
     ): LibraryStoreClass {
         idMap.load()
         favouriteLocalIds.clear()
@@ -89,6 +92,7 @@ class JellyfinLibraryLoader(
         val rows = mutableListOf<CachedSong>()
         var startIndex = 0
         var total = -1
+        var lastPartialAt = 0L
 
         while (true) {
             val response = fetchPageWithRetry(startIndex)
@@ -103,6 +107,19 @@ class JellyfinLibraryLoader(
             }
             startIndex += items.size
             onProgress?.invoke(startIndex, total)
+
+            // Hand over what exists so far. A first sync of a large library is minutes of
+            // sequential requests, and there is no reason to sit on a perfectly playable few
+            // thousand tracks until the last page lands. Grouping is a full pass over everything
+            // collected, so it is coalesced rather than run once per page.
+            if (onPartial != null && startIndex < total) {
+                val now = System.currentTimeMillis()
+                if (now - lastPartialAt >= PARTIAL_EMIT_INTERVAL_MS) {
+                    lastPartialAt = now
+                    onPartial(LibraryGrouper.group(rows.map { cachedToEntry(it) }))
+                }
+            }
+
             if (startIndex >= total) break
         }
 
@@ -310,6 +327,15 @@ class JellyfinLibraryLoader(
         const val EXTRA_TRACK_ARTISTS = "JellyfinTrackArtists"
 
         private const val TAG = "JellyfinLibraryLoader"
+        /**
+         * How often a sync in progress may publish what it has.
+         *
+         * Each publish regroups every row collected so far, so emitting per page would spend more
+         * time grouping than fetching by the end of a large library. A second is well under the
+         * threshold where the list feels stuck and cheap enough to disappear behind the network.
+         */
+        private const val PARTIAL_EMIT_INTERVAL_MS = 1_000L
+
         private const val PAGE_SIZE = 500
         private const val TICKS_PER_MILLISECOND = 10_000L
         private const val MAX_PAGE_ATTEMPTS = 3

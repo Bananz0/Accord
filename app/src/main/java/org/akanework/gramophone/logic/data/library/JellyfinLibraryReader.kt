@@ -128,7 +128,18 @@ class JellyfinLibraryReader(private val context: Context) : LibraryReader {
         val hadSomething = store.value != null
         syncProgress.value = 0 to 0
         val synced = runCatching {
-            loader.load(cacheDao) { loaded, total -> syncProgress.value = loaded to total }
+            loader.load(
+                dao = cacheDao,
+                onProgress = { loaded, total -> syncProgress.value = loaded to total },
+                // Only with nothing already on screen. A partial is by definition smaller than the
+                // finished library, so publishing one over a cache that is already complete would
+                // make albums vanish and come back while a routine refresh runs. With nothing
+                // cached - a first sign-in - it is the difference between listening after the
+                // first page and waiting out every one of them.
+                onPartial = if (hadSomething) null else {
+                    { partial -> store.value = partial }
+                },
+            )
         }.onFailure { Log.e(TAG, "Jellyfin library sync failed", it) }.getOrNull()
         syncProgress.value = null
 
