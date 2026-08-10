@@ -110,6 +110,14 @@ object HeroMorph {
     private const val CHROME_FADE_MS = 200L
 
     /**
+     * Covers the moment the overlay appears.
+     *
+     * Scaled uniformly it starts taller than the card it is lifting off, so it would otherwise pop
+     * in overlapping whatever sits above and below. Short enough to still read as instant.
+     */
+    private const val LIFT_FADE_MS = 90L
+
+    /**
      * @param source the tapped view, used only for its position and size on screen.
      * @param stationSeed the station's title when the destination draws procedural art, else null.
      * @param albumArt the cover, when the destination is an album.
@@ -180,20 +188,36 @@ object HeroMorph {
         }
         root.addView(holder)
 
-        val startScaleX = from.width().toFloat() / full.width()
-        val startScaleY = from.height().toFloat() / full.height()
-        val endScaleX = to.width().toFloat() / full.width()
-        val endScaleY = to.height().toFloat() / full.height()
+        // One scale for both axes. Scaling width and height independently squashes a header-shaped
+        // overlay into a square card, so the artwork arrived visibly stretched and un-stretched
+        // itself as it grew - which is what stopped it reading as one picture moving.
+        //
+        // Width sets the scale, and the overlay is centred vertically on the card. It is therefore
+        // taller than the card it lifts off, but it is undistorted the whole way, and a picture
+        // that is briefly bigger than its tile reads as it rising off the page rather than as it
+        // deforming.
+        val startScale = from.width().toFloat() / full.width()
+        val endScale = to.width().toFloat() / full.width()
+
+        fun centredTop(rect: Rect, scale: Float) =
+            rect.centerY() - full.height() * scale / 2f
+
+        val startTop = centredTop(from, startScale)
+        val endTop = centredTop(to, endScale)
+
+        holder.alpha = 0f
+        holder.animate().alpha(1f).setDuration(LIFT_FADE_MS).start()
 
         ValueAnimator.ofFloat(0f, 1f).apply {
             duration = DURATION_MS
             interpolator = INTERPOLATOR
             addUpdateListener { animator ->
                 val t = animator.animatedValue as Float
-                holder.scaleX = lerp(startScaleX, endScaleX, t)
-                holder.scaleY = lerp(startScaleY, endScaleY, t)
+                val scale = lerp(startScale, endScale, t)
+                holder.scaleX = scale
+                holder.scaleY = scale
                 holder.translationX = lerp(from.left.toFloat(), to.left.toFloat(), t)
-                holder.translationY = lerp(from.top.toFloat(), to.top.toFloat(), t)
+                holder.translationY = lerp(startTop, endTop, t)
             }
             addListener(object : AnimatorListenerAdapter() {
                 override fun onAnimationEnd(animation: Animator) {
