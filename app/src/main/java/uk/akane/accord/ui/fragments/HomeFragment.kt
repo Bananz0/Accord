@@ -36,6 +36,7 @@ import uk.akane.accord.logic.ArtistCredits
 import uk.akane.accord.ui.MainActivity
 import uk.akane.accord.ui.adapters.BannerCarouselAdapter
 import uk.akane.accord.ui.adapters.BannerItem
+import uk.akane.accord.ui.components.HeroMorph
 import uk.akane.accord.ui.components.NavigationBar
 import uk.akane.accord.ui.fragments.browse.AlbumDetailFragment
 import uk.akane.accord.ui.fragments.browse.StationDetailFragment
@@ -80,7 +81,9 @@ class HomeFragment: Fragment() {
 
         sectionAdapter = HomeSectionAdapter(
             player = { (activity as? MainActivity)?.getPlayer() },
-            onCardClick = { section, card -> openStation(section, card) }
+            onCardClick = { section, card, artView, cover ->
+                openStation(section, card, artView, cover)
+            }
         )
         headerAdapter = HeaderAdapter { subtitle = it }
 
@@ -312,8 +315,31 @@ class HomeFragment: Fragment() {
         }
     }
 
-    private fun openStation(section: HomeSection, card: HomeCard) {
+    private fun openStation(
+        section: HomeSection,
+        card: HomeCard,
+        artView: View? = null,
+        cover: android.graphics.drawable.Drawable? = null,
+    ) {
         val activity = activity as? MainActivity ?: return
+
+        // Fly artwork into the header the destination will draw - which means picking by
+        // destination, not by what the card happens to show. An album opens AlbumDetailFragment,
+        // whose header is the cover. Everything else opens StationDetailFragment, whose header is
+        // procedural art seeded by the title, so a mix showing a cover must still morph the
+        // gradient it is about to become rather than the sleeve it is leaving behind.
+        if (artView != null) {
+            if (card.target == HomeCardTarget.ALBUM) {
+                cover?.let { HeroMorph.play(activity, artView, albumArt = it) }
+            } else {
+                HeroMorph.play(
+                    activity,
+                    artView,
+                    stationSeed = card.title.ifEmpty { section.title },
+                )
+            }
+        }
+
         if (card.target == HomeCardTarget.ALBUM) {
             val albumTitle = card.title
             val albumArtist = card.subtitle ?: ""
