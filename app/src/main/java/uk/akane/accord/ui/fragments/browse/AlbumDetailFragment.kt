@@ -28,6 +28,7 @@ import org.akanework.gramophone.logic.data.jellyfin.JellyfinDownloadManager
 import uk.akane.accord.R
 import uk.akane.accord.logic.ArtistCredits
 import uk.akane.accord.ui.MainActivity
+import uk.akane.accord.ui.components.HeroMorph
 import uk.akane.accord.ui.components.NavigationBar
 import uk.akane.cupertino.navigation.SwitcherPostponeFragment
 import kotlin.random.Random
@@ -230,6 +231,8 @@ class AlbumDetailFragment : SwitcherPostponeFragment() {
         if (!didLoadOnce) {
             didLoadOnce = true
             notifyContentLoaded()
+            // Comes up with the artwork rather than after it, so the screen reads as one movement.
+            HeroMorph.fadeInChrome(titleView, artistView, metaView, playButton, shuffleButton)
         }
     }
 

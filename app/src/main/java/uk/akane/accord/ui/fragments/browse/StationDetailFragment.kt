@@ -34,6 +34,7 @@ import org.akanework.gramophone.logic.data.jellyfin.JellyfinPlaylists
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinDownloadManager
 import uk.akane.accord.R
 import uk.akane.accord.ui.MainActivity
+import uk.akane.accord.ui.components.HeroMorph
 import uk.akane.accord.ui.components.CollectionPopupMenu
 import uk.akane.accord.ui.components.NavigationBar
 import uk.akane.accord.ui.components.TrackRowMenu
@@ -188,11 +189,23 @@ class StationDetailFragment : SwitcherPostponeFragment(), FragmentSwitcherTransi
             play(currentTracks.shuffled(Random(System.currentTimeMillis())), 0)
         }
 
-        // The chrome and cached artwork can be shown immediately while tracks finish resolving.
-        metaView.text = getString(R.string.sync_in_progress)
+        val wantedIds = requireArguments().getStringArray(ARG_MEDIA_IDS)?.toList().orEmpty()
+
+        // The count is already known - it is how many ids were handed over - so it goes up with
+        // the rest of the chrome instead of waiting on the library to resolve them into tracks.
+        // Showing "Syncing library…" here meant the one line that could be right immediately was
+        // the last to settle, and it changed under the user a beat after the screen arrived.
+        metaView.text = if (wantedIds.isNotEmpty()) {
+            resources.getQuantityString(R.plurals.songs, wantedIds.size, wantedIds.size)
+        } else {
+            getString(R.string.sync_in_progress)
+        }
         notifyContentLoaded()
 
-        val wantedIds = requireArguments().getStringArray(ARG_MEDIA_IDS)?.toList().orEmpty()
+        // Comes up with the artwork rather than after it. Waiting for the flight to land left a
+        // beat of bare header between the tap and a screen you could act on.
+        HeroMorph.fadeInChrome(titleView, artistView, metaView, playButton, shuffleButton)
+
         viewLifecycleOwner.lifecycleScope.launch(Dispatchers.Default) {
             val songs = resolveLibrarySnapshot(wantedIds)
             val byId = songs.associateBy { it.mediaId }
