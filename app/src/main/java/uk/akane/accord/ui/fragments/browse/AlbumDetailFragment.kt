@@ -56,7 +56,6 @@ class AlbumDetailFragment : SwitcherPostponeFragment() {
 
     private val trackAdapter = AlbumTrackAdapter()
     private var currentTracks: List<MediaItem> = emptyList()
-    private var didLoadOnce = false
     private var collectionDownloaded = false
 
     init {
@@ -157,6 +156,14 @@ class AlbumDetailFragment : SwitcherPostponeFragment() {
             mediaController.play()
         }
 
+        // Released here rather than once tracks have been matched. This fragment postpones its
+        // switcher animation, and the release used to sit inside the library-emission handler - so
+        // an album whose tracks never resolved, or resolved late, left the screen postponed
+        // forever and the tap did nothing at all. The header is complete from the arguments; the
+        // track list can fill in behind it, which is what the station screen already does.
+        notifyContentLoaded()
+        HeroMorph.fadeInChrome(titleView, artistView, playButton, shuffleButton)
+
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
                 activity.reader.songListFlow.collectLatest { songs ->
@@ -228,12 +235,6 @@ class AlbumDetailFragment : SwitcherPostponeFragment() {
             quoteView.text = description
         }
 
-        if (!didLoadOnce) {
-            didLoadOnce = true
-            notifyContentLoaded()
-            // Comes up with the artwork rather than after it, so the screen reads as one movement.
-            HeroMorph.fadeInChrome(titleView, artistView, metaView, playButton, shuffleButton)
-        }
     }
 
     private fun safeAlbum(value: String?): String =

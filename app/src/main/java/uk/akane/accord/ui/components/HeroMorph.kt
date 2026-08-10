@@ -229,9 +229,22 @@ object HeroMorph {
     } else {
         ImageView(activity).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
-            setImageDrawable(albumArt)
+            // A copy, never the card's own Drawable. A Drawable has one set of bounds and one
+            // callback, so handing the live instance to a second ImageView takes it away from the
+            // card that is still showing it - the album's artwork broke in both places at once.
+            // Coil's crossfade wrapper in particular does not survive being adopted mid-flight.
+            setImageDrawable(albumArt?.independentCopy())
         }
     }
+
+    /**
+     * A drawable that can be shown somewhere else without disturbing the original.
+     *
+     * Falls back to the original only when it has no constant state to copy from, which in practice
+     * means a drawable that was never going to be reusable anyway.
+     */
+    private fun Drawable.independentCopy(): Drawable =
+        constantState?.newDrawable()?.mutate() ?: this
 
     /** Where [this] sits inside [ancestor], or null when it is not on screen. */
     private fun View.boundsIn(ancestor: View): Rect? {
