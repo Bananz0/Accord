@@ -6,7 +6,9 @@ import androidx.core.net.toUri
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import kotlinx.coroutines.delay
+import org.akanework.gramophone.logic.data.db.dao.AlbumSyncStateDao
 import org.akanework.gramophone.logic.data.db.dao.CachedSongDao
+import org.akanework.gramophone.logic.data.db.entity.AlbumSyncState
 import org.akanework.gramophone.logic.data.db.entity.CachedSong
 import org.akanework.gramophone.logic.data.db.entity.JellyfinId
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinReporter.Companion.toDashedUuid
@@ -129,6 +131,148 @@ class JellyfinLibraryLoader(
         Log.d(TAG, "Loaded ${rows.size} songs from Jellyfin")
 
         return LibraryGrouper.group(rows.map { cachedToEntry(it) })
+    }
+
+    /** What an incremental sync did, so the caller knows whether to rebuild anything. */
+    sealed interface SyncOutcome {
+        /** Nothing on the server had changed; the cache stands. */
+        data object UpToDate : SyncOutcome
+
+        /**
+         * Some albums were re-pulled. [library] is the whole library, rebuilt from cache.
+         *
+         * [staleStreamKeys] are the media-cache keys of the re-pulled tracks. Embedded lyrics and
+         * tags live in the audio file itself and are read off the decoded stream at playback, so a
+         * track already sitting in the media cache would keep playing the bytes fetched before the
+         * edit - fresh metadata in the library, and the old tags in the player.
+         */
+        data class Updated(
+            val library: LibraryStoreClass,
+            val changedAlbumIds: Set<String>,
+            val staleStreamKeys: Set<String>,
+        ) : SyncOutcome
+
+        /** The probe could not be trusted; the caller should fall back to [load]. */
+        data object NeedsFullSync : SyncOutcome
+    }
+
+    /**
+     * Re-pulls only the albums whose server-side description has moved since the last sync.
+     *
+     * Asks Jellyfin to describe every album - three small fields each, one request per few hundred
+     * albums rather than per few hundred tracks - and compares that against what was recorded when
+     * their tracks were last fetched. Retagging one record then costs one album's worth of
+     * requests instead of the entire library's.
+     *
+     * Returns [SyncOutcome.NeedsFullSync] rather than guessing whenever the picture is incomplete:
+     * no recorded state at all, an empty song cache, or a server that returns no albums.
+     */
+    suspend fun syncChangedAlbums(
+        dao: CachedSongDao,
+        stateDao: AlbumSyncStateDao,
+    ): SyncOutcome {
+        val known = stateDao.getAll().associateBy { it.albumJellyfinId }
+        if (known.isEmpty() || dao.count() == 0) return SyncOutcome.NeedsFullSync
+
+        val current = fetchAlbumStates() ?: return SyncOutcome.NeedsFullSync
+        if (current.isEmpty()) return SyncOutcome.NeedsFullSync
+
+        val changed = current.filter { (id, state) ->
+            val previous = known[id]
+            previous == null || state.differsFrom(previous)
+        }
+        // An album the server no longer lists has been deleted or merged; its rows have to go, and
+        // there is nothing to fetch for it.
+        val removed = known.keys - current.keys
+
+        if (changed.isEmpty() && removed.isEmpty()) {
+            Log.d(TAG, "Album probe: nothing changed across ${current.size} albums")
+            return SyncOutcome.UpToDate
+        }
+        Log.d(TAG, "Album probe: ${changed.size} changed, ${removed.size} removed")
+
+        idMap.load()
+        val freshRows = mutableListOf<CachedSong>()
+        for (albumId in changed.keys) {
+            val items = fetchAlbumTracks(albumId) ?: return SyncOutcome.NeedsFullSync
+            items.forEach { item -> toCachedSong(item)?.let(freshRows::add) }
+        }
+        idMap.flush()
+
+        dao.replaceAlbums((changed.keys + removed).toList(), freshRows)
+        stateDao.deleteByAlbumIds(removed.toList())
+        stateDao.upsertAll(changed.values.toList())
+
+        // Rebuilt from the cache rather than from freshRows: the result has to be the whole
+        // library, and everything not re-pulled is still only in the database.
+        val library = LibraryGrouper.group(dao.getAll().map { cachedToEntry(it) })
+        return SyncOutcome.Updated(
+            library = library,
+            changedAlbumIds = changed.keys + removed,
+            staleStreamKeys = freshRows.map { streamUrl(it) }.filter { it.isNotEmpty() }.toSet(),
+        )
+    }
+
+    /** Every album the server has, described by the three fields a change shows up in. */
+    private suspend fun fetchAlbumStates(): Map<String, AlbumSyncState>? {
+        val client = api ?: return null
+        val states = mutableMapOf<String, AlbumSyncState>()
+        var startIndex = 0
+
+        while (true) {
+            val response = try {
+                val result by client.itemsApi.getItems(
+                    includeItemTypes = setOf(BaseItemKind.MUSIC_ALBUM),
+                    recursive = true,
+                    fields = ALBUM_PROBE_FIELDS,
+                    startIndex = startIndex,
+                    limit = ALBUM_PAGE_SIZE,
+                )
+                result
+            } catch (e: ApiClientException) {
+                Log.w(TAG, "Album probe failed at $startIndex", e)
+                return null
+            }
+
+            val items = response.items
+            if (items.isEmpty()) break
+            items.forEach { item ->
+                val id = item.id.toString().replace("-", "")
+                states[id] = AlbumSyncState(
+                    albumJellyfinId = id,
+                    dateLastMediaAdded = item.dateLastMediaAdded?.toEpochSecond(ZoneOffset.UTC),
+                    dateCreated = item.dateCreated?.toEpochSecond(ZoneOffset.UTC),
+                    etag = item.etag,
+                )
+            }
+            startIndex += items.size
+            if (startIndex >= response.totalRecordCount) break
+        }
+        return states
+    }
+
+    /** The tracks of one album, with the same fields a full sync requests. */
+    private suspend fun fetchAlbumTracks(albumJellyfinId: String): List<BaseItemDto>? {
+        val client = api ?: return null
+        return try {
+            val result by client.itemsApi.getItems(
+                parentId = UUID.fromString(albumJellyfinId.toDashedUuid()),
+                includeItemTypes = setOf(BaseItemKind.AUDIO),
+                recursive = true,
+                fields = REQUESTED_FIELDS,
+            )
+            result.items
+        } catch (e: ApiClientException) {
+            Log.w(TAG, "Fetching tracks for album $albumJellyfinId failed", e)
+            null
+        }
+    }
+
+    /** Records the current album descriptions wholesale, after a full sync. */
+    suspend fun recordAlbumStates(stateDao: AlbumSyncStateDao) {
+        val states = fetchAlbumStates() ?: return
+        stateDao.replaceAll(states.values.toList())
+        Log.d(TAG, "Recorded sync state for ${states.size} albums")
     }
 
     /**
@@ -337,6 +481,23 @@ class JellyfinLibraryLoader(
         private const val PARTIAL_EMIT_INTERVAL_MS = 1_000L
 
         private const val PAGE_SIZE = 500
+
+        /** Albums are far fewer than tracks and carry three fields here, so pages can be larger. */
+        private const val ALBUM_PAGE_SIZE = 1_000
+
+        /**
+         * Just enough to tell whether an album changed. Deliberately omits genres, media sources
+         * and paths - the probe runs on every refresh, and asking for the full description of
+         * every album would cost as much as the sync it is meant to avoid.
+         *
+         * DATE_LAST_SAVED is not requested: the SDK's BaseItemDto has no property for it, so the
+         * server would send a field nothing can read. The etag moves on the same writes.
+         */
+        private val ALBUM_PROBE_FIELDS = setOf(
+            ItemFields.DATE_CREATED,
+            ItemFields.DATE_LAST_MEDIA_ADDED,
+            ItemFields.ETAG,
+        )
         private const val TICKS_PER_MILLISECOND = 10_000L
         private const val MAX_PAGE_ATTEMPTS = 3
         private const val RETRY_BASE_DELAY_MS = 1_000L

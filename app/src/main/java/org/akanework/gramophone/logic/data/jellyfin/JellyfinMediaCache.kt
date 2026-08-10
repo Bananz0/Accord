@@ -148,6 +148,40 @@ object JellyfinMediaCache {
     }
 
     /**
+     * Drops cached audio for tracks whose file changed on the server.
+     *
+     * Tags and embedded lyrics are read off the decoded stream when a track plays, so a track
+     * already in the cache keeps playing the bytes fetched before the edit - the library shows the
+     * new metadata while the player shows the old words. Removing the entry makes the next play
+     * fetch the current file.
+     *
+     * Downloads are skipped, for the same reason [trimToLimit] skips them: deleting one silently
+     * takes away music somebody chose to keep offline. A downloaded track therefore keeps its old
+     * tags until it is removed and downloaded again, which is a trade worth stating rather than a
+     * decision to make on the user's behalf.
+     *
+     * Reads the cache index and deletes files, so it must not run on the main thread.
+     *
+     * @return how many entries were dropped.
+     */
+    fun evictStale(context: Context, keys: Set<String>): Int {
+        if (keys.isEmpty()) return 0
+        val appContext = context.applicationContext
+        val cache = get(appContext)
+        val protectedKeys = downloadedCacheKeys(appContext)
+
+        var dropped = 0
+        keys.forEach { key ->
+            if (key in protectedKeys) return@forEach
+            runCatching { cache.removeResource(key) }
+                .onSuccess { dropped++ }
+                .onFailure { Log.w(TAG, "Could not evict stale entry", it) }
+        }
+        if (dropped > 0) Log.d(TAG, "Evicted $dropped stale cache entries after a server edit")
+        return dropped
+    }
+
+    /**
      * Cache keys belonging to downloads, in every state.
      *
      * Keyed by request URI rather than media id: playback, prefetch and downloads all leave the

@@ -16,6 +16,7 @@ import org.akanework.gramophone.logic.data.db.AppDatabase
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinClientHolder
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinIdMap
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinLibraryLoader
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinMediaCache
 import org.akanework.gramophone.logic.utils.MediaStoreUtils
 import uk.akane.libphonograph.items.Album
 import uk.akane.libphonograph.items.Artist
@@ -126,6 +127,36 @@ class JellyfinLibraryReader(private val context: Context) : LibraryReader {
         }
 
         val hadSomething = store.value != null
+
+        // With a usable cache, ask the cheap question first: which albums moved? Re-pulling one
+        // retagged record should not cost the same as fetching the library from scratch.
+        if (hadSomething) {
+            val outcome = runCatching {
+                loader.syncChangedAlbums(cacheDao, db.albumSyncStateDao())
+            }.onFailure { Log.e(TAG, "Incremental sync failed", it) }.getOrNull()
+
+            when (outcome) {
+                is JellyfinLibraryLoader.SyncOutcome.UpToDate -> {
+                    lastErrorUnreachable.value = false
+                    return@withLock
+                }
+
+                is JellyfinLibraryLoader.SyncOutcome.Updated -> {
+                    store.value = outcome.library
+                    lastErrorUnreachable.value = false
+                    // Embedded lyrics and tags are read off the decoded stream at playback, not
+                    // from anything the app caches separately, so the stale copy is the audio
+                    // itself. Dropping it is what makes a retag actually reach the player.
+                    JellyfinMediaCache.evictStale(context, outcome.staleStreamKeys)
+                    Log.d(TAG, "Incremental sync updated ${outcome.changedAlbumIds.size} albums")
+                    return@withLock
+                }
+
+                // Null, or a probe that could not be trusted, falls through to the full sync.
+                else -> Unit
+            }
+        }
+
         syncProgress.value = 0 to 0
         val synced = runCatching {
             loader.load(
@@ -146,6 +177,11 @@ class JellyfinLibraryReader(private val context: Context) : LibraryReader {
         if (synced != null) {
             store.value = synced
             lastErrorUnreachable.value = false
+            // Recorded after the tracks are cached, never before: state saved for a sync that then
+            // failed would claim albums were current whose rows were never written, and the next
+            // refresh would skip exactly the albums it should have fetched.
+            runCatching { loader.recordAlbumStates(db.albumSyncStateDao()) }
+                .onFailure { Log.w(TAG, "Could not record album sync state", it) }
         } else {
             // With a library already on screen a failed refresh is not worth shouting about: the
             // user has something usable and the next launch tries again.

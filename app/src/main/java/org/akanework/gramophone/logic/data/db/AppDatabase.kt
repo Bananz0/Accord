@@ -6,11 +6,14 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import org.akanework.gramophone.logic.data.db.dao.AlbumSyncStateDao
 import org.akanework.gramophone.logic.data.db.dao.CachedSongDao
 import org.akanework.gramophone.logic.data.db.dao.JellyfinIdDao
 import org.akanework.gramophone.logic.data.db.dao.MediaItemDao
 import org.akanework.gramophone.logic.data.db.dao.PendingScrobbleDao
 import org.akanework.gramophone.logic.data.db.dao.PlaylistDao
+import org.akanework.gramophone.logic.data.db.entity.ALBUM_SYNC_STATE_TABLE_NAME
+import org.akanework.gramophone.logic.data.db.entity.AlbumSyncState
 import org.akanework.gramophone.logic.data.db.entity.CACHED_SONG_TABLE_NAME
 import org.akanework.gramophone.logic.data.db.entity.CachedSong
 import org.akanework.gramophone.logic.data.db.entity.JELLYFIN_ID_TABLE_NAME
@@ -31,8 +34,9 @@ const val APP_DATABASE_FILE_NAME = "app.db"
         JellyfinId::class,
         CachedSong::class,
         PendingScrobble::class,
+        AlbumSyncState::class,
     ],
-    version = 5,
+    version = 7,
 )
 abstract class AppDatabase : RoomDatabase() {
 
@@ -41,6 +45,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun jellyfinIdDao(): JellyfinIdDao
     abstract fun cachedSongDao(): CachedSongDao
     abstract fun pendingScrobbleDao(): PendingScrobbleDao
+    abstract fun albumSyncStateDao(): AlbumSyncStateDao
 
     companion object {
         @Volatile
@@ -113,6 +118,43 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Adds the per-album sync state used to re-pull only what changed on the server.
+         *
+         * Additive and deliberately starts empty: with no recorded state every album reads as
+         * dirty, so the first sync after upgrading is a full one and fills the table. That is the
+         * correct answer rather than a cost, because nothing here knows what the server looked
+         * like when the existing cache was written.
+         */
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(CREATE_ALBUM_SYNC_STATE)
+            }
+        }
+
+        /**
+         * Renames the album probe's second column, which was named for `DateLastSaved` but only
+         * ever held `DateCreated` - the SDK exposes no property for the former, so nothing could
+         * read it even when the server was asked.
+         *
+         * Recreated rather than altered. This table is derived state: emptying it makes the next
+         * refresh a full sync, which repopulates it correctly, so there is nothing to preserve and
+         * no reason to write a column-copying migration for it.
+         */
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("DROP TABLE IF EXISTS `$ALBUM_SYNC_STATE_TABLE_NAME`")
+                db.execSQL(CREATE_ALBUM_SYNC_STATE)
+            }
+        }
+
+        private const val CREATE_ALBUM_SYNC_STATE =
+            "CREATE TABLE IF NOT EXISTS `$ALBUM_SYNC_STATE_TABLE_NAME` (" +
+                    "`albumJellyfinId` TEXT PRIMARY KEY NOT NULL, " +
+                    "`dateLastMediaAdded` INTEGER, " +
+                    "`dateCreated` INTEGER, " +
+                    "`etag` TEXT)"
+
         fun getInstance(context: Context): AppDatabase {
             return instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -120,7 +162,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     APP_DATABASE_FILE_NAME
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                     .build()
                     .apply { instance = this }
             }

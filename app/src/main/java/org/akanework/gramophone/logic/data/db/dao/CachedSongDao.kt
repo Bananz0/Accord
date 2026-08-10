@@ -26,6 +26,22 @@ interface CachedSongDao {
     @Query("DELETE FROM $CACHED_SONG_TABLE_NAME")
     fun deleteAll()
 
+    @Query("DELETE FROM $CACHED_SONG_TABLE_NAME WHERE albumJellyfinId IN (:albumIds)")
+    fun deleteByAlbumIds(albumIds: List<String>)
+
+    /**
+     * Swaps the tracks of specific albums, leaving the rest of the library alone.
+     *
+     * The delete and the insert are one transaction per batch: an album whose old rows were
+     * removed but whose new ones were never written would read as an album that lost its tracks,
+     * and the sync state saved alongside would claim it was up to date.
+     */
+    @Transaction
+    fun replaceAlbums(albumIds: List<String>, songs: List<CachedSong>) {
+        albumIds.chunked(CHUNK_SIZE).forEach { deleteByAlbumIds(it) }
+        songs.chunked(CHUNK_SIZE).forEach { insertAll(it) }
+    }
+
     /**
      * Swaps in a freshly synced library.
      *
