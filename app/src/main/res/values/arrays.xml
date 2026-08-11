@@ -22,6 +22,20 @@
         <item>20 GB</item>
     </string-array>
 
+    <string-array name="stream_quality">
+        <item>@string/quality_original</item>
+        <item>@string/quality_320</item>
+        <item>@string/quality_256</item>
+        <item>@string/quality_192</item>
+    </string-array>
+
+    <string-array name="stream_quality_val" translatable="false">
+        <item>original</item>
+        <item>320</item>
+        <item>256</item>
+        <item>192</item>
+    </string-array>
+
     <string-array name="cache_limit_val" translatable="false">
         <item>0</item>
         <item>536870912</item>
