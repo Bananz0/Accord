@@ -49,9 +49,12 @@ class JellyfinReporter(private val context: Context) {
                 isPaused = isPaused,
                 canSeek = true,
                 isMuted = false,
-                // Tracks stream with static=true, so the server is serving the original file
-                // untouched rather than transcoding.
-                playMethod = PlayMethod.DIRECT_PLAY,
+                // Reported, not assumed. This field is taken at face value by the server's
+                // dashboard and by the playback-reporting plugin - nothing on the server checks it
+                // - so hardcoding DirectPlay while asking for a transcode makes both of them lie,
+                // and makes the one place you would look to confirm a quality setting works say
+                // that it does not.
+                playMethod = playMethod(context),
                 repeatMode = RepeatMode.REPEAT_NONE,
                 playbackOrder = PlaybackOrder.DEFAULT,
             )
@@ -67,9 +70,12 @@ class JellyfinReporter(private val context: Context) {
                 isPaused = isPaused,
                 canSeek = true,
                 isMuted = false,
-                // Tracks stream with static=true, so the server is serving the original file
-                // untouched rather than transcoding.
-                playMethod = PlayMethod.DIRECT_PLAY,
+                // Reported, not assumed. This field is taken at face value by the server's
+                // dashboard and by the playback-reporting plugin - nothing on the server checks it
+                // - so hardcoding DirectPlay while asking for a transcode makes both of them lie,
+                // and makes the one place you would look to confirm a quality setting works say
+                // that it does not.
+                playMethod = playMethod(context),
                 repeatMode = RepeatMode.REPEAT_NONE,
                 playbackOrder = PlaybackOrder.DEFAULT,
             )
@@ -142,6 +148,17 @@ class JellyfinReporter(private val context: Context) {
             }
         }
     }
+
+    /**
+     * What this client is actually asking the server for.
+     *
+     * Derived from the quality setting rather than stated once and forgotten: with a cap in place
+     * the request carries a codec and a container the source does not have, and the server encodes
+     * on the fly.
+     */
+    private fun playMethod(context: Context): PlayMethod =
+        if (StreamQuality.streamingQuality(context).isOriginal) PlayMethod.DIRECT_PLAY
+        else PlayMethod.TRANSCODE
 
     companion object {
         private const val TAG = "JellyfinReporter"

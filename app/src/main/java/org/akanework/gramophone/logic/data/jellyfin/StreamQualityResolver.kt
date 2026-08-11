@@ -24,21 +24,27 @@ import androidx.media3.datasource.ResolvingDataSource
 @OptIn(UnstableApi::class)
 object StreamQualityResolver {
 
-    /** Query parameters the transcoding request needs and a static request must not carry. */
     private const val PARAM_STATIC = "static"
-    private const val PARAM_MAX_BITRATE = "maxStreamingBitrate"
-    private const val PARAM_AUDIO_BITRATE = "audioBitRate"
     private const val PARAM_CONTAINER = "container"
-    private const val PARAM_AUDIO_CODEC = "audioCodec"
-    private const val PARAM_TRANSCODE_CONTAINER = "transcodingContainer"
-    private const val PARAM_TRANSCODE_PROTOCOL = "transcodingProtocol"
+    private const val PARAM_AUDIO_CODEC = "AudioCodec"
+    private const val PARAM_AUDIO_BITRATE = "AudioBitrate"
 
     /**
-     * AAC in an ADTS stream. Chosen over Opus or Vorbis because every Android decoder handles it,
-     * and over MP3 because it is materially better at these bitrates.
+     * The transcoding container, carried as a file extension on the path.
+     *
+     * This is the part that decides. Asking `/Audio/{id}/stream` for a codec and a bitrate leaves
+     * the container unchanged and the server hands over the file; naming the container in the path
+     * is what selects an encoder. Confirmed by asking Jellyfin directly: `PlaybackInfo` for a FLAC
+     * against an mp3/aac profile answers `SupportsDirectPlay: false` and hands back a
+     * `TranscodingUrl` of exactly this shape.
+     */
+    private const val TRANSCODE_EXTENSION = "stream.ts"
+
+    /**
+     * AAC. Chosen over Opus or Vorbis because every Android decoder handles it, and over MP3
+     * because it is materially better at these bitrates.
      */
     private const val TRANSCODE_CODEC = "aac"
-    private const val TRANSCODE_CONTAINER = "ts"
 
     /**
      * @param quality supplied per call rather than read here, so playback and downloading can ask
@@ -89,19 +95,29 @@ object StreamQualityResolver {
     }
 
     private fun Uri.withTranscoding(quality: StreamQuality): Uri {
-        val builder = buildUpon().clearQuery()
-        // Everything except the flags that force direct play, which would make the cap meaningless,
-        // and the source container, which no longer describes what arrives.
+        val segments = pathSegments ?: return this
+        val audioIndex = segments.indexOf("Audio")
+        if (audioIndex < 0 || audioIndex + 1 >= segments.size) return this
+
+        // The final segment becomes stream.ts. Rebuilt rather than edited because the extension is
+        // the part that selects an encoder, and it lives in the path rather than the query.
+        val builder = buildUpon().path(null)
+        segments.forEachIndexed { index, segment ->
+            builder.appendPath(if (index == audioIndex + 2) TRANSCODE_EXTENSION else segment)
+        }
+        if (segments.size <= audioIndex + 2) builder.appendPath(TRANSCODE_EXTENSION)
+
+        // Everything the original carried except the flag that forces direct play, which would
+        // make the cap meaningless, and the source container, which no longer describes what
+        // arrives.
         queryParameterNames.forEach { name ->
             if (name == PARAM_STATIC || name == PARAM_CONTAINER) return@forEach
             getQueryParameter(name)?.let { builder.appendQueryParameter(name, it) }
         }
+
         return builder
-            .appendQueryParameter(PARAM_MAX_BITRATE, quality.bitrateBps.toString())
-            .appendQueryParameter(PARAM_AUDIO_BITRATE, quality.bitrateBps.toString())
             .appendQueryParameter(PARAM_AUDIO_CODEC, TRANSCODE_CODEC)
-            .appendQueryParameter(PARAM_TRANSCODE_CONTAINER, TRANSCODE_CONTAINER)
-            .appendQueryParameter(PARAM_TRANSCODE_PROTOCOL, "http")
+            .appendQueryParameter(PARAM_AUDIO_BITRATE, quality.bitrateBps.toString())
             .build()
     }
 }
