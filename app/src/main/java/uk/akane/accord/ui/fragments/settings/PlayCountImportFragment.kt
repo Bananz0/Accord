@@ -7,12 +7,14 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.widget.NestedScrollView
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import org.akanework.gramophone.logic.data.playcounts.ImportPlan
@@ -146,20 +148,46 @@ class PlayCountImportFragment : Fragment() {
     }
 
     private fun onSourceTapped(source: PlayCountSource) {
+        if (running?.isActive == true) return
         if (source.kind == PlayCountSource.Kind.ARCHIVE) {
-            // Said plainly rather than hidden. These services publish no play counts over any API,
-            // so the row cannot work until the archive parsers land, and a row that silently does
-            // nothing is worse than one that explains itself.
-            toast(getString(R.string.import_coming_soon))
+            showArchiveInstructions(source)
             return
         }
-        if (running?.isActive == true) return
         when (serverHandled[source]) {
             true -> showServerConflict(source)
             null -> showServerUnknown(source)
             else -> if (summaries[source]?.hasRun == true) showRepeatOptions(source)
                     else start(source)
         }
+    }
+
+    /**
+     * Explains what file to hand over before opening the picker.
+     *
+     * The archive has to be requested from the service and arrives days later, so a user tapping
+     * this row for the first time has nothing to give and no way to know that from a file picker.
+     * The instructions are the useful part of this screen for three of the four sources.
+     */
+    private fun showArchiveInstructions(source: PlayCountSource) {
+        MaterialAlertDialogBuilder(requireContext())
+            .setTitle(getString(source.labelRes))
+            .setMessage(getString(archiveHelpFor(source)))
+            .setPositiveButton(R.string.import_choose_file) { _, _ ->
+                pendingArchiveSource = source
+                // Deliberately wide. The picker filters by MIME type and these providers report
+                // zips and JSON under half a dozen of them, several of them wrong; a narrow filter
+                // greys out the very file the user was told to choose.
+                archivePicker.launch(arrayOf("*/*"))
+            }
+            .setNegativeButton(R.string.import_preview_cancel, null)
+            .show()
+    }
+
+    private fun archiveHelpFor(source: PlayCountSource): Int = when (source) {
+        PlayCountSource.SPOTIFY -> R.string.import_help_spotify
+        PlayCountSource.APPLE_MUSIC -> R.string.import_help_apple
+        PlayCountSource.YOUTUBE_MUSIC -> R.string.import_help_ytmusic
+        PlayCountSource.LAST_FM -> R.string.import_source_lastfm_summary
     }
 
     /**
@@ -212,6 +240,39 @@ class PlayCountImportFragment : Fragment() {
             }
             .setNegativeButton(R.string.import_preview_cancel, null)
             .show()
+    }
+
+    /**
+     * The archive picker.
+     *
+     * A field because a launcher has to be registered before the fragment reaches RESUMED, which
+     * rules out creating one when the row is tapped.
+     */
+    private val archivePicker = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        val source = pendingArchiveSource
+        pendingArchiveSource = null
+        if (uri != null && source != null) startArchive(source, uri)
+    }
+
+    private var pendingArchiveSource: PlayCountSource? = null
+
+    private fun startArchive(source: PlayCountSource, uri: android.net.Uri) {
+        running = lifecycleScope.launch {
+            when (val result = importer.planArchive(source, uri) { showProgress(it) }) {
+                is PlayCountImporter.PlanResult.Failed -> setStatus(describe(result.reason))
+                is PlayCountImporter.PlanResult.Ready -> {
+                    val plan = result.plan
+                    if (plan.tracksChanged == 0) {
+                        setStatus(getString(R.string.import_nothing_new))
+                    } else {
+                        setStatus(null)
+                        showPreview(plan)
+                    }
+                }
+            }
+        }
     }
 
     private fun start(source: PlayCountSource, full: Boolean = false) {
@@ -292,7 +353,19 @@ class PlayCountImportFragment : Fragment() {
         }
     }
 
+    /**
+     * Progress arrives on whichever thread is doing the work, which is never this one.
+     *
+     * The importer reads and writes on the IO dispatcher and reports from there, so touching views
+     * directly here throws - and it throws inside a coroutine, which surfaces as a crash rather
+     * than as a failed import. Hopped once, at the boundary, rather than asking every caller in the
+     * importer to remember.
+     */
     private fun showProgress(progress: PlayCountImporter.Progress) {
+        lifecycleScope.launch(Dispatchers.Main.immediate) { applyProgress(progress) }
+    }
+
+    private fun applyProgress(progress: PlayCountImporter.Progress) {
         setStatus(
             when (progress) {
                 is PlayCountImporter.Progress.Fetching ->
@@ -308,6 +381,7 @@ class PlayCountImportFragment : Fragment() {
                             NUMBERS.format(progress.fetched),
                         )
                     }
+                PlayCountImporter.Progress.Reading -> getString(R.string.import_reading)
                 PlayCountImporter.Progress.Matching -> getString(R.string.import_matching)
                 is PlayCountImporter.Progress.Writing ->
                     getString(R.string.import_writing, progress.written, progress.total)
@@ -318,6 +392,10 @@ class PlayCountImportFragment : Fragment() {
     private fun describe(reason: PlayCountImporter.Failure): CharSequence = when (reason) {
         PlayCountImporter.Failure.NotLinked -> getString(R.string.import_not_linked)
         PlayCountImporter.Failure.EmptyLibrary -> getString(R.string.import_library_empty)
+        PlayCountImporter.Failure.UnrecognisedArchive ->
+            getString(R.string.import_archive_unrecognised)
+        is PlayCountImporter.Failure.UnreadableArchive ->
+            getString(R.string.import_failed, reason.message)
         is PlayCountImporter.Failure.Network -> getString(R.string.import_failed, reason.message)
     }
 

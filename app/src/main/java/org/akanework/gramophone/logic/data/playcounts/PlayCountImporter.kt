@@ -1,6 +1,7 @@
 package org.akanework.gramophone.logic.data.playcounts
 
 import android.content.Context
+import android.net.Uri
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -19,6 +20,7 @@ import org.akanework.gramophone.logic.data.lastfm.LastFmCredentialStore
 class PlayCountImporter(private val context: Context) {
 
     sealed interface Progress {
+        data object Reading : Progress
         data class Fetching(val fetched: Int, val total: Int) : Progress
         data object Matching : Progress
         data class Writing(val written: Int, val total: Int) : Progress
@@ -29,6 +31,9 @@ class PlayCountImporter(private val context: Context) {
         data object NotLinked : Failure
         data class Network(val message: String) : Failure
         data object EmptyLibrary : Failure
+        /** The chosen file held nothing this source's parsers recognised. */
+        data object UnrecognisedArchive : Failure
+        data class UnreadableArchive(val message: String) : Failure
     }
 
     sealed interface PlanResult {
@@ -54,9 +59,44 @@ class PlayCountImporter(private val context: Context) {
 
         when (source) {
             PlayCountSource.LAST_FM -> planLastFm(library, full, onProgress)
-            // The export parsers land next; the screen keeps these rows disabled until then.
-            else -> PlanResult.Failed(Failure.Network("Not supported yet"))
+            // Archive sources cannot be read without being handed a file; the screen asks for one
+            // and calls planArchive instead.
+            else -> PlanResult.Failed(Failure.UnrecognisedArchive)
         }
+    }
+
+    /**
+     * Reads an export the user has picked and works out what it would change. Writes nothing.
+     *
+     * An archive is always the service's whole history to date, so its tally replaces this source's
+     * previous share rather than adding to it - importing a newer export must revise what the older
+     * one said, not stack on top of it. [PlayCountPlanner] handles that from the source's kind.
+     */
+    suspend fun planArchive(
+        source: PlayCountSource,
+        uri: Uri,
+        onProgress: (Progress) -> Unit = {},
+    ): PlanResult = withContext(Dispatchers.IO) {
+        val library = AppDatabase.getInstance(context).cachedSongDao().getAll()
+        if (library.isEmpty()) return@withContext PlanResult.Failed(Failure.EmptyLibrary)
+
+        onProgress(Progress.Reading)
+        val outcome = PlayHistoryArchive.read(context, uri, source)
+        val parsed = when (outcome) {
+            is PlayHistoryArchive.Outcome.Unrecognised ->
+                return@withContext PlanResult.Failed(Failure.UnrecognisedArchive)
+            is PlayHistoryArchive.Outcome.Unreadable ->
+                return@withContext PlanResult.Failed(Failure.UnreadableArchive(outcome.message))
+            is PlayHistoryArchive.Outcome.Success -> outcome.parsed
+        }
+
+        onProgress(Progress.Matching)
+        val plan = PlayCountPlanner(context).planAggregated(
+            source = source,
+            tracks = parsed.tracks,
+            library = library,
+        )
+        PlanResult.Ready(plan)
     }
 
     private suspend fun planLastFm(

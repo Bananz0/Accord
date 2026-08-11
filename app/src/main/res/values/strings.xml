@@ -165,7 +165,12 @@
     <string name="import_header">Counts are written to Jellyfin, so every client sees them. Each source\'s share is tracked separately, so importing again updates that source instead of doubling it.</string>
     <string name="import_never_run">Not imported yet</string>
     <string name="import_summary_done">%1$s plays across %2$s tracks · last run %3$s</string>
-    <string name="import_coming_soon">Archive import is not built yet</string>
+    <string name="import_choose_file">Choose file</string>
+    <string name="import_reading">Reading the archive…</string>
+    <string name="import_archive_unrecognised">Nothing in that file looked like listening history. Check you picked the right archive.</string>
+    <string name="import_help_spotify">Request <b>Extended streaming history</b> from Spotify: Account → Privacy settings → tick that box → Request data. It arrives by email, usually within a few days.\n\nHand over the whole .zip, or any of the Streaming_History_Audio files inside it.\n\nPlays shorter than 30 seconds are ignored, matching how Spotify counts a stream.</string>
+    <string name="import_help_apple">Request your data from Apple: privacy.apple.com → Request a copy of your data → <b>Apple Media Services information</b>.\n\nHand over the whole .zip, or the Apple Music Play Activity.csv inside it.</string>
+    <string name="import_help_ytmusic">Request a YouTube export from Google Takeout: select <b>YouTube and YouTube Music</b>, and under its options include <b>history</b> in JSON format.\n\nHand over the whole .zip, or the watch-history.json inside it. Only entries YouTube tagged as Music are counted.</string>
     <string name="import_not_linked">Add your Last.fm username in Scrobbling first</string>
     <string name="import_library_empty">Sync your library before importing</string>
     <string name="import_fetching">Reading history… %1$s of %2$s</string>
