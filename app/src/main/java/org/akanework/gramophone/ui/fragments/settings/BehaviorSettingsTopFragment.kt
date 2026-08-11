@@ -1,33 +1,7 @@
-/*
- *     Copyright (C) 2024 Akane Foundation
- *
- *     Gramophone is free software: you can redistribute it and/or modify
- *     it under the terms of the GNU General Public License as published by
- *     the Free Software Foundation, either version 3 of the License, or
- *     (at your option) any later version.
- *
- *     Gramophone is distributed in the hope that it will be useful,
- *     but WITHOUT ANY WARRANTY; without even the implied warranty of
- *     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *     GNU General Public License for more details.
- *
- *     You should have received a copy of the GNU General Public License
- *     along with this program.  If not, see <https://www.gnu.org/licenses/>.
- */
-
 package org.akanework.gramophone.ui.fragments.settings
 
-
-import android.content.Intent
-import android.content.pm.PackageManager
 import android.os.Bundle
-import android.provider.Settings
-import android.widget.Toast
-import androidx.core.net.toUri
-import androidx.preference.Preference
-import androidx.preference.SwitchPreferenceCompat
 import uk.akane.accord.R
-import org.akanework.gramophone.logic.hasScopedStorageWithMediaTypes
 import org.akanework.gramophone.ui.fragments.BasePreferenceFragment
 import org.akanework.gramophone.ui.fragments.BaseSettingFragment
 
@@ -35,44 +9,19 @@ import org.akanework.gramophone.ui.fragments.BaseSettingFragment
 class BehaviorSettingsFragment : BaseSettingFragment(R.string.settings_category_behavior,
     { BehaviorSettingsTopFragment() })
 
+/**
+ * Two switches, and nothing to wire up behind them.
+ *
+ * This screen used to carry a MediaStore length filter, an album-cover compatibility toggle that
+ * routed to the system permission page for READ_MEDIA_IMAGES, a play-on-launch switch nothing
+ * read, and a blacklist row duplicating the one in the main settings list. The first two described
+ * a local library this app no longer has - and the cover toggle asked for a permission that is no
+ * longer even declared, so it opened a page showing nothing to grant. A control that does nothing
+ * is worse than a missing one: it invites the user to change it and then to distrust the rest.
+ */
 class BehaviorSettingsTopFragment : BasePreferenceFragment() {
-    override fun onResume() {
-        super.onResume()
-        if (hasScopedStorageWithMediaTypes()) {
-            val preference = findPreference<SwitchPreferenceCompat>("album_covers")!!
-            preference.isPersistent = false
-            preference.isChecked = requireContext().checkSelfPermission(
-                android.Manifest.permission.READ_MEDIA_IMAGES
-            ) ==
-                    PackageManager.PERMISSION_GRANTED
-        }
-    }
 
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
         setPreferencesFromResource(R.xml.settings_behavior, rootKey)
-    }
-
-    override fun onPreferenceTreeClick(preference: Preference): Boolean {
-        // The blacklist entry that used to live here pushed into the old shell's R.id.container.
-        // Accord's own settings list owns that row now and pushes the fragment through the
-        // switcher, so keeping a second copy here meant two routes to one screen, one of them
-        // targeting a container that no longer exists.
-
-        // Prior to Android 13, this changes a setting which changes MediaStoreUtils behaviour
-        // Android 13 and later, this displays state of images permission granted/denied
-        if (hasScopedStorageWithMediaTypes() && preference.key == "album_covers") {
-            Toast.makeText(
-                requireActivity(), if (requireContext().checkSelfPermission(
-                        android.Manifest.permission.READ_MEDIA_IMAGES
-                    )
-                    == PackageManager.PERMISSION_GRANTED
-                ) R.string.deny_images else
-                    R.string.grant_images, Toast.LENGTH_LONG
-            ).show()
-            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
-            intent.setData("package:${requireContext().packageName}".toUri())
-            startActivity(intent)
-        }
-        return super.onPreferenceTreeClick(preference)
     }
 }

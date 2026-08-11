@@ -15,48 +15,64 @@
   ~     along with this program.  If not, see <https://www.gnu.org/licenses/>.
   -->
 
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!--
+Elevation pinned to zero. The card is kept because it wraps its children in a Material
+theme, and MaterialSwitch - a Material 3 component in a Material 2 app theme - finds its
+track and thumb nowhere else; without the card it degrades to a platform switch that shows
+the word OFF. But elevation is what drew the boxes: Material tints surfaces lighter with
+elevation in dark themes, so every row painted a paler rectangle inside the category card,
+strengthening and fading with the card's state layer.
+-->
+<com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
-    android:background="?attr/selectableItemBackground"
+    style="?materialCardViewFilledStyle"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:baselineAligned="false"
-    android:orientation="horizontal"
-    android:minHeight="54dp"
-    android:paddingHorizontal="14dp"
-    android:paddingVertical="6dp">
-
-    <include layout="@layout/preference_icon" />
+    app:cardBackgroundColor="@android:color/transparent"
+    app:cardElevation="0dp">
 
     <LinearLayout
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:layout_gravity="center_vertical"
-        android:layout_weight="1"
-        android:orientation="vertical">
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:baselineAligned="false"
+        android:orientation="horizontal"
+        android:minHeight="54dp"
+        android:paddingHorizontal="14dp"
+        android:paddingVertical="6dp">
 
-        <TextView
-            android:id="@android:id/title"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:fontFamily="@font/inter_regular"
-            android:includeFontPadding="false"
-            android:textColor="?attr/colorOnSurface"
-            android:textSize="16sp"
-            tools:text="Title" />
+        <include layout="@layout/preference_icon" />
 
-        <TextView
-            android:id="@android:id/summary"
-            android:layout_width="wrap_content"
+        <LinearLayout
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginTop="2dp"
-            android:fontFamily="@font/inter_regular"
-            android:includeFontPadding="false"
-            android:textColor="?attr/colorOnSurfaceVariant"
-            android:textSize="13sp"
-            tools:text="Summary" />
+            android:layout_gravity="center_vertical"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@android:id/title"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="@font/inter_regular"
+                android:includeFontPadding="false"
+                android:textColor="?attr/colorOnSurface"
+                android:textSize="16sp"
+                tools:text="Title" />
+
+            <TextView
+                android:id="@android:id/summary"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:fontFamily="@font/inter_regular"
+                android:includeFontPadding="false"
+                android:textColor="?attr/colorOnSurfaceVariant"
+                android:textSize="13sp"
+                tools:text="Summary" />
+
+        </LinearLayout>
 
     </LinearLayout>
 
-</LinearLayout>
+</com.google.android.material.card.MaterialCardView>
