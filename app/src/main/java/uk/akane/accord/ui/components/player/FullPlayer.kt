@@ -50,6 +50,8 @@ import coil3.size.Scale
 import coil3.toBitmap
 import android.widget.TextView
 import androidx.media3.common.Tracks
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinLibraryLoader.Companion.EXTRA_SOURCE_CONTAINER
+import org.akanework.gramophone.logic.data.jellyfin.StreamQuality
 import org.akanework.gramophone.logic.utils.AudioQuality
 import androidx.media3.session.SessionResult
 import com.google.common.util.concurrent.Futures
@@ -153,6 +155,7 @@ class FullPlayer @JvmOverloads constructor(
     private var nextButton: AnimatedVectorButton
     private var ellipsisButton: OverlayBackgroundButton
     private var qualityBadge: TextView
+    private var qualityAvailableHint: TextView
     private var currentQualityDetails: AudioQuality.Details? = null
     private var outputDeviceIcon: ImageView
     private var outputDeviceName: TextView
@@ -292,6 +295,7 @@ class FullPlayer @JvmOverloads constructor(
         starTransformButton = findViewById(R.id.star)
         ellipsisButton = findViewById(R.id.ellipsis)
         qualityBadge = findViewById(R.id.quality_badge)
+        qualityAvailableHint = findViewById(R.id.quality_available_hint)
         qualityBadge.setOnClickListener {
             it.performPressHaptic()
             showQualityDetails()
@@ -1445,11 +1449,52 @@ class FullPlayer @JvmOverloads constructor(
         currentQualityDetails = details
         if (details == null) {
             qualityBadge.visibility = GONE
+            showAvailableQualityHint()
         } else {
             qualityBadge.setText(details.quality.label)
             syncQualityBadgeVisibility()
         }
     }
+
+    /**
+     * Mentions, once and briefly, that the source is better than what is playing.
+     *
+     * Only reachable when there is no badge, which is exactly the case worth saying something
+     * about: the badge describes what the decoder produced, so a lossless file streamed under a
+     * cap arrives as AAC and shows nothing at all. Left permanent it would be a label complaining
+     * about a setting the user chose deliberately; three seconds is enough to answer "could this
+     * sound better?" without becoming furniture.
+     */
+    private fun showAvailableQualityHint() {
+        qualityAvailableHint.animate().cancel()
+        qualityAvailableHint.alpha = 0f
+
+        val container = currentSourceContainer() ?: return
+        if (container !in LOSSLESS_CONTAINERS) return
+        // Nothing to advertise when the untouched file is already what is playing.
+        if (StreamQuality.streamingQuality(context).isOriginal) return
+
+        // Lossless, not Hi-Res: the library stores a container and nothing about bit depth or
+        // sample rate, so the difference between 16/44 and 24/96 is not knowable here. Saying
+        // Hi-Res on a guess would be worse than saying the smaller true thing.
+        qualityAvailableHint.setText(R.string.quality_lossless_available)
+        qualityAvailableHint.animate()
+            .alpha(1f)
+            .setDuration(QUALITY_HINT_FADE_MS)
+            .withEndAction {
+                qualityAvailableHint.animate()
+                    .alpha(0f)
+                    .setStartDelay(QUALITY_HINT_HOLD_MS)
+                    .setDuration(QUALITY_HINT_FADE_MS)
+                    .start()
+            }
+            .start()
+    }
+
+    /** The container of the file on the server, which the library knows even when playing AAC. */
+    private fun currentSourceContainer(): String? =
+        instance?.currentMediaItem?.mediaMetadata?.extras?.getString(EXTRA_SOURCE_CONTAINER)
+            ?.lowercase()
 
     private fun syncQualityBadgeVisibility() {
         qualityBadge.visibility = when {
@@ -2098,6 +2143,12 @@ class FullPlayer @JvmOverloads constructor(
     companion object {
         const val TAG = "FullPlayer"
         private const val POSITION_UPDATE_INTERVAL_MS = 500L
+
+        /** Containers worth mentioning when a quality cap is hiding what they hold. */
+        private val LOSSLESS_CONTAINERS = setOf("flac", "alac", "wav", "aiff", "ape", "wv")
+
+        private const val QUALITY_HINT_FADE_MS = 220L
+        private const val QUALITY_HINT_HOLD_MS = 3_000L
         private const val PAUSED_COVER_SCALE = 0.84F
 
         /** How far the cover follows the finger, and how far it has to go to count as a swipe. */
@@ -2125,4 +2176,5 @@ class FullPlayer @JvmOverloads constructor(
 
         private const val PREF_AUTOPLAY = "autoplay_similar"
     }
+
 }

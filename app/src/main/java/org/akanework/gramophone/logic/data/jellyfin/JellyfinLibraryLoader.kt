@@ -399,6 +399,10 @@ class JellyfinLibraryLoader(
                         // reflect everything the user has played on any client, not just what
                         // happened to be played on this phone.
                         putInt(EXTRA_PLAY_COUNT, row.playCount)
+                        // What the file on the server actually is. The player can only report what
+                        // its decoder produced, so under a quality cap it sees AAC and has no way
+                        // to know the source was lossless.
+                        row.container?.let { putString(EXTRA_SOURCE_CONTAINER, it) }
                         putBoolean(EXTRA_IS_FAVOURITE, row.isFavourite)
                         row.lastPlayed?.let { putLong(EXTRA_LAST_PLAYED, it) }
                         row.trackArtists
@@ -466,6 +470,7 @@ class JellyfinLibraryLoader(
     companion object {
         /** Extras carrying Jellyfin's server-side listening history onto each MediaItem. */
         const val EXTRA_PLAY_COUNT = "JellyfinPlayCount"
+        const val EXTRA_SOURCE_CONTAINER = "JellyfinSourceContainer"
         const val EXTRA_IS_FAVOURITE = "JellyfinIsFavourite"
         const val EXTRA_LAST_PLAYED = "JellyfinLastPlayed"
         const val EXTRA_TRACK_ARTISTS = "JellyfinTrackArtists"

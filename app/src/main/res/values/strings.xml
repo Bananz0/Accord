@@ -481,6 +481,15 @@
     <string name="quality_streaming_metered">Streaming on mobile data</string>
     <string name="quality_download">Downloads</string>
     <string name="quality_explainer">Original sends the file untouched. The lower settings ask your server to transcode, which uses less data and less space — the quality badge follows what actually plays, so it will stop saying Lossless.</string>
+    <string name="quality_cache_cleared">Cleared %1$d cached tracks at the old quality</string>
+    <string name="quality_requalify_title">Change downloaded music too?</string>
+    <string name="quality_requalify_upgrade">%1$d downloads are stored at a lower quality. Fetching them again at Original will use more data and more space.</string>
+    <string name="quality_requalify_downgrade">%1$d downloads are stored at a higher quality. Fetching them again at %2$s kbps will free space, but uses data now.</string>
+    <string name="quality_requalify_keep">Keep as they are</string>
+    <string name="quality_requalify_go">Fetch again</string>
+    <string name="quality_requalify_started">Re-downloading %1$d tracks</string>
+    <string name="quality_lossless_available">Lossless available</string>
+    <string name="quality_hires_available">Hi-Res Lossless available</string>
     <string name="downloads_cache_limit">Cache limit</string>
     <string name="cache_limit_none">No limit</string>
     <string name="downloads_cache_limit_summary">Streamed music is deleted oldest first to stay under this. Downloads are never removed.</string>

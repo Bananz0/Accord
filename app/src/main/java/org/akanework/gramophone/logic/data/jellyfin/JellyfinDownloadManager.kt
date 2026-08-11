@@ -125,6 +125,39 @@ object JellyfinDownloadManager {
         }
     }
 
+    /**
+     * Re-fetches downloads at whatever quality downloads are currently set to.
+     *
+     * Removed and re-queued rather than overwritten: the quality is part of the cache key, so the
+     * new copy is a different entry and the old one has to be told to go. Removal is asynchronous
+     * through the download service, and the re-add carries the new key, so the two do not collide
+     * even if they overlap.
+     */
+    fun redownload(context: Context, mediaIds: List<String>) {
+        if (mediaIds.isEmpty()) return
+        val uris = mediaIds.mapNotNull { id ->
+            val uri = knownUriFor(context, id) ?: return@mapNotNull null
+            id to uri
+        }
+        mediaIds.forEach { id ->
+            runCatching {
+                DownloadService.sendRemoveDownload(
+                    context, GramophoneDownloadService::class.java, id, false
+                )
+            }.onFailure { Log.w(TAG, "Could not remove $id before re-download", it) }
+        }
+        uris.forEach { (id, uri) -> enqueue(context, id, uri) }
+        Log.d(TAG, "Re-queued ${uris.size} downloads at the current quality")
+    }
+
+    /** The stream URI a download was originally queued with. */
+    private fun knownUriFor(context: Context, mediaId: String): Uri? = try {
+        get(context).downloadIndex.getDownload(mediaId)?.request?.uri
+    } catch (e: Exception) {
+        Log.w(TAG, "Could not read the download request for $mediaId", e)
+        null
+    }
+
     fun removeAll(context: Context) {
         try {
             DownloadService.sendRemoveAllDownloads(
@@ -198,6 +231,61 @@ object JellyfinDownloadManager {
     /** Reads the same index for one row/player item. Call off the main thread. */
     fun isDownloaded(context: Context, item: MediaItem): Boolean =
         item.mediaId.isNotBlank() && item.mediaId in completedIds(context)
+
+    /**
+     * What is actually stored, per quality, with the bytes each takes.
+     *
+     * Downloads keep whatever quality they were fetched at, so changing the setting does not touch
+     * them - and without somewhere to see this, the only way to find out you are holding 256 when
+     * you asked for Original is to listen for it. Read from the stated cache key rather than the
+     * file, which is why downloads carry one.
+     *
+     * Reads the download index, so call it off the main thread.
+     */
+    fun downloadsByQuality(context: Context): Map<StreamQuality, Pair<Int, Long>> = try {
+        val totals = mutableMapOf<StreamQuality, Pair<Int, Long>>()
+        get(context).downloadIndex.getDownloads(Download.STATE_COMPLETED).use { cursor ->
+            while (cursor.moveToNext()) {
+                val download = cursor.download
+                val quality = qualityOf(download.request.customCacheKey)
+                val (count, bytes) = totals[quality] ?: (0 to 0L)
+                totals[quality] = (count + 1) to (bytes + download.bytesDownloaded)
+            }
+        }
+        totals
+    } catch (e: Exception) {
+        Log.w(TAG, "Could not summarise downloads by quality", e)
+        emptyMap()
+    }
+
+    /** Media ids stored at anything other than [quality], for a re-download offer. */
+    fun downloadsNotAt(context: Context, quality: StreamQuality): List<String> = try {
+        buildList {
+            get(context).downloadIndex.getDownloads(Download.STATE_COMPLETED).use { cursor ->
+                while (cursor.moveToNext()) {
+                    val download = cursor.download
+                    if (qualityOf(download.request.customCacheKey) != quality) {
+                        add(download.request.id)
+                    }
+                }
+            }
+        }
+    } catch (e: Exception) {
+        Log.w(TAG, "Could not list downloads by quality", e)
+        emptyList()
+    }
+
+    /**
+     * The quality a stored download is at, from its cache key.
+     *
+     * A key with no suffix means the untouched file - which is also what downloads queued before
+     * these settings existed look like, and they were indeed originals.
+     */
+    private fun qualityOf(customCacheKey: String?): StreamQuality {
+        val suffix = customCacheKey?.substringAfter('|', missingDelimiterValue = "").orEmpty()
+        return if (suffix.isEmpty()) StreamQuality.ORIGINAL
+        else StreamQuality.fromPreference(suffix)
+    }
 
     /** Bytes occupied by completed downloads, as opposed to incidentally cached streaming data. */
     fun downloadedBytes(context: Context): Long = try {

@@ -206,6 +206,47 @@ object JellyfinMediaCache {
     }
 
     /**
+     * Drops cached audio held at any quality other than [keep].
+     *
+     * Changing the setting orphans the old variants rather than replacing them: each quality is a
+     * separate cache entry, so nothing will ever read the previous one again and it sits there
+     * occupying the space the setting was probably changed to reclaim. This cache is disposable by
+     * definition, so it goes without asking - anything dropped is refetched on the next play.
+     *
+     * Downloads are spared. They are the copy somebody chose to keep, and swapping their quality
+     * is a decision with a data cost attached, so it is asked about separately rather than done
+     * here as a side effect.
+     *
+     * Reads the cache index and deletes files, so it must not run on the main thread.
+     *
+     * @return how many entries were dropped.
+     */
+    fun dropOtherVariants(context: Context, keep: StreamQuality): Int {
+        val appContext = context.applicationContext
+        val cache = get(appContext)
+        val protectedKeys = downloadedCacheKeys(appContext)
+        val keepSuffix = keep.cacheSuffix
+
+        var dropped = 0
+        cache.keys.toList().forEach { key ->
+            if (key in protectedKeys) return@forEach
+            // Anything keyed by a bare URL predates these settings and can no longer be reached
+            // either, since lookups now go through the item id.
+            val stale = key.startsWith("http") || key.variantSuffix() != keepSuffix
+            if (!stale) return@forEach
+            runCatching { cache.removeResource(key) }
+                .onSuccess { dropped++ }
+                .onFailure { Log.w(TAG, "Could not drop a stale variant", it) }
+        }
+        if (dropped > 0) Log.d(TAG, "Dropped $dropped cache entries not at ${keep.preferenceValue}")
+        return dropped
+    }
+
+    /** `|256` for a capped entry, empty for an untouched one. */
+    private fun String.variantSuffix(): String =
+        substringAfter('|', missingDelimiterValue = "").let { if (it.isEmpty()) "" else "|$it" }
+
+    /**
      * Cache keys belonging to downloads, in every state.
      *
      * Keyed by request URI rather than media id: playback, prefetch and downloads all leave the
