@@ -189,6 +189,85 @@ class LastFmClient(
     }
 
     /**
+     * Walks a user's scrobble history, newest first, calling [onPage] with each page.
+     *
+     * Timestamped plays rather than `user.getTopTracks`, which would hand back a finished count per
+     * track in a fraction of the requests. The totals are the wrong shape for an importer that has
+     * to be safe to re-run: they cover all time with no way to ask for a window, so a second import
+     * could only replace what it wrote before, and nothing could tell a play this app already
+     * reported to Jellyfin from one it had not. Timestamps make both possible.
+     *
+     * [fromSeconds] is exclusive and is how a repeat import stays cheap - passing the point the
+     * last run reached asks Last.fm only for what has happened since.
+     *
+     * Pages are handed over as they arrive rather than accumulated: a decade of listening is
+     * hundreds of thousands of rows, and there is no reason for all of them to be resident when the
+     * caller only wants a tally. Returning false from [onPage] stops the walk.
+     */
+    suspend fun getRecentTracks(
+        username: String,
+        fromSeconds: Long? = null,
+        toSeconds: Long? = null,
+        onProgress: ((fetched: Int, total: Int) -> Unit)? = null,
+        onPage: (List<TimedTrack>) -> Boolean,
+    ) {
+        if (username.isBlank()) return
+        var page = 1
+        var totalPages: Int
+        var fetched = 0
+        var reportedTotal = 0
+        do {
+            val response = get(
+                buildMap {
+                    put("method", "user.getRecentTracks")
+                    put("user", username)
+                    put("limit", RECENT_PAGE_SIZE.toString())
+                    put("page", page.toString())
+                    // Last.fm returns the artist's MBID and album inline when asked for extended
+                    // data, which costs nothing extra and gives the matcher an album to fall back
+                    // on when a title is ambiguous.
+                    put("extended", "1")
+                    fromSeconds?.let { put("from", (it + 1).toString()) }
+                    toSeconds?.let { put("to", it.toString()) }
+                }
+            )
+            val recent = response.optJSONObject("recenttracks") ?: break
+            val attributes = recent.optJSONObject("@attr")
+            totalPages = attributes?.optInt("totalPages", page) ?: page
+            if (page == 1) reportedTotal = attributes?.optInt("total", 0) ?: 0
+
+            val entries = recent.optJSONArray("track")
+            val batch = mutableListOf<TimedTrack>()
+            if (entries != null) {
+                for (index in 0 until entries.length()) {
+                    val item = entries.optJSONObject(index) ?: continue
+                    // A track playing right now has no timestamp and is not yet a scrobble. It
+                    // would arrive again on the next run with one, so counting it here would count
+                    // it twice.
+                    if (item.optJSONObject("@attr")?.optBoolean("nowplaying") == true) continue
+                    val playedAt = item.optJSONObject("date")?.optString("uts")?.toLongOrNull()
+                        ?: continue
+                    val title = item.optString("name").takeIf { it.isNotBlank() } ?: continue
+                    val artist = item.optJSONObject("artist")?.let {
+                        it.optString("name").takeIf { name -> name.isNotBlank() }
+                            ?: it.optString("#text").takeIf { text -> text.isNotBlank() }
+                    } ?: continue
+                    val album = item.optJSONObject("album")?.optString("#text")
+                        ?.takeIf { it.isNotBlank() }
+                    batch += TimedTrack(
+                        track = Track(artist = artist, title = title, album = album),
+                        timestampSeconds = playedAt,
+                    )
+                }
+            }
+            fetched += batch.size
+            onProgress?.invoke(fetched, reportedTotal)
+            if (!onPage(batch)) return
+            page++
+        } while (page <= totalPages && page <= MAX_RECENT_PAGES)
+    }
+
+    /**
      * Sends an unsigned, read-only call. Routed through the proxy too when one is configured, so a
      * device without an API key can still fetch recommendations.
      */
@@ -319,5 +398,18 @@ class LastFmClient(
         const val MAX_BATCH = 50
         private const val LOVED_PAGE_SIZE = 1000
         private const val MAX_LOVED_PAGES = 50
+
+        /**
+         * Last.fm's documented ceiling for `user.getRecentTracks`. Asking for more is answered
+         * with 200 anyway, so the limit has to be respected rather than discovered.
+         */
+        private const val RECENT_PAGE_SIZE = 200
+
+        /**
+         * A backstop, not a budget. Two hundred thousand scrobbles is beyond a heavy decade of
+         * listening; a walk that reaches this has almost certainly hit a paging bug at the far end
+         * of someone's history rather than found more music.
+         */
+        private const val MAX_RECENT_PAGES = 1000
     }
 }

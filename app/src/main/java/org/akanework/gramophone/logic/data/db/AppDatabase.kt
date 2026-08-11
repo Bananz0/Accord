@@ -8,17 +8,23 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import org.akanework.gramophone.logic.data.db.dao.AlbumSyncStateDao
 import org.akanework.gramophone.logic.data.db.dao.CachedSongDao
+import org.akanework.gramophone.logic.data.db.dao.ImportContributionDao
 import org.akanework.gramophone.logic.data.db.dao.JellyfinIdDao
 import org.akanework.gramophone.logic.data.db.dao.MediaItemDao
+import org.akanework.gramophone.logic.data.db.dao.OwnPlayDao
 import org.akanework.gramophone.logic.data.db.dao.PendingScrobbleDao
 import org.akanework.gramophone.logic.data.db.dao.PlaylistDao
 import org.akanework.gramophone.logic.data.db.entity.ALBUM_SYNC_STATE_TABLE_NAME
 import org.akanework.gramophone.logic.data.db.entity.AlbumSyncState
 import org.akanework.gramophone.logic.data.db.entity.CACHED_SONG_TABLE_NAME
 import org.akanework.gramophone.logic.data.db.entity.CachedSong
+import org.akanework.gramophone.logic.data.db.entity.IMPORT_CONTRIBUTION_TABLE_NAME
+import org.akanework.gramophone.logic.data.db.entity.ImportContribution
 import org.akanework.gramophone.logic.data.db.entity.JELLYFIN_ID_TABLE_NAME
 import org.akanework.gramophone.logic.data.db.entity.JellyfinId
 import org.akanework.gramophone.logic.data.db.entity.MediaItem
+import org.akanework.gramophone.logic.data.db.entity.OWN_PLAY_TABLE_NAME
+import org.akanework.gramophone.logic.data.db.entity.OwnPlay
 import org.akanework.gramophone.logic.data.db.entity.PENDING_SCROBBLE_TABLE_NAME
 import org.akanework.gramophone.logic.data.db.entity.PendingScrobble
 import org.akanework.gramophone.logic.data.db.entity.Playlist
@@ -35,8 +41,10 @@ const val APP_DATABASE_FILE_NAME = "app.db"
         CachedSong::class,
         PendingScrobble::class,
         AlbumSyncState::class,
+        ImportContribution::class,
+        OwnPlay::class,
     ],
-    version = 7,
+    version = 8,
 )
 abstract class AppDatabase : RoomDatabase() {
 
@@ -46,6 +54,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun cachedSongDao(): CachedSongDao
     abstract fun pendingScrobbleDao(): PendingScrobbleDao
     abstract fun albumSyncStateDao(): AlbumSyncStateDao
+    abstract fun importContributionDao(): ImportContributionDao
+    abstract fun ownPlayDao(): OwnPlayDao
 
     companion object {
         @Volatile
@@ -148,6 +158,51 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Adds the play-count import ledger and the log of plays this app reported itself.
+         *
+         * Purely additive, and both tables start empty: with no contributions recorded, the first
+         * import treats every count Jellyfin holds as baseline, which is exactly right - none of
+         * it came from an import.
+         */
+        private val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(CREATE_IMPORT_CONTRIBUTION)
+                db.execSQL(CREATE_IMPORT_CONTRIBUTION_SOURCE_INDEX)
+                db.execSQL(CREATE_OWN_PLAY)
+                db.execSQL(CREATE_OWN_PLAY_TIME_INDEX)
+                db.execSQL(CREATE_OWN_PLAY_ITEM_INDEX)
+            }
+        }
+
+        private const val CREATE_IMPORT_CONTRIBUTION =
+            "CREATE TABLE IF NOT EXISTS `$IMPORT_CONTRIBUTION_TABLE_NAME` (" +
+                    "`jellyfinId` TEXT NOT NULL, " +
+                    "`source` TEXT NOT NULL, " +
+                    "`count` INTEGER NOT NULL, " +
+                    "`throughSeconds` INTEGER NOT NULL, " +
+                    "`importedAt` INTEGER NOT NULL, " +
+                    "PRIMARY KEY(`jellyfinId`, `source`))"
+
+        private const val CREATE_IMPORT_CONTRIBUTION_SOURCE_INDEX =
+            "CREATE INDEX IF NOT EXISTS `index_${IMPORT_CONTRIBUTION_TABLE_NAME}_source` " +
+                    "ON `$IMPORT_CONTRIBUTION_TABLE_NAME` (`source`)"
+
+        private const val CREATE_OWN_PLAY =
+            "CREATE TABLE IF NOT EXISTS `$OWN_PLAY_TABLE_NAME` (" +
+                    "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                    "`jellyfinId` TEXT NOT NULL, " +
+                    "`trackKey` TEXT NOT NULL, " +
+                    "`playedAtSeconds` INTEGER NOT NULL)"
+
+        private const val CREATE_OWN_PLAY_TIME_INDEX =
+            "CREATE INDEX IF NOT EXISTS `index_${OWN_PLAY_TABLE_NAME}_playedAtSeconds` " +
+                    "ON `$OWN_PLAY_TABLE_NAME` (`playedAtSeconds`)"
+
+        private const val CREATE_OWN_PLAY_ITEM_INDEX =
+            "CREATE INDEX IF NOT EXISTS `index_${OWN_PLAY_TABLE_NAME}_jellyfinId` " +
+                    "ON `$OWN_PLAY_TABLE_NAME` (`jellyfinId`)"
+
         private const val CREATE_ALBUM_SYNC_STATE =
             "CREATE TABLE IF NOT EXISTS `$ALBUM_SYNC_STATE_TABLE_NAME` (" +
                     "`albumJellyfinId` TEXT PRIMARY KEY NOT NULL, " +
@@ -162,7 +217,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     APP_DATABASE_FILE_NAME
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
                     .build()
                     .apply { instance = this }
             }

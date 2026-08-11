@@ -33,6 +33,7 @@ import org.akanework.gramophone.ui.fragments.settings.DownloadsSettingsFragment
 import org.akanework.gramophone.ui.fragments.settings.ExperimentalSettingsFragment
 import org.akanework.gramophone.ui.fragments.settings.LidarrSettingsFragment
 import org.akanework.gramophone.ui.fragments.settings.ScrobblingSettingsFragment
+import uk.akane.accord.ui.fragments.settings.PlayCountImportFragment
 import org.akanework.gramophone.ui.fragments.settings.SpotifySettingsFragment
 import uk.akane.accord.BuildConfig
 import uk.akane.accord.R
@@ -240,6 +241,10 @@ class SettingsFragment : Fragment() {
                     SettingsListBuilder.Row.Navigation(
                         title = getString(R.string.settings_category_downloads)
                     ) { push(DownloadsSettingsFragment()) },
+                    SettingsListBuilder.Row.Navigation(
+                        title = getString(R.string.settings_import_play_counts),
+                        summary = getString(R.string.settings_import_play_counts_summary)
+                    ) { push(PlayCountImportFragment()) },
                 ),
                 footer = getString(R.string.settings_sync_on_startup_summary)
             ),

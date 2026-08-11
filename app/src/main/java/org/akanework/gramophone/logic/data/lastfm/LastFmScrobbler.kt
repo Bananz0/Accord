@@ -11,7 +11,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.akanework.gramophone.logic.data.db.AppDatabase
+import org.akanework.gramophone.logic.data.db.entity.OwnPlay
 import org.akanework.gramophone.logic.data.db.entity.PendingScrobble
+import org.akanework.gramophone.logic.data.playcounts.TrackKey
 
 /**
  * Turns playback into Last.fm scrobbles.
@@ -124,6 +126,7 @@ class LastFmScrobbler(private val context: Context) {
 
     private fun enqueue(playing: NowPlaying) {
         scope.launch(NonCancellable) {
+            recordOwnPlay(playing)
             try {
                 val dao = AppDatabase.getInstance(context).pendingScrobbleDao()
                 dao.insert(
@@ -144,6 +147,35 @@ class LastFmScrobbler(private val context: Context) {
                 return@launch
             }
             flush()
+        }
+    }
+
+    /**
+     * Notes that this app counted a play, so importing it back later cannot count it twice.
+     *
+     * Recorded here rather than alongside the Jellyfin report because this is the moment that
+     * produces a Last.fm scrobble, and it is that scrobble which will come back around. Sharing
+     * [NowPlaying.startedAtSeconds] means the returning row carries the identical timestamp, so
+     * the importer recognises it exactly instead of guessing from a window.
+     *
+     * Written whether or not Last.fm is linked. Linking it later must not leave a gap of plays the
+     * ledger cannot account for, and an unused row costs a few bytes until it is pruned.
+     */
+    private fun recordOwnPlay(playing: NowPlaying) {
+        val mediaId = playing.mediaId ?: return
+        try {
+            AppDatabase.getInstance(context).ownPlayDao().insert(
+                OwnPlay(
+                    jellyfinId = mediaId,
+                    trackKey = TrackKey.exact(playing.track.artist, playing.track.title),
+                    playedAtSeconds = playing.startedAtSeconds,
+                )
+            )
+        } catch (e: Exception) {
+            // Only costs accuracy on a future import, and never one that inflates: an unrecorded
+            // play means a scrobble that could have been deduped is instead counted as the
+            // source's. Not worth disturbing playback over.
+            Log.w(TAG, "Could not record own play", e)
         }
     }
 
