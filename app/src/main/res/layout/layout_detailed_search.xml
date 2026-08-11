@@ -94,6 +94,7 @@
         android:layout_height="12dp" />
 
     <LinearLayout
+        android:id="@+id/recently_searched_header"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginStart="24dp"
@@ -108,7 +109,7 @@
             android:layout_weight="1"
             android:fontFamily="@font/inter_semibold"
             android:includeFontPadding="false"
-            android:text="Recently Searched"
+            android:text="@string/search_recently_searched"
             android:textColor="@color/onSurfaceColor"
             android:textSize="16sp" />
 
@@ -118,13 +119,14 @@
             android:layout_height="wrap_content"
             android:fontFamily="@font/inter_semibold"
             android:includeFontPadding="false"
-            android:text="Clear"
+            android:text="@string/search_recently_searched_clear"
             android:textColor="@color/accentColor"
             android:textSize="16sp" />
 
     </LinearLayout>
 
     <View
+        android:id="@+id/recently_searched_divider"
         android:layout_width="match_parent"
         android:layout_height="0.5dp"
         android:layout_marginTop="8dp"

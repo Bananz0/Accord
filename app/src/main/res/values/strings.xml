@@ -157,6 +157,8 @@
     <string name="import_source_apple_summary">Needs the Apple Media Services archive from Data &amp; Privacy.</string>
     <string name="import_source_ytmusic">YouTube Music</string>
     <string name="import_source_ytmusic_summary">Needs your YouTube history from Google Takeout.</string>
+    <string name="search_recently_searched">Recently Searched</string>
+    <string name="search_recently_searched_clear">Clear</string>
     <string name="import_section_sources">Sources</string>
     <string name="import_server_handles_it">Your Jellyfin server already syncs this</string>
     <string name="import_server_conflict">Your Jellyfin server has the %1$s plugin installed, and it can sync play counts on its own.\n\nImporting from Accord as well would count the same listening twice — and because Accord cannot tell the plugin\'s increases from music you actually played, the error would grow with every import rather than settle.\n\nLeave this one to the server.</string>

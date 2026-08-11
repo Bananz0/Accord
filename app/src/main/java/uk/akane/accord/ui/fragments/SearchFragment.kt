@@ -37,6 +37,11 @@ import uk.akane.accord.ui.adapters.SearchResultsAdapter
 import uk.akane.accord.ui.adapters.LidarrSearchResultsAdapter
 import uk.akane.accord.R
 import uk.akane.accord.logic.dp
+import uk.akane.libphonograph.items.Album
+import uk.akane.libphonograph.items.Artist
+import uk.akane.accord.logic.RecentSearches
+import uk.akane.accord.ui.fragments.browse.AlbumDetailFragment
+import uk.akane.accord.ui.fragments.browse.ArtistDetailFragment
 import uk.akane.accord.ui.adapters.SearchAdapter
 import uk.akane.accord.ui.components.NavigationBar
 import uk.akane.cupertino.widget.fadOutAnimation
@@ -68,11 +73,15 @@ class SearchFragment: Fragment() {
     private lateinit var searchStatus: View
     private lateinit var searchEmpty: TextView
     private lateinit var searchStatusAction: TextView
+    private lateinit var recentsHeader: View
+    private lateinit var recentsDivider: View
     private lateinit var resultsAdapter: SearchResultsAdapter
     private lateinit var lidarrResultsAdapter: LidarrSearchResultsAdapter
 
     /** The library to search. Kept in step with the reader so results follow a sync. */
     private var library: List<MediaItem> = emptyList()
+    private var albumList: List<Album> = emptyList()
+    private var artistList: List<Artist> = emptyList()
     private var pendingQuery: Job? = null
 
     private var indicatorTitleVisible = true
@@ -144,7 +153,36 @@ class SearchFragment: Fragment() {
         searchStatus = detailedSearchContainer.findViewById(R.id.search_status)
         searchEmpty = detailedSearchContainer.findViewById(R.id.search_empty)
         searchStatusAction = detailedSearchContainer.findViewById(R.id.search_status_action)
-        resultsAdapter = SearchResultsAdapter { (activity as? MainActivity)?.getPlayer() }
+        recentsHeader = detailedSearchContainer.findViewById(R.id.recently_searched_header)
+        recentsDivider = detailedSearchContainer.findViewById(R.id.recently_searched_divider)
+        detailedSearchContainer.findViewById<TextView>(R.id.recently_searched_clear)
+            .setOnClickListener {
+                it.performPressHaptic()
+                RecentSearches.clear(requireContext())
+                showRecents()
+            }
+        resultsAdapter = SearchResultsAdapter(
+            player = { (activity as? MainActivity)?.getPlayer() },
+            onAlbum = { album ->
+                rememberQuery()
+                push(
+                    AlbumDetailFragment.newInstance(
+                        album.title.orEmpty(),
+                        album.albumArtist.orEmpty(),
+                    )
+                )
+            },
+            onArtist = { artist ->
+                rememberQuery()
+                push(ArtistDetailFragment.newInstance(artist.title.orEmpty()))
+            },
+            onRecent = { query ->
+                // Fills the field rather than only running the search, so the query can be edited
+                // from where it left off - which is usually why it is being repeated.
+                searchInputDetail.setText(query)
+                searchInputDetail.setSelection(query.length)
+            },
+        )
         lidarrResultsAdapter = LidarrSearchResultsAdapter(::requestLidarrAlbum)
         searchResults.layoutManager = LinearLayoutManager(requireContext())
         searchResults.adapter = resultsAdapter
@@ -221,6 +259,22 @@ class SearchFragment: Fragment() {
                 }
             }
         }
+        // Separate collectors: these three flows do not emit together, and combining them would
+        // hold the results back until the slowest had produced something.
+        viewLifecycleOwner.lifecycleScope.launch {
+            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                reader.albumListFlow.collectLatest { albumList = it }
+            }
+        }
+        viewLifecycleOwner.lifecycleScope.launch {
+            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                reader.artistListFlow.collectLatest { artistList = it }
+            }
+        }
+    }
+
+    private fun push(fragment: Fragment) {
+        (activity as? MainActivity)?.fragmentSwitcherView?.addFragmentToCurrentStack(fragment)
     }
 
     /**
@@ -234,38 +288,166 @@ class SearchFragment: Fragment() {
         pendingQuery?.cancel()
         val query = rawQuery.trim().lowercase()
         if (query.isEmpty()) {
-            resultsAdapter.submit(emptyList())
             lidarrResultsAdapter.submit(emptyList())
             // An empty box is exactly when a broken Lidarr is worth saying out loud - waiting for a
             // query to report it means the user types something first and blames the search.
-            if (isAppleTabSelected) hideStatus() else showLidarrSetupStatusIfNeeded()
+            if (isAppleTabSelected) {
+                hideStatus()
+                showRecents()
+            } else {
+                resultsAdapter.submit(emptyList())
+                setRecentsVisible(false)
+                showLidarrSetupStatusIfNeeded()
+            }
             return
         }
+        setRecentsVisible(false)
         pendingQuery = viewLifecycleOwner.lifecycleScope.launch {
             delay(SEARCH_DEBOUNCE_MS)
             if (isAppleTabSelected) {
-                val matches = withContext(Dispatchers.Default) {
-                    val needle = query.normaliseForSearch()
-                    library.asSequence()
-                        .filter { item ->
-                            val metadata = item.mediaMetadata
-                            metadata.title?.toString()?.normaliseForSearch()?.contains(needle) == true ||
-                                metadata.artist?.toString()?.normaliseForSearch()
-                                    ?.contains(needle) == true ||
-                                metadata.albumTitle?.toString()?.normaliseForSearch()
-                                    ?.contains(needle) == true
-                        }
-                        .take(SEARCH_RESULT_LIMIT)
-                        .toList()
-                }
-                resultsAdapter.submit(matches)
-                if (matches.isEmpty()) showStatus(getString(R.string.search_no_results))
+                val rows = withContext(Dispatchers.Default) { buildResults(query) }
+                resultsAdapter.submit(rows)
+                if (rows.isEmpty()) showStatus(getString(R.string.search_no_results))
                 else hideStatus()
             } else {
                 searchLidarr(query)
             }
         }
     }
+
+    /**
+     * Offers what was searched before, on the screen that would otherwise be blank.
+     *
+     * The heading and its Clear button have been in this layout from the start with nothing behind
+     * either - no storage, no list, no listener - which is why it never worked.
+     */
+    private fun showRecents() {
+        val recent = RecentSearches.recent(requireContext())
+        setRecentsVisible(recent.isNotEmpty())
+        resultsAdapter.submit(recent.map { SearchResultsAdapter.Row.Recent(it) })
+    }
+
+    private fun setRecentsVisible(visible: Boolean) {
+        val visibility = if (visible) View.VISIBLE else View.GONE
+        recentsHeader.visibility = visibility
+        recentsDivider.visibility = visibility
+    }
+
+    /** Records the query behind a result the user actually opened. */
+    private fun rememberQuery() {
+        RecentSearches.remember(
+            requireContext(),
+            searchInputDetail.text?.toString().orEmpty(),
+        )
+    }
+
+    /**
+     * Artists, then albums, then songs - each ranked, each capped, each under its own heading.
+     *
+     * Ordered smallest section first on purpose. An artist or album match is nearly always what
+     * someone typing a name is after, and burying it under forty tracks by that artist is what the
+     * songs-only search did wrong.
+     */
+    private fun buildResults(query: String): List<SearchResultsAdapter.Row> {
+        val needle = query.normaliseForSearch()
+        if (needle.isBlank()) return emptyList()
+        pendingNeedle = needle
+
+        val artists = artistList
+            .rankedBy(ARTIST_LIMIT) { it.title }
+            .map(SearchResultsAdapter.Row::ArtistRow)
+
+        val albumsByTitle = albumList.rankedBy(ALBUM_LIMIT) { it.title }
+        // An artist's records are what someone typing their name is usually after, and matching
+        // only album titles meant searching "kendrick" listed the artist and then went straight to
+        // loose tracks, with the albums nowhere. Ranked under the title matches, which are still
+        // the more literal answer to what was typed.
+        val albumsByArtist = if (albumsByTitle.size >= ALBUM_LIMIT) emptyList() else {
+            val alreadyShown = albumsByTitle.mapTo(HashSet()) { it.id }
+            albumList
+                .filter { it.id !in alreadyShown }
+                .rankedBy(ALBUM_LIMIT - albumsByTitle.size) { it.albumArtist }
+        }
+        val albums = (albumsByTitle + albumsByArtist).map(SearchResultsAdapter.Row::AlbumRow)
+
+        val songs = library
+            .rankedBy(SEARCH_RESULT_LIMIT) { it.mediaMetadata.title?.toString() }
+            .map(SearchResultsAdapter.Row::SongRow)
+
+        // Songs still match on their artist and album, so a track can be found by the record it is
+        // on - but only after the ones whose own title matched, which are the better answer.
+        val extraSongs = if (songs.size >= SEARCH_RESULT_LIMIT) emptyList() else {
+            val alreadyShown = songs.mapTo(HashSet()) { it.item.mediaId }
+            library.asSequence()
+                .filter { it.mediaId !in alreadyShown }
+                .filter { item ->
+                    val metadata = item.mediaMetadata
+                    metadata.artist?.toString()?.normaliseForSearch()?.contains(needle) == true ||
+                        metadata.albumTitle?.toString()?.normaliseForSearch()
+                            ?.contains(needle) == true
+                }
+                .take(SEARCH_RESULT_LIMIT - songs.size)
+                .map(SearchResultsAdapter.Row::SongRow)
+                .toList()
+        }
+
+        return buildList {
+            if (artists.isNotEmpty()) {
+                add(SearchResultsAdapter.Row.Header(getString(R.string.category_artists)))
+                addAll(artists)
+            }
+            if (albums.isNotEmpty()) {
+                add(SearchResultsAdapter.Row.Header(getString(R.string.category_albums)))
+                addAll(albums)
+            }
+            val allSongs = songs + extraSongs
+            if (allSongs.isNotEmpty()) {
+                add(SearchResultsAdapter.Row.Header(getString(R.string.category_songs)))
+                addAll(allSongs)
+            }
+        }
+    }
+
+    /**
+     * Keeps everything that matches anywhere, but puts the obvious answers first.
+     *
+     * Filtering to word starts would be tidier and would lose real results: a half-remembered
+     * fragment from the middle of a title is a perfectly good way to look for something. So the
+     * match stays broad and the order carries the meaning - whole match, then prefix, then a word
+     * start, then anywhere.
+     */
+    private inline fun <T> Iterable<T>.rankedBy(
+        limit: Int,
+        crossinline name: (T) -> String?,
+    ): List<T> {
+        val needle = pendingNeedle
+        return asSequence()
+            .mapNotNull { candidate ->
+                val text = name(candidate)?.normaliseForSearch() ?: return@mapNotNull null
+                val rank = when {
+                    text == needle -> 0
+                    text.startsWith(needle) -> 1
+                    text.contains(" $needle") -> 2
+                    text.contains(needle) -> 3
+                    else -> return@mapNotNull null
+                }
+                // Shorter titles win ties: "Damn" before "Damn Right I've Got the Blues" when both
+                // merely start with the query.
+                Triple(rank, text.length, candidate)
+            }
+            .sortedWith(compareBy({ it.first }, { it.second }))
+            .take(limit)
+            .map { it.third }
+            .toList()
+    }
+
+    /**
+     * The needle the current ranking pass is using.
+     *
+     * A field rather than a parameter because [rankedBy] is inline and called three times per
+     * query; threading it through would mean normalising the same string on every candidate.
+     */
+    private var pendingNeedle: String = ""
 
     /**
      * Shows the background message, optionally with a tappable line under it.
@@ -630,5 +812,12 @@ class SearchFragment: Fragment() {
 
         /** The list is scrolled, not read whole; past this it is cheaper to refine the query. */
         const val SEARCH_RESULT_LIMIT = 200
+
+        /**
+         * Deliberately small. These sections sit above the songs, and a hundred artists between the
+         * query and the track someone wanted is worse than no artist section at all.
+         */
+        const val ARTIST_LIMIT = 6
+        const val ALBUM_LIMIT = 8
     }
 }

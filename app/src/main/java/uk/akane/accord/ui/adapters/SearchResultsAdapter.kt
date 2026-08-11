@@ -12,74 +12,198 @@ import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.RecyclerView
 import coil3.load
 import coil3.request.crossfade
+import coil3.request.transformations
+import coil3.transform.CircleCropTransformation
+import uk.akane.libphonograph.items.Album
+import uk.akane.libphonograph.items.Artist
 import uk.akane.accord.R
 import uk.akane.accord.logic.dp
 import uk.akane.accord.ui.components.TrackRowMenu
 
 /**
- * The results of a library search.
+ * The results of a library search, as artists, albums and songs rather than songs alone.
  *
- * Upstream's search screen has a query field, tabs and a results area holding three hardcoded rows -
- * typing in it did nothing at all. This is the list those rows stood in for.
+ * Searching only tracks meant an album could never be a result: typing its name returned its
+ * fourteen songs and no way to reach the album itself, which is usually the thing being looked for.
+ * One list with section headers rather than a shelf per type - the number of results of each kind
+ * is unknowable in advance, and a sideways shelf silently caps what can be reached.
  */
 class SearchResultsAdapter(
-    private val player: () -> MediaController?
-) : RecyclerView.Adapter<SearchResultsAdapter.ViewHolder>() {
+    private val player: () -> MediaController?,
+    private val onAlbum: (Album) -> Unit = {},
+    private val onArtist: (Artist) -> Unit = {},
+    private val onRecent: (String) -> Unit = {},
+) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
-    private val items = mutableListOf<MediaItem>()
+    /** One line of the results list. */
+    sealed interface Row {
+        data class Header(val title: CharSequence) : Row
+        data class ArtistRow(val artist: Artist) : Row
+        data class AlbumRow(val album: Album) : Row
+        data class SongRow(val item: MediaItem) : Row
 
-    fun submit(results: List<MediaItem>) {
-        val diff = DiffUtil.calculateDiff(Diff(items.toList(), results))
-        items.clear()
-        items.addAll(results)
+        /** A previous query, offered on the otherwise blank screen before anything is typed. */
+        data class Recent(val query: String) : Row
+    }
+
+    private val rows = mutableListOf<Row>()
+
+    /** The songs, in list order, so playing one continues through the rest of the results. */
+    private val songs get() = rows.filterIsInstance<Row.SongRow>().map { it.item }
+
+    fun submit(results: List<Row>) {
+        val diff = DiffUtil.calculateDiff(Diff(rows.toList(), results))
+        rows.clear()
+        rows.addAll(results)
         diff.dispatchUpdatesTo(this)
     }
 
-    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) = ViewHolder(
-        LayoutInflater.from(parent.context).inflate(R.layout.layout_song_item, parent, false)
-    )
+    /** Songs-only convenience, for callers that have not been taught about the other types. */
+    fun submitSongs(results: List<MediaItem>) = submit(results.map(Row::SongRow))
 
-    /** What row [position] is showing, for the swipe actions. */
-    fun itemAt(position: Int): MediaItem? = items.getOrNull(position)
+    override fun getItemCount(): Int = rows.size
 
-    override fun getItemCount(): Int = items.size
-
-    override fun onBindViewHolder(holder: ViewHolder, position: Int) {
-        val item = items[position]
-        holder.title?.text = item.mediaMetadata.title
-        holder.subtitle?.text = item.mediaMetadata.artist
-        holder.cover?.load(item.mediaMetadata.artworkUri) {
-            crossfade(true)
-            size(62.dp.px.toInt(), 62.dp.px.toInt())
-        }
-        holder.itemView.setOnClickListener {
-            // Plays the whole result set from here, so skipping forward stays within the search.
-            player()?.apply {
-                setMediaItems(items.toList(), position, C.TIME_UNSET)
-                prepare()
-                play()
-            }
-        }
-        // The row layout has always drawn a menu button; nothing was behind it here either.
-        holder.menu?.setOnClickListener { anchor -> TrackRowMenu.show(anchor, item) }
+    override fun getItemViewType(position: Int): Int = when (rows[position]) {
+        is Row.Header -> TYPE_HEADER
+        is Row.ArtistRow -> TYPE_ARTIST
+        is Row.AlbumRow -> TYPE_ALBUM
+        is Row.SongRow -> TYPE_SONG
+        is Row.Recent -> TYPE_RECENT
     }
 
-    class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
+    /**
+     * What row [position] is showing, for the swipe actions.
+     *
+     * Null for anything that is not a song: the swipe gestures queue and enqueue tracks, and there
+     * is nothing sensible for them to do to a header.
+     */
+    fun itemAt(position: Int): MediaItem? = (rows.getOrNull(position) as? Row.SongRow)?.item
+
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
+        val inflater = LayoutInflater.from(parent.context)
+        return when (viewType) {
+            TYPE_HEADER -> HeaderHolder(
+                inflater.inflate(R.layout.layout_search_section_header, parent, false)
+            )
+            TYPE_RECENT -> RecentHolder(
+                inflater.inflate(R.layout.layout_search_recent_item, parent, false)
+            )
+            else -> ItemHolder(inflater.inflate(R.layout.layout_song_item, parent, false))
+        }
+    }
+
+    override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
+        when (val row = rows[position]) {
+            is Row.Header -> (holder as HeaderHolder).title.text = row.title
+            is Row.ArtistRow -> (holder as ItemHolder).bindArtist(row.artist)
+            is Row.AlbumRow -> (holder as ItemHolder).bindAlbum(row.album)
+            is Row.SongRow -> (holder as ItemHolder).bindSong(row.item)
+            is Row.Recent -> (holder as RecentHolder).bind(row.query)
+        }
+    }
+
+    private inner class ItemHolder(view: View) : RecyclerView.ViewHolder(view) {
         val cover: ImageView? = view.findViewById(R.id.cover)
         val title: TextView? = view.findViewById(R.id.title)
         val subtitle: TextView? = view.findViewById(R.id.subtitle)
         val menu: View? = view.findViewById(R.id.menu_btn)
+
+        fun bindArtist(artist: Artist) {
+            title?.text = artist.title
+            subtitle?.text = itemView.context.resources.getQuantityString(
+                R.plurals.albums, artist.albumList.size, artist.albumList.size
+            )
+            // Round, which is how every music app distinguishes a person from a record at a glance -
+            // and the only cue separating the two sections once you have scrolled past the header.
+            cover?.load(artist.songList.firstOrNull()?.mediaMetadata?.artworkUri) {
+                crossfade(true)
+                transformations(CircleCropTransformation())
+                size(COVER_PX, COVER_PX)
+            }
+            menu?.visibility = View.GONE
+            itemView.setOnClickListener { onArtist(artist) }
+        }
+
+        fun bindAlbum(album: Album) {
+            title?.text = album.title
+            subtitle?.text = listOfNotNull(
+                album.albumArtist?.takeIf { it.isNotBlank() },
+                album.albumYear?.takeIf { it > 0 }?.toString(),
+            ).joinToString(" · ")
+            cover?.load(album.cover) {
+                crossfade(true)
+                size(COVER_PX, COVER_PX)
+            }
+            menu?.visibility = View.GONE
+            itemView.setOnClickListener { onAlbum(album) }
+        }
+
+        fun bindSong(item: MediaItem) {
+            title?.text = item.mediaMetadata.title
+            subtitle?.text = item.mediaMetadata.artist
+            cover?.load(item.mediaMetadata.artworkUri) {
+                crossfade(true)
+                size(COVER_PX, COVER_PX)
+            }
+            menu?.visibility = View.VISIBLE
+            menu?.setOnClickListener { anchor -> TrackRowMenu.show(anchor, item) }
+            itemView.setOnClickListener {
+                // Plays the songs section from here, so skipping forward stays within the results.
+                val queue = songs
+                val start = queue.indexOfFirst { it.mediaId == item.mediaId }.coerceAtLeast(0)
+                player()?.apply {
+                    setMediaItems(queue, start, C.TIME_UNSET)
+                    prepare()
+                    play()
+                }
+            }
+        }
+    }
+
+    private class HeaderHolder(view: View) : RecyclerView.ViewHolder(view) {
+        val title: TextView = view.findViewById(R.id.section_title)
+    }
+
+    private inner class RecentHolder(view: View) : RecyclerView.ViewHolder(view) {
+        private val label: TextView = view.findViewById(R.id.recent_query)
+
+        fun bind(query: String) {
+            label.text = query
+            itemView.setOnClickListener { onRecent(query) }
+        }
     }
 
     private class Diff(
-        private val old: List<MediaItem>,
-        private val new: List<MediaItem>
+        private val old: List<Row>,
+        private val new: List<Row>,
     ) : DiffUtil.Callback() {
         override fun getOldListSize() = old.size
         override fun getNewListSize() = new.size
-        override fun areItemsTheSame(oldPos: Int, newPos: Int) =
-            old[oldPos].mediaId == new[newPos].mediaId
+
+        override fun areItemsTheSame(oldPos: Int, newPos: Int): Boolean {
+            val a = old[oldPos]
+            val b = new[newPos]
+            return when {
+                a is Row.Header && b is Row.Header -> a.title == b.title
+                a is Row.ArtistRow && b is Row.ArtistRow -> a.artist.id == b.artist.id
+                a is Row.AlbumRow && b is Row.AlbumRow -> a.album.id == b.album.id
+                a is Row.SongRow && b is Row.SongRow -> a.item.mediaId == b.item.mediaId
+                a is Row.Recent && b is Row.Recent -> a.query == b.query
+                else -> false
+            }
+        }
+
         override fun areContentsTheSame(oldPos: Int, newPos: Int) =
-            old[oldPos].mediaId == new[newPos].mediaId
+            areItemsTheSame(oldPos, newPos)
+    }
+
+    companion object {
+        private const val TYPE_HEADER = 0
+        private const val TYPE_ARTIST = 1
+        private const val TYPE_ALBUM = 2
+        private const val TYPE_SONG = 3
+        private const val TYPE_RECENT = 4
+
+        private val COVER_PX = 62.dp.px.toInt()
     }
 }
