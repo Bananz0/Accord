@@ -10,14 +10,16 @@ class BehaviorSettingsFragment : BaseSettingFragment(R.string.settings_category_
     { BehaviorSettingsTopFragment() })
 
 /**
- * Two switches, and nothing to wire up behind them.
+ * Switches read elsewhere, so there is nothing to wire up here.
  *
- * This screen used to carry a MediaStore length filter, an album-cover compatibility toggle that
- * routed to the system permission page for READ_MEDIA_IMAGES, a play-on-launch switch nothing
- * read, and a blacklist row duplicating the one in the main settings list. The first two described
- * a local library this app no longer has - and the cover toggle asked for a permission that is no
- * longer even declared, so it opened a page showing nothing to grant. A control that does nothing
- * is worse than a missing one: it invites the user to change it and then to distrust the rest.
+ * This screen used to also carry a MediaStore length filter and an album-cover compatibility
+ * toggle. Both described a local library this app no longer has, and the cover toggle routed to
+ * the system permission page for READ_MEDIA_IMAGES - a permission no longer declared, so it opened
+ * a page with nothing to grant.
+ *
+ * Play on launch is read by [MainActivity][uk.akane.accord.ui.MainActivity] when the media
+ * controller connects, not from here: the queue it starts is restored by the playback service,
+ * which this fragment has no handle on.
  */
 class BehaviorSettingsTopFragment : BasePreferenceFragment() {
 

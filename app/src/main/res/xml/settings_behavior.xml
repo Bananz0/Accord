@@ -33,6 +33,15 @@
 
         <SwitchPreferenceCompat
             android:defaultValue="false"
+            android:key="autoplay"
+            android:layout="@layout/preference_switch"
+            android:summary="@string/settings_play_on_launch_summary"
+            android:title="@string/settings_play_on_launch"
+            android:widgetLayout="@layout/preference_switch_widget"
+            app:iconSpaceReserved="false" />
+
+        <SwitchPreferenceCompat
+            android:defaultValue="false"
             android:key="trim_lyrics"
             android:layout="@layout/preference_switch"
             android:title="@string/settings_trim_lyrics"

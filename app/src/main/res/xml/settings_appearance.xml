@@ -32,6 +32,20 @@
             app:iconSpaceReserved="false"
             app:useSimpleSummaryProvider="true" />
 
+        <!--
+            Off by default. It was declared as on, but nothing ever read it, so no installed copy
+            of the app has actually been immersive; honouring that stored default now would hide
+            the system bars on every existing device the first time this build runs.
+        -->
+        <SwitchPreferenceCompat
+            android:defaultValue="false"
+            android:key="immersive_mode"
+            android:layout="@layout/preference_switch"
+            android:summary="@string/settings_immersive_mode_summary"
+            android:title="@string/settings_immersive_mode"
+            android:widgetLayout="@layout/preference_switch_widget"
+            app:iconSpaceReserved="false" />
+
     </PreferenceCategory>
 
 </PreferenceScreen>

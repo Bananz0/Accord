@@ -1,5 +1,6 @@
 package uk.akane.accord.ui
 
+import android.content.SharedPreferences
 import android.content.res.Resources
 import android.os.Bundle
 import android.view.RoundedCorner
@@ -14,7 +15,9 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.view.updateLayoutParams
+import androidx.preference.PreferenceManager
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.FragmentContainerView
 import com.google.android.material.bottomnavigation.BottomNavigationView
@@ -49,6 +52,8 @@ import android.media.AudioManager
 import android.view.KeyEvent
 import androidx.core.content.ContextCompat
 import androidx.media3.common.C
+import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import org.akanework.gramophone.logic.data.library.songListSnapshot
 import uk.akane.accord.ui.fragments.SettingsFragment
 
@@ -60,6 +65,13 @@ class MainActivity : AppCompatActivity() {
         const val PLAYBACK_AUTO_START_FOR_FGS = "AutoStartFgs"
         const val PLAYBACK_AUTO_PLAY_ID = "AutoStartId"
         const val PLAYBACK_AUTO_PLAY_POSITION = "AutoStartPos"
+
+        private const val PLAY_ON_LAUNCH = "autoplay"
+        private const val IMMERSIVE_MODE = "immersive_mode"
+        private const val IMMERSIVE_MODE_RESET = "immersive_mode_reset"
+
+        /** How long a launch will wait for the playback service to hand back the saved queue. */
+        private const val PLAY_ON_LAUNCH_TIMEOUT_MS = 10_000L
     }
 
     private lateinit var bottomNavigationView: BottomNavigationView
@@ -135,9 +147,26 @@ class MainActivity : AppCompatActivity() {
 
         enableEdgeToEdgeProperly()
 
+        // No stored value for immersive mode can reflect a decision: the switch was declared with
+        // a default of true, but nothing read it, so what is on disk is just the default written
+        // the first time the Appearance screen bound the row. Honouring that now would hide the
+        // system bars on every device that has ever opened those settings. Cleared once, so the
+        // feature starts off and the switch means something from here on.
+        if (!prefs.getBoolean(IMMERSIVE_MODE_RESET, false)) {
+            prefs.edit()
+                .putBoolean(IMMERSIVE_MODE_RESET, true)
+                .putBoolean(IMMERSIVE_MODE, false)
+                .apply()
+        }
+        applyImmersiveMode(prefs.getBoolean(IMMERSIVE_MODE, false))
+
+        // Only a genuine launch. A recreation - rotation, theme change - arrives with saved state,
+        // and starting the music again there would be a rotation that plays music.
+        val launching = savedInstanceState == null
+
         lifecycle.addObserver(controllerViewModel)
-        controllerViewModel.addControllerCallback(lifecycle) { controller, controllerLifecycle ->
-            // MediaController connected
+        controllerViewModel.addControllerCallback(lifecycle) { controller, _ ->
+            if (launching) playOnLaunchIfWanted(controller)
         }
 
         // The navigation bar on every screen draws the signed-in user's Jellyfin picture, so it is
@@ -543,6 +572,91 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+
+    /**
+     * Starts the restored queue, if the user asked for that.
+     *
+     * The queue is not there when the controller connects. The playback service reads it back from
+     * disk on its own handler and only then hands it to the player, so a launch that finds an empty
+     * timeline has to wait for one rather than conclude there is nothing to play. The wait is
+     * bounded: a queue that surfaces a minute later belongs to whatever the user is doing by then,
+     * not to the launch.
+     */
+    private fun playOnLaunchIfWanted(controller: Player) {
+        if (!prefs.getBoolean(PLAY_ON_LAUNCH, false)) return
+        if (controller.isPlaying || controller.playWhenReady) return
+        if (controller.mediaItemCount > 0) {
+            controller.prepare()
+            controller.play()
+            return
+        }
+        val listener = object : Player.Listener {
+            override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+                if (timeline.isEmpty) return
+                runCatching { controller.removeListener(this) }
+                if (!controller.isPlaying && !controller.playWhenReady) {
+                    controller.prepare()
+                    controller.play()
+                }
+            }
+        }
+        controller.addListener(listener)
+        window.decorView.postDelayed(
+            // Released controllers throw rather than ignore this, and the window outlives them.
+            { runCatching { controller.removeListener(listener) } },
+            PLAY_ON_LAUNCH_TIMEOUT_MS
+        )
+    }
+
+    /** Hides or restores the system bars, leaving the edge-to-edge layout otherwise untouched. */
+    private fun applyImmersiveMode(enabled: Boolean) {
+        val controller = WindowInsetsControllerCompat(window, window.decorView)
+        if (enabled) {
+            controller.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+        } else {
+            controller.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    /**
+     * Applies immersive mode the moment it is switched, rather than at the next launch.
+     *
+     * Settings is a fragment inside this activity, so the toggle is on screen while the bars are:
+     * without this the user flips a switch that visibly does nothing.
+     */
+    private val preferenceListener =
+        SharedPreferences.OnSharedPreferenceChangeListener { preferences, key ->
+            if (key == IMMERSIVE_MODE) {
+                applyImmersiveMode(preferences.getBoolean(key, false))
+            }
+        }
+
+    override fun onStart() {
+        super.onStart()
+        prefs.registerOnSharedPreferenceChangeListener(preferenceListener)
+    }
+
+    override fun onStop() {
+        prefs.unregisterOnSharedPreferenceChangeListener(preferenceListener)
+        super.onStop()
+    }
+
+    /**
+     * Re-asserts immersive mode after the bars have been swiped back in.
+     *
+     * BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE only makes them transient while the window has focus.
+     * Coming back from another app, or from a dialog, leaves them showing until asked again.
+     */
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && prefs.getBoolean(IMMERSIVE_MODE, false)) applyImmersiveMode(true)
+    }
+
+    private val prefs: SharedPreferences by lazy {
+        PreferenceManager.getDefaultSharedPreferences(this)
+    }
 
     inline val accord: Accord
         get() = application as Accord
