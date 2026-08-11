@@ -157,6 +157,19 @@
     <string name="import_source_apple_summary">Needs the Apple Media Services archive from Data &amp; Privacy.</string>
     <string name="import_source_ytmusic">YouTube Music</string>
     <string name="import_source_ytmusic_summary">Needs your YouTube history from Google Takeout.</string>
+    <string name="category_lyrics">Lyrics</string>
+    <string name="settings_lyric_search">Lyric search</string>
+    <string name="lyric_index_empty">Not indexed yet</string>
+    <string name="lyric_index_complete">%1$d songs searchable by lyrics</string>
+    <string name="lyric_index_partial">%1$d indexed, %2$d to go</string>
+    <string name="lyric_index_explain">%1$s.
+
+Accord reads lyrics from your Jellyfin server and indexes them on the phone, so searching them is instant and works offline.
+
+This happens on its own while charging on Wi‑Fi, so it costs no battery or data.</string>
+    <string name="lyric_index_now">Index now</string>
+    <string name="lyric_index_rebuild">Rebuild</string>
+    <string name="lyric_index_started">Indexing started</string>
     <string name="search_recently_searched">Recently Searched</string>
     <string name="search_recently_searched_clear">Clear</string>
     <string name="import_section_sources">Sources</string>

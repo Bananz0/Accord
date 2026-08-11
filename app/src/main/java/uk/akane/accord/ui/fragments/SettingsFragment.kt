@@ -33,6 +33,8 @@ import org.akanework.gramophone.ui.fragments.settings.DownloadsSettingsFragment
 import org.akanework.gramophone.ui.fragments.settings.ExperimentalSettingsFragment
 import org.akanework.gramophone.ui.fragments.settings.LidarrSettingsFragment
 import org.akanework.gramophone.ui.fragments.settings.ScrobblingSettingsFragment
+import org.akanework.gramophone.logic.data.lyrics.LyricsIndexWorker
+import org.akanework.gramophone.logic.data.lyrics.LyricsIndexer
 import uk.akane.accord.ui.fragments.settings.PlayCountImportFragment
 import org.akanework.gramophone.ui.fragments.settings.SpotifySettingsFragment
 import uk.akane.accord.BuildConfig
@@ -91,6 +93,56 @@ class SettingsFragment : Fragment() {
         // Rebuilt here rather than once, so a row's summary - signed in or not - is right again
         // after coming back from the screen that changed it.
         builder.build(sections())
+        refreshLyricIndexSummary()
+    }
+
+    /**
+     * How much of the library has searchable lyrics.
+     *
+     * Held as a field and refreshed off the main thread, because the row is rebuilt on every
+     * onResume and counting rows in the index is a database read.
+     */
+    private var lyricIndexSummary: CharSequence = ""
+
+    private fun refreshLyricIndexSummary() {
+        viewLifecycleOwner.lifecycleScope.launch {
+            val indexer = LyricsIndexer(requireContext().applicationContext)
+            val indexed = indexer.indexedCount()
+            val remaining = indexer.remainingCount()
+            lyricIndexSummary = when {
+                indexed == 0 && remaining == 0 -> getString(R.string.lyric_index_empty)
+                remaining == 0 -> getString(R.string.lyric_index_complete, indexed)
+                else -> getString(R.string.lyric_index_partial, indexed, remaining)
+            }
+            if (isAdded) builder.build(sections())
+        }
+    }
+
+    /**
+     * Explains when indexing happens, and offers to do it now.
+     *
+     * The default is to wait for a charger and wifi, which means most people will find this already
+     * done and never open this dialog - but somebody who has just discovered lyric search and wants
+     * it working this minute should not have to go and find a cable.
+     */
+    private fun showLyricIndexOptions() {
+        MaterialAlertDialogBuilder(requireContext())
+            .setTitle(R.string.settings_lyric_search)
+            .setMessage(getString(R.string.lyric_index_explain, lyricIndexSummary))
+            .setPositiveButton(R.string.lyric_index_now) { _, _ ->
+                LyricsIndexWorker.runNow(requireContext().applicationContext)
+                toast(getString(R.string.lyric_index_started))
+            }
+            .setNeutralButton(R.string.lyric_index_rebuild) { _, _ ->
+                viewLifecycleOwner.lifecycleScope.launch {
+                    LyricsIndexer(requireContext().applicationContext).reset()
+                    LyricsIndexWorker.runNow(requireContext().applicationContext)
+                    toast(getString(R.string.lyric_index_started))
+                    refreshLyricIndexSummary()
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
     }
 
     private fun push(fragment: Fragment) {
@@ -245,6 +297,10 @@ class SettingsFragment : Fragment() {
                         title = getString(R.string.settings_import_play_counts),
                         summary = getString(R.string.settings_import_play_counts_summary)
                     ) { push(PlayCountImportFragment()) },
+                    SettingsListBuilder.Row.Navigation(
+                        title = getString(R.string.settings_lyric_search),
+                        summary = lyricIndexSummary
+                    ) { showLyricIndexOptions() },
                 ),
                 footer = getString(R.string.settings_sync_on_startup_summary)
             ),

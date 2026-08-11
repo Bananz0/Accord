@@ -39,6 +39,7 @@ import uk.akane.accord.R
 import uk.akane.accord.logic.dp
 import uk.akane.libphonograph.items.Album
 import uk.akane.libphonograph.items.Artist
+import org.akanework.gramophone.logic.data.db.AppDatabase
 import uk.akane.accord.logic.RecentSearches
 import uk.akane.accord.ui.fragments.browse.AlbumDetailFragment
 import uk.akane.accord.ui.fragments.browse.ArtistDetailFragment
@@ -405,6 +406,60 @@ class SearchFragment: Fragment() {
                 add(SearchResultsAdapter.Row.Header(getString(R.string.category_songs)))
                 addAll(allSongs)
             }
+            // Last, and only for a query long enough to mean something. A two-letter fragment
+            // matches half the library's lyrics and would bury everything above it.
+            if (query.length >= MIN_LYRIC_QUERY) {
+                val shown = (songs + extraSongs).mapTo(HashSet()) { it.item.mediaId }
+                val lyrics = lyricMatches(query, shown)
+                if (lyrics.isNotEmpty()) {
+                    add(SearchResultsAdapter.Row.Header(getString(R.string.category_lyrics)))
+                    addAll(lyrics)
+                }
+            }
+        }
+    }
+
+    /**
+     * Songs whose words match, with the phrase in context.
+     *
+     * Searched as a phrase rather than as loose terms: someone typing a line of a song means those
+     * words in that order, and treating them as independent terms returns every track containing
+     * "the" and "night" anywhere.
+     */
+    private fun lyricMatches(
+        query: String,
+        exclude: Set<String>,
+    ): List<SearchResultsAdapter.Row.LyricRow> {
+        val phrase = query.filter { it.isLetterOrDigit() || it.isWhitespace() }.trim()
+        if (phrase.isBlank()) return emptyList()
+        val byId = library.associateBy { it.mediaId }
+        return runCatching {
+            AppDatabase.getInstance(requireContext().applicationContext)
+                .lyricsDao()
+                .searchWithText("\"" + phrase + "\"", LYRIC_LIMIT)
+        }.getOrDefault(emptyList())
+            .mapNotNull { match ->
+                if (match.jellyfinId in exclude) return@mapNotNull null
+                val item = byId[match.jellyfinId] ?: return@mapNotNull null
+                SearchResultsAdapter.Row.LyricRow(item, snippet(match.text, phrase))
+            }
+    }
+
+    /**
+     * The words around the hit.
+     *
+     * Whole lyrics in a one-line subtitle would show the first few words of the song, which is
+     * rarely the part that matched and tells the user nothing about why the result is there.
+     */
+    private fun snippet(text: String, phrase: String): CharSequence {
+        val at = text.indexOf(phrase, ignoreCase = true)
+        if (at < 0) return text.take(SNIPPET_WINDOW * 2)
+        val start = (at - SNIPPET_WINDOW).coerceAtLeast(0)
+        val end = (at + phrase.length + SNIPPET_WINDOW).coerceAtMost(text.length)
+        return buildString {
+            if (start > 0) append("…")
+            append(text, start, end)
+            if (end < text.length) append("…")
         }
     }
 
@@ -819,5 +874,12 @@ class SearchFragment: Fragment() {
          */
         const val ARTIST_LIMIT = 6
         const val ALBUM_LIMIT = 8
+
+        /** Long enough to be a phrase somebody means, rather than a fragment matching everything. */
+        const val MIN_LYRIC_QUERY = 4
+        const val LYRIC_LIMIT = 12
+
+        /** Characters of context either side of a lyric hit. */
+        const val SNIPPET_WINDOW = 42
     }
 }

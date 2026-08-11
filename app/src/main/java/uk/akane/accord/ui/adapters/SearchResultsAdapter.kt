@@ -42,6 +42,9 @@ class SearchResultsAdapter(
         data class AlbumRow(val album: Album) : Row
         data class SongRow(val item: MediaItem) : Row
 
+        /** A song whose lyrics matched, with the words around the hit. */
+        data class LyricRow(val item: MediaItem, val snippet: CharSequence) : Row
+
         /** A previous query, offered on the otherwise blank screen before anything is typed. */
         data class Recent(val query: String) : Row
     }
@@ -68,6 +71,7 @@ class SearchResultsAdapter(
         is Row.ArtistRow -> TYPE_ARTIST
         is Row.AlbumRow -> TYPE_ALBUM
         is Row.SongRow -> TYPE_SONG
+        is Row.LyricRow -> TYPE_SONG
         is Row.Recent -> TYPE_RECENT
     }
 
@@ -98,6 +102,7 @@ class SearchResultsAdapter(
             is Row.ArtistRow -> (holder as ItemHolder).bindArtist(row.artist)
             is Row.AlbumRow -> (holder as ItemHolder).bindAlbum(row.album)
             is Row.SongRow -> (holder as ItemHolder).bindSong(row.item)
+            is Row.LyricRow -> (holder as ItemHolder).bindLyric(row.item, row.snippet)
             is Row.Recent -> (holder as RecentHolder).bind(row.query)
         }
     }
@@ -136,6 +141,17 @@ class SearchResultsAdapter(
             }
             menu?.visibility = View.GONE
             itemView.setOnClickListener { onAlbum(album) }
+        }
+
+        /**
+         * Same row as a song, but the subtitle carries the matched words instead of the artist.
+         *
+         * The words are the whole reason this result is here: a lyric hit with the artist underneath
+         * looks identical to a title match and gives no clue why the song was returned.
+         */
+        fun bindLyric(item: MediaItem, snippet: CharSequence) {
+            bindSong(item)
+            subtitle?.text = snippet
         }
 
         fun bindSong(item: MediaItem) {
@@ -188,6 +204,7 @@ class SearchResultsAdapter(
                 a is Row.ArtistRow && b is Row.ArtistRow -> a.artist.id == b.artist.id
                 a is Row.AlbumRow && b is Row.AlbumRow -> a.album.id == b.album.id
                 a is Row.SongRow && b is Row.SongRow -> a.item.mediaId == b.item.mediaId
+                a is Row.LyricRow && b is Row.LyricRow -> a.item.mediaId == b.item.mediaId
                 a is Row.Recent && b is Row.Recent -> a.query == b.query
                 else -> false
             }

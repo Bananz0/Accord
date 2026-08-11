@@ -28,6 +28,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinCredentialStore
+import org.akanework.gramophone.logic.data.lyrics.LyricsIndexWorker
 import uk.akane.accord.Accord
 import uk.akane.accord.R
 import uk.akane.accord.logic.enableEdgeToEdgeProperly
@@ -173,6 +174,10 @@ class MainActivity : AppCompatActivity() {
         // fetched once here rather than by each bar. Off the main thread: it opens the credential
         // store and asks the server.
         lifecycleScope.launch(Dispatchers.IO) { JellyfinUserImage.refresh() }
+
+        // Queued, not run. The constraints mean it waits for a charger and an unmetered network, so
+        // this costs nothing now and the lyric index quietly fills in overnight.
+        LyricsIndexWorker.enqueue(applicationContext)
 
         setContentView(R.layout.activity_main)
 

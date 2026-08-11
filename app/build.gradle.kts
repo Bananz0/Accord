@@ -285,6 +285,9 @@ dependencies {
     // Spring physics for the iOS-style rubber-band overscroll.
     implementation("androidx.dynamicanimation:dynamicanimation:1.0.0")
     implementation("androidx.core:core-ktx:1.13.1")
+    // Lyric indexing runs as deferrable background work: thousands of small requests that must
+    // wait for charge and wifi, survive the app being killed, and resume rather than restart.
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
     // --- below does not apply to release builds ---
     debugImplementation("com.squareup.leakcanary:leakcanary-android:3.0-alpha-8")
     testImplementation("junit:junit:4.13.2")

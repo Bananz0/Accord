@@ -10,6 +10,7 @@ import org.akanework.gramophone.logic.data.db.dao.AlbumSyncStateDao
 import org.akanework.gramophone.logic.data.db.dao.CachedSongDao
 import org.akanework.gramophone.logic.data.db.dao.ImportContributionDao
 import org.akanework.gramophone.logic.data.db.dao.JellyfinIdDao
+import org.akanework.gramophone.logic.data.db.dao.LyricsDao
 import org.akanework.gramophone.logic.data.db.dao.MediaItemDao
 import org.akanework.gramophone.logic.data.db.dao.OwnPlayDao
 import org.akanework.gramophone.logic.data.db.dao.PendingScrobbleDao
@@ -22,6 +23,10 @@ import org.akanework.gramophone.logic.data.db.entity.IMPORT_CONTRIBUTION_TABLE_N
 import org.akanework.gramophone.logic.data.db.entity.ImportContribution
 import org.akanework.gramophone.logic.data.db.entity.JELLYFIN_ID_TABLE_NAME
 import org.akanework.gramophone.logic.data.db.entity.JellyfinId
+import org.akanework.gramophone.logic.data.db.entity.LYRICS_INDEX_TABLE_NAME
+import org.akanework.gramophone.logic.data.db.entity.LYRICS_STATE_TABLE_NAME
+import org.akanework.gramophone.logic.data.db.entity.LyricsIndex
+import org.akanework.gramophone.logic.data.db.entity.LyricsState
 import org.akanework.gramophone.logic.data.db.entity.MediaItem
 import org.akanework.gramophone.logic.data.db.entity.OWN_PLAY_TABLE_NAME
 import org.akanework.gramophone.logic.data.db.entity.OwnPlay
@@ -43,8 +48,10 @@ const val APP_DATABASE_FILE_NAME = "app.db"
         AlbumSyncState::class,
         ImportContribution::class,
         OwnPlay::class,
+        LyricsIndex::class,
+        LyricsState::class,
     ],
-    version = 8,
+    version = 9,
 )
 abstract class AppDatabase : RoomDatabase() {
 
@@ -56,6 +63,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun albumSyncStateDao(): AlbumSyncStateDao
     abstract fun importContributionDao(): ImportContributionDao
     abstract fun ownPlayDao(): OwnPlayDao
+    abstract fun lyricsDao(): LyricsDao
 
     companion object {
         @Volatile
@@ -175,6 +183,39 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Adds the searchable lyric index.
+         *
+         * Additive and empty. The index is derived from the server, so there is nothing to migrate
+         * and nothing lost by rebuilding it - the background pass fills it when the phone is next
+         * charging on wifi.
+         */
+        private val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(CREATE_LYRICS_INDEX)
+                db.execSQL(CREATE_LYRICS_STATE)
+            }
+        }
+
+        /**
+         * The virtual table Room generates for an @Fts4 entity. Written out by hand here because a
+         * migration runs raw SQL, and it has to match what Room expects byte for byte or the
+         * identity check on the next open fails.
+         */
+        private const val CREATE_LYRICS_INDEX =
+            "CREATE VIRTUAL TABLE IF NOT EXISTS `$LYRICS_INDEX_TABLE_NAME` " +
+                    // No tokenize clause: simple is the default and Room does not emit one, so
+                    // stating it makes the table differ from the entity and fails validation.
+                    "USING FTS4(`jellyfinId` TEXT NOT NULL, `text` TEXT NOT NULL, " +
+                    "notindexed=`jellyfinId`)"
+
+        private const val CREATE_LYRICS_STATE =
+            "CREATE TABLE IF NOT EXISTS `$LYRICS_STATE_TABLE_NAME` (" +
+                    "`jellyfinId` TEXT NOT NULL, " +
+                    "`hasLyrics` INTEGER NOT NULL, " +
+                    "`fetchedAt` INTEGER NOT NULL, " +
+                    "PRIMARY KEY(`jellyfinId`))"
+
         private const val CREATE_IMPORT_CONTRIBUTION =
             "CREATE TABLE IF NOT EXISTS `$IMPORT_CONTRIBUTION_TABLE_NAME` (" +
                     "`jellyfinId` TEXT NOT NULL, " +
@@ -217,7 +258,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     APP_DATABASE_FILE_NAME
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
                     .build()
                     .apply { instance = this }
             }
