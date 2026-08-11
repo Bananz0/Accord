@@ -89,35 +89,14 @@ object JellyfinMediaCache {
      * The factory ExoPlayer should read through: cache first, Jellyfin over the shared OkHttp
      * connection pool otherwise.
      */
-    /**
-     * @param quality what to ask the server for. Evaluated per request rather than captured, so
-     *   changing the setting or walking off wifi takes effect on the next track instead of
-     *   requiring the library to be rebuilt.
-     */
-    fun dataSourceFactory(
-        context: Context,
-        quality: () -> StreamQuality = { StreamQuality.streamingQuality(context) },
-    ): DataSource.Factory {
-        val appContext = context.applicationContext
-        val cacheFactory = CacheDataSource.Factory()
-            .setCache(get(appContext))
-            .setUpstreamDataSourceFactory(
-                OkHttpDataSource.Factory(JellyfinClientHolder.mediaHttpClient())
-            )
+    fun dataSourceFactory(context: Context): DataSource.Factory {
+        val upstream = OkHttpDataSource.Factory(JellyfinClientHolder.mediaHttpClient())
+        return CacheDataSource.Factory()
+            .setCache(get(context))
+            .setUpstreamDataSourceFactory(upstream)
             // Without this a transient network error while part of the track is already cached
             // aborts playback instead of serving what we have.
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
-
-        // The resolver wraps the cache rather than sitting under it. CacheDataSource works out
-        // which entry a request belongs to before it ever consults its upstream, so a resolver
-        // placed underneath can rewrite the network URL but never the cache key - every quality
-        // would land in the entry keyed by the original URL and the first one fetched would be
-        // served to all of them. Resolving first means the cache sees the variant.
-        return StreamQualityResolver.factory(
-            context = appContext,
-            upstream = cacheFactory,
-            quality = quality,
-        )
     }
 
     fun currentSizeBytes(context: Context): Long = get(context).cacheSpace
@@ -192,10 +171,7 @@ object JellyfinMediaCache {
         val protectedKeys = downloadedCacheKeys(appContext)
 
         var dropped = 0
-        // Every quality variant of every changed track. A track heard at 256 on the train and
-        // again at full quality at home occupies two entries, and clearing only the one matching
-        // today's setting would leave the other serving the tags the file had before it was edited.
-        keys.flatMap { StreamQualityResolver.allCacheKeys(it) }.distinct().forEach { key ->
+        keys.forEach { key ->
             if (key in protectedKeys) return@forEach
             runCatching { cache.removeResource(key) }
                 .onSuccess { dropped++ }
@@ -216,10 +192,7 @@ object JellyfinMediaCache {
         buildSet {
             JellyfinDownloadManager.get(context).downloadIndex.getDownloads().use { cursor ->
                 while (cursor.moveToNext()) {
-                    val request = cursor.download.request
-                    // The stated key, falling back to the URI for downloads queued before quality
-                    // settings existed and which therefore never carried one.
-                    add(request.customCacheKey ?: request.uri.toString())
+                    add(cursor.download.request.uri.toString())
                 }
             }
         }

@@ -472,15 +472,6 @@
     <string name="downloads_size_summary">%1$s stored offline</string>
     <string name="downloads_cache_size">Streaming cache</string>
     <string name="downloads_cache_size_summary">%1$s total on disk, including downloads</string>
-    <string name="quality_original">Original</string>
-    <string name="quality_320">High · 320 kbps</string>
-    <string name="quality_256">Medium · 256 kbps</string>
-    <string name="quality_192">Low · 192 kbps</string>
-    <string name="settings_category_quality">Quality</string>
-    <string name="quality_streaming">Streaming on Wi-Fi</string>
-    <string name="quality_streaming_metered">Streaming on mobile data</string>
-    <string name="quality_download">Downloads</string>
-    <string name="quality_explainer">Original sends the file untouched. The lower settings ask your server to transcode, which uses less data and less space — the quality badge follows what actually plays, so it will stop saying Lossless.</string>
     <string name="downloads_cache_limit">Cache limit</string>
     <string name="cache_limit_none">No limit</string>
     <string name="downloads_cache_limit_summary">Streamed music is deleted oldest first to stay under this. Downloads are never removed.</string>
