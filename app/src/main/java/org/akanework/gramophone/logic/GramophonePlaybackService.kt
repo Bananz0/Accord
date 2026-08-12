@@ -80,6 +80,10 @@ import kotlinx.coroutines.sync.Semaphore
 import uk.akane.accord.BuildConfig
 import uk.akane.accord.R
 import org.akanework.gramophone.logic.utils.CircularShuffleOrder
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinRemoteControl
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinItemResolver
+import org.akanework.gramophone.logic.data.library.songListSnapshot
+import uk.akane.accord.Accord
 import org.akanework.gramophone.logic.utils.LastPlayedManager
 import org.akanework.gramophone.logic.utils.LrcUtils.extractAndParseLyrics
 import org.akanework.gramophone.logic.utils.LrcUtils.loadAndParseLyricsFile
@@ -138,6 +142,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
     val endedWorkaroundPlayer
         get() = mediaSession?.player as EndedWorkaroundPlayer?
     private var controller: MediaController? = null
+    private var remoteControl: JellyfinRemoteControl? = null
     private var lyrics: MutableList<MediaStoreUtils.Lyric>? = null
     private var shuffleFactory:
             ((Int) -> ((CircularShuffleOrder) -> Unit) -> CircularShuffleOrder)? = null
@@ -392,6 +397,15 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
                 lastPlayedManager.allowSavingState = true
             }
         }
+        // Makes this device a target in every other Jellyfin client's "Play on" menu. Started here
+        // rather than in the Application because the player is what a remote command acts on, and
+        // there is no point advertising a session with nothing behind it.
+        remoteControl = JellyfinRemoteControl(
+            context = this,
+            player = { controller },
+            resolve = ::resolveRemoteIds,
+        ).also { it.start() }
+
         onShuffleModeEnabledChanged(controller!!.shuffleModeEnabled) // refresh custom commands
         controller!!.addListener(this)
         registerReceiver(
@@ -402,7 +416,28 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
 
     // When destroying, we should release server side player
     // alongside with the mediaSession.
+    /**
+     * Turns Jellyfin item ids into playable items, keeping the order the caller asked for.
+     *
+     * The library is keyed by a local id and the wire speaks Jellyfin GUIDs, so this walks the
+     * snapshot once and indexes it rather than resolving each id separately - a remote "play this
+     * album" arrives as a dozen ids at once.
+     */
+    private suspend fun resolveRemoteIds(remoteIds: List<String>): List<MediaItem> {
+        val wanted = remoteIds.map { it.replace("-", "").lowercase() }.toSet()
+        val songs = (application as? Accord)?.reader?.songListSnapshot().orEmpty()
+        val byRemote = HashMap<String, MediaItem>(wanted.size)
+        songs.forEach { item ->
+            val remote = JellyfinItemResolver.remoteIdForMediaId(this, item.mediaId)
+                ?.replace("-", "")?.lowercase() ?: return@forEach
+            if (remote in wanted) byRemote[remote] = item
+        }
+        return remoteIds.mapNotNull { byRemote[it.replace("-", "").lowercase()] }
+    }
+
     override fun onDestroy() {
+        remoteControl?.stop()
+        remoteControl = null
         instanceForWidgetAndLyricsOnly = null
         // Tell the server we stopped before tearing anything down, otherwise the session is left
         // open and other clients keep showing this track as playing.
