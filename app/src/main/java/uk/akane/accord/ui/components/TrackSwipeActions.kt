@@ -52,6 +52,7 @@ object TrackSwipeActions {
         val accent = resources.getColor(R.color.accentColor, null)
         val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG)
         val corner = 12.dp.px
+        val iconMargin = 14.dp.px
         val inset = 16.dp.px
 
         val swipeHaptics = ResistiveSwipeHaptics()
@@ -209,11 +210,19 @@ object TrackSwipeActions {
                         it.alpha = (255 * reveal).toInt()
                         val size = 22.dp.px.toInt()
                         val centerY = (view.top + view.bottom) / 2
+                        // Centred in the panel that is actually on screen, rather than pinned to
+                        // where the panel starts. Anchored, the glyph sat against one edge and the
+                        // gap grew as the reveal widened, so the two read as unrelated.
+                        //
+                        // Clamped so it is never half outside a panel narrower than itself: it
+                        // keeps a margin from the leading edge until there is room, then centres.
+                        val half = size / 2f
+                        val rawCenter = (bounds.left + bounds.right) / 2f
                         val centerX = if (damped > 0) {
-                            view.left + artworkStart + (cover?.width ?: size) / 2
+                            rawCenter.coerceAtMost(bounds.right - half - iconMargin)
                         } else {
-                            (view.right - inset - size / 2).toInt()
-                        }
+                            rawCenter.coerceAtLeast(bounds.left + half + iconMargin)
+                        }.toInt()
                         it.setTint(Color.WHITE)
                         it.setBounds(
                             centerX - size / 2, centerY - size / 2,
@@ -247,6 +256,7 @@ object TrackSwipeActions {
         val accent = resources.getColor(R.color.accentColor, null)
         val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG)
         val corner = 12.dp.px
+        val iconMargin = 14.dp.px
         val inset = 16.dp.px
         val swipeHaptics = ResistiveSwipeHaptics()
         var trackedHolder: RecyclerView.ViewHolder? = null
@@ -360,11 +370,19 @@ object TrackSwipeActions {
                         it.alpha = (255 * reveal).toInt()
                         val size = 22.dp.px.toInt()
                         val centerY = (view.top + view.bottom) / 2
+                        // Centred in the panel that is actually on screen, rather than pinned to
+                        // where the panel starts. Anchored, the glyph sat against one edge and the
+                        // gap grew as the reveal widened, so the two read as unrelated.
+                        //
+                        // Clamped so it is never half outside a panel narrower than itself: it
+                        // keeps a margin from the leading edge until there is room, then centres.
+                        val half = size / 2f
+                        val rawCenter = (bounds.left + bounds.right) / 2f
                         val centerX = if (damped > 0) {
-                            view.left + artworkStart + (cover?.width ?: size) / 2
+                            rawCenter.coerceAtMost(bounds.right - half - iconMargin)
                         } else {
-                            (view.right - inset - size / 2).toInt()
-                        }
+                            rawCenter.coerceAtLeast(bounds.left + half + iconMargin)
+                        }.toInt()
                         it.setTint(Color.WHITE)
                         it.setBounds(
                             centerX - size / 2, centerY - size / 2,

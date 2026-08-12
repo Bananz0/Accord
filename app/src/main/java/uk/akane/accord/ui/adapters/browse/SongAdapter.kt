@@ -152,6 +152,16 @@ class SongAdapter(
 
     override fun getItemCount(): Int = list.size
 
+    /**
+     * The track at [position], or null where the row is not one.
+     *
+     * These lists interleave a control block and category headings with the songs, and the swipe
+     * gestures act on tracks. Returning null for the rest is what stops a heading being dragged
+     * aside to queue nothing.
+     */
+    fun itemAt(position: Int): MediaItem? =
+        (list.getOrNull(position) as? SongListItem.Track)?.mediaItem
+
     inner class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val cover: ImageView? = view.findViewById(R.id.cover)
         val title: TextView? = view.findViewById(R.id.title)

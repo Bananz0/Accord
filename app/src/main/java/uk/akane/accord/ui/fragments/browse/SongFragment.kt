@@ -7,6 +7,7 @@ import android.view.ViewGroup
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.recyclerview.widget.LinearLayoutManager
+import uk.akane.accord.ui.components.TrackSwipeActions
 import androidx.recyclerview.widget.RecyclerView
 import android.widget.EditText
 import androidx.core.widget.doAfterTextChanged
@@ -53,6 +54,11 @@ class SongFragment : SwitcherPostponeFragment() {
         songAdapter = SongAdapter(recyclerView, this) { notifyContentLoaded() }
         layoutManager = LinearLayoutManager(requireContext())
         recyclerView.adapter = songAdapter
+        TrackSwipeActions.attach(
+            recyclerView = recyclerView,
+            activity = requireActivity() as MainActivity,
+            trackAt = { index -> songAdapter.itemAt(index) },
+        )
 
         // The layout carries a search bar that upstream never reads. Typing in it now narrows the
         // list rather than doing nothing.

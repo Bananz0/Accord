@@ -10,6 +10,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.widget.doAfterTextChanged
 import androidx.media3.common.MediaItem
 import androidx.recyclerview.widget.LinearLayoutManager
+import uk.akane.accord.ui.components.TrackSwipeActions
 import androidx.recyclerview.widget.RecyclerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -74,6 +75,13 @@ class LibraryTracksFragment : SwitcherPostponeFragment() {
         )
         recycler.layoutManager = LinearLayoutManager(requireContext())
         recycler.adapter = adapter
+        // Recently added, Downloads and Available offline are ordinary song lists and were the
+        // only ones without the gestures every other song list has.
+        TrackSwipeActions.attach(
+            recyclerView = recycler,
+            activity = activity,
+            trackAt = { index -> adapter.itemAt(index) },
+        )
         root.findViewById<EditText?>(R.id.search_input)?.doAfterTextChanged {
             adapter.setFilter(it?.toString().orEmpty())
         }

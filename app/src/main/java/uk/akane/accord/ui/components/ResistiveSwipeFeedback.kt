@@ -1,6 +1,5 @@
 package uk.akane.accord.ui.components
 
-import android.view.HapticFeedbackConstants
 import android.view.View
 import kotlin.math.abs
 
@@ -32,17 +31,11 @@ internal class ResistiveSwipeHaptics {
             (nowAtThreshold && actionAvailable != thresholdAvailable)
         ) {
             when {
-                nowAtThreshold && actionAvailable -> pulse(
-                    view,
-                    HapticFeedbackConstants.CLOCK_TICK,
-                    HapticFeedbackConstants.KEYBOARD_TAP,
-                )
+                // Arming is a promise, not a completion: the finger is still down, and this is
+                // the app saying what will happen when it lifts.
+                nowAtThreshold && actionAvailable -> Haptics.arm(view)
 
-                nowAtThreshold -> pulse(
-                    view,
-                    HapticFeedbackConstants.REJECT,
-                    HapticFeedbackConstants.LONG_PRESS,
-                )
+                nowAtThreshold -> Haptics.reject(view)
 
                 else -> Unit
             }
@@ -57,7 +50,7 @@ internal class ResistiveSwipeHaptics {
         // A very fast fling can be accepted before a rendered frame reaches the clamp. Preserve
         // the endpoint cue in that case, but never add a second pulse to an ordinary swipe.
         if (started && !endpointPulseDelivered) {
-            pulse(view, HapticFeedbackConstants.CLOCK_TICK, HapticFeedbackConstants.KEYBOARD_TAP)
+            Haptics.arm(view)
         }
         reset()
     }
@@ -73,11 +66,6 @@ internal class ResistiveSwipeHaptics {
         endpointPulseDelivered = false
     }
 
-    private fun pulse(view: View, effect: Int, fallback: Int) {
-        if (!view.performHapticFeedback(effect) && effect != fallback) {
-            view.performHapticFeedback(fallback)
-        }
-    }
 }
 
 /**
@@ -97,8 +85,4 @@ internal fun resistedSwipeDistance(
  * The quiet, single detent used for ordinary button presses throughout the player chrome.
  * Keep this distinct from swipe completion feedback: a press should feel alive, not forceful.
  */
-internal fun View.performPressHaptic() {
-    if (!performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)) {
-        performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-    }
-}
+internal fun View.performPressHaptic() = Haptics.press(this)
