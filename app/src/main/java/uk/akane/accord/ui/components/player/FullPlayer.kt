@@ -335,7 +335,7 @@ class FullPlayer @JvmOverloads constructor(
         )
         queueRecyclerView.adapter = queueAdapter
         queueItemTouchHelper = ItemTouchHelper(
-            QueueItemTouchHelperCallback(queueAdapter) { index ->
+            QueueItemTouchHelperCallback(queueAdapter, context) { index ->
                 instance?.removeMediaItem(index)
             }
         ).apply {

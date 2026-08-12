@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    Play Later: the track joins the end of the line. The mirror of ic_play_next, so the two read
-    as one choice with two ends rather than as two unrelated symbols.
+    Play Later, after SF Symbol text.line.last.and.arrowtriangle.forward.
+
+    The mirror of ic_play_next: the triangle marks the last line instead of the first, so the two
+    read as one choice with two ends rather than as two unrelated symbols.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
@@ -9,21 +11,21 @@
     android:viewportWidth="24"
     android:viewportHeight="24"
     android:tint="#FFFFFF">
-    <!-- What is already queued. -->
+    <!-- Everything already in the queue. -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M3.2,1.5h17.6a1.1,1.1 0 0 1 0,2.2H3.2a1.1,1.1 0 0 1 0,-2.2z" />
+        android:pathData="M2.2,1.9h19.6a1.1,1.1 0 0 1 0,2.2H2.2a1.1,1.1 0 0 1 0,-2.2z" />
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M3.2,6.2h17.6a1.1,1.1 0 0 1 0,2.2H3.2a1.1,1.1 0 0 1 0,-2.2z" />
+        android:pathData="M2.2,6.6h19.6a1.1,1.1 0 0 1 0,2.2H2.2a1.1,1.1 0 0 1 0,-2.2z" />
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M3.2,10.9h17.6a1.1,1.1 0 0 1 0,2.2H3.2a1.1,1.1 0 0 1 0,-2.2z" />
-    <!-- The incoming track, arriving at the end. -->
+        android:pathData="M2.2,11.3h19.6a1.1,1.1 0 0 1 0,2.2H2.2a1.1,1.1 0 0 1 0,-2.2z" />
+    <!-- Marks the last line: the track joins the end. -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M3.2,18.6h11.6a1.1,1.1 0 0 1 0,2.2H3.2a1.1,1.1 0 0 1 0,-2.2z" />
+        android:pathData="M2.2,15.4L7.0,18.35a0.78,0.78 0 0 1 0,1.3L2.2,22.6a0.72,0.72 0 0 1 -1.1,-0.62v-5.96A0.72,0.72 0 0 1 2.2,15.4z" />
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M18.5,17.0l3.6,3.2a0.6,0.6 0 0 1 0,0.9l-3.6,3.2a0.55,0.55 0 0 1 -0.95,-0.42v-6.46A0.55,0.55 0 0 1 18.5,17.0z" />
+        android:pathData="M9.9,17.9h11.9a1.1,1.1 0 0 1 0,2.2H9.9a1.1,1.1 0 0 1 0,-2.2z" />
 </vector>

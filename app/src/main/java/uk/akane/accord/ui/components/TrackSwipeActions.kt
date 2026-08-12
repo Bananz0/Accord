@@ -41,10 +41,10 @@ object TrackSwipeActions {
      * What a right-to-left swipe does on this list, or null where it does nothing.
      *
      * Left is deliberately empty on ordinary song lists. It used to mean "download", which in a
-     * client whose whole library already lives on a server it can reach is an answer to a question
-     * nobody asked - and a panel that appears under every row teaches people not to swipe at all.
-     * It survives only where the trailing edge means something specific: taking a track out of a
-     * playlist or the queue, or asking Lidarr for music that is not here yet.
+     * client whose whole library already lives on a server it can reach answers a question nobody
+     * asked - and a panel under every row teaches people not to swipe. It survives only where the
+     * trailing edge means something specific: taking a track out of a playlist or the queue, or
+     * asking Lidarr for music that is not here yet.
      */
     class Trailing(
         val iconRes: Int,
@@ -65,25 +65,19 @@ object TrackSwipeActions {
         trackAt: (Int) -> MediaItem?,
         trailing: Trailing? = null,
     ) {
-        val resources = recyclerView.resources
-        val playNextIcon = ResourcesCompat.getDrawable(resources, R.drawable.ic_play_next, null)
-        val playLaterIcon = ResourcesCompat.getDrawable(resources, R.drawable.ic_play_later, null)
-        val trailingIcon = trailing?.let {
-            ResourcesCompat.getDrawable(resources, it.iconRes, null)
-        }
-        val playNextColor = resources.getColor(R.color.swipePlayNext, null)
-        val playLaterColor = resources.getColor(R.color.swipePlayLater, null)
-        val trailingColor = trailing?.let { resources.getColor(it.colorRes, null) }
-        val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-        val iconSize = 22.dp.px.toInt()
-        // Separate capsules with air between them, not one panel divided by colour. Two actions
-        // sharing a single background read as one striped thing; two buttons read as a choice.
-        val buttonWidth = ACTION_WIDTH_DP.dp.px
-        val gap = ACTION_GAP_DP.dp.px
-        val verticalInset = ACTION_INSET_DP.dp.px
+        val panel = SwipeActionPanel(
+            context = recyclerView.context,
+            leading = listOf(
+                SwipeActionPanel.Action(R.color.swipePlayLater, R.drawable.ic_play_later),
+                SwipeActionPanel.Action(R.color.swipePlayNext, R.drawable.ic_play_next),
+            ),
+            trailing = trailing?.let {
+                listOf(SwipeActionPanel.Action(it.colorRes, it.iconRes))
+            }.orEmpty(),
+        )
 
         var trackedHolder: RecyclerView.ViewHolder? = null
-        var stage = Stage.NONE
+        var armed = -1
         var actionDispatched = false
         var pendingAfterRecoil: (() -> Unit)? = null
 
@@ -99,11 +93,12 @@ object TrackSwipeActions {
                 recyclerView: RecyclerView,
                 viewHolder: RecyclerView.ViewHolder
             ): Int {
+                // Each edge decides for itself. A Lidarr result is not a library track and can never
+                // be queued, but it is exactly the row worth asking the server to fetch, so gating
+                // both directions on the same test would leave it inert.
+                //
                 // Absolute, not binding: inside a ConcatAdapter the binding position restarts at
                 // zero for each child adapter, so every song looked like row zero.
-                // Each edge decides for itself. A Lidarr result is not a library track and can
-                // never be queued, but it is exactly the row worth asking the server to fetch, so
-                // gating both directions on the same test would have left it inert.
                 val position = viewHolder.absoluteAdapterPosition
                 var dirs = 0
                 if (trackAt(position) != null) dirs = dirs or ItemTouchHelper.RIGHT
@@ -139,22 +134,15 @@ object TrackSwipeActions {
                 super.clearView(recyclerView, viewHolder)
                 val pending = pendingAfterRecoil
                 trackedHolder = null
-                stage = Stage.NONE
+                armed = -1
                 actionDispatched = false
                 pendingAfterRecoil = null
-                // Run after the row has settled, so a list that reorders itself does not do so
+                panel.reset()
+                // Run once the row has settled, so a list that reorders itself does not do so
                 // underneath a view still animating.
                 pending?.invoke()
             }
 
-            /**
-             * Draws what releasing would do.
-             *
-             * Two actions share the leading edge, as Apple Music does it: a partial drag reveals
-             * Play Later and Play Next side by side, and carrying the drag further hands the whole
-             * panel to Play Next. So a halfway release appends and a full release jumps the queue,
-             * and the panel says which is armed before the finger lifts.
-             */
             override fun onChildDraw(
                 canvas: Canvas,
                 recyclerView: RecyclerView,
@@ -165,46 +153,33 @@ object TrackSwipeActions {
                 isCurrentlyActive: Boolean
             ) {
                 val view = viewHolder.itemView
-                val limit = view.width * MAX_TRAVEL
-                val damped = resistedSwipeDistance(dX, limit, FOLLOW)
+                val damped = panel.distance(dX, view)
 
                 if (actionState == ItemTouchHelper.ACTION_STATE_SWIPE && damped != 0F) {
-                    // Play Later arms once its own capsule is fully out; Play Next once the pair
-                    // is. Measured in capsules and the air between them rather than in screen
-                    // fractions, so the gesture is the same shape on any width of phone.
-                    val armAt = gap + buttonWidth
-                    val fullAt = gap + buttonWidth + gap + buttonWidth
-                    val reach = abs(damped)
-
                     if (isCurrentlyActive) {
                         if (trackedHolder !== viewHolder) {
                             trackedHolder = viewHolder
-                            stage = Stage.NONE
+                            armed = -1
                             actionDispatched = false
                             pendingAfterRecoil = null
+                            panel.reset()
                         }
-                        val next = when {
-                            damped > 0F && reach >= fullAt -> Stage.FULL
-                            damped > 0F && reach >= armAt -> Stage.ARMED
-                            // One action on this edge, so one stop, where a single capsule is out.
-                            damped < 0F && reach >= gap + buttonWidth -> Stage.ARMED
-                            else -> Stage.NONE
-                        }
-                        if (next != stage) {
-                            // Distinct weights, so the two stops are told apart by feel alone -
-                            // which is the entire point of having two.
-                            when (next) {
-                                Stage.ARMED -> Haptics.arm(view)
-                                Stage.FULL -> Haptics.commit(view)
-                                Stage.NONE -> Unit
+                        val next = panel.armedIndex(damped)
+                        if (next != armed) {
+                            // Distinct weights, so the stops are told apart by feel alone - which
+                            // is the entire point of having more than one.
+                            when {
+                                next < 0 -> Unit
+                                panel.isFull(damped) -> Haptics.commit(view)
+                                else -> Haptics.arm(view)
                             }
-                            stage = next
+                            armed = next
                         }
-                    } else if (!actionDispatched && stage != Stage.NONE) {
+                    } else if (!actionDispatched && armed >= 0) {
                         val position = viewHolder.absoluteAdapterPosition
                         if (damped > 0F) {
                             trackAt(position)?.let { item ->
-                                if (stage == Stage.FULL) playNext(activity, item)
+                                if (armed >= 1) playNext(activity, item)
                                 else playLater(activity, item)
                             }
                         } else if (trailing != null) {
@@ -214,43 +189,10 @@ object TrackSwipeActions {
                         actionDispatched = true
                     }
 
-                    val top = view.top + verticalInset
-                    val bottom = view.bottom - verticalInset
-
-                    if (damped > 0F) {
-                        // Three phases. Play Later grows out of the edge on its own; once it is
-                        // full it holds still and Play Next grows beside it; once that one is full
-                        // too the pair gives way to a single Play Next capsule that keeps growing.
-                        // Each phase is a different answer to "what happens if I let go now".
-                        if (stage == Stage.FULL) {
-                            drawAction(
-                                canvas, fillPaint, playNextColor, playNextIcon, iconSize,
-                                view.left + gap, top, view.left + damped, bottom,
-                            )
-                        } else {
-                            val laterWidth = (damped - gap).coerceIn(0F, buttonWidth)
-                            if (laterWidth > 0F) {
-                                val left = view.left + gap
-                                drawAction(
-                                    canvas, fillPaint, playLaterColor, playLaterIcon, iconSize,
-                                    left, top, left + laterWidth, bottom,
-                                )
-                            }
-                            val nextLeft = gap + buttonWidth + gap
-                            val nextWidth = (damped - nextLeft).coerceIn(0F, buttonWidth)
-                            if (nextWidth > 0F) {
-                                val left = view.left + nextLeft
-                                drawAction(
-                                    canvas, fillPaint, playNextColor, playNextIcon, iconSize,
-                                    left, top, left + nextWidth, bottom,
-                                )
-                            }
-                        }
-                    } else if (trailingColor != null) {
-                        drawAction(
-                            canvas, fillPaint, trailingColor, trailingIcon, iconSize,
-                            view.right + damped, top, view.right - gap, bottom,
-                        )
+                    if (panel.draw(canvas, view, damped, recyclerView.frameNanos())) {
+                        // The takeover is still moving and the finger may not be, so ask for the
+                        // next frame rather than waiting for one to happen along.
+                        recyclerView.invalidate()
                     }
                 }
                 super.onChildDraw(
@@ -264,65 +206,13 @@ object TrackSwipeActions {
         }
     }
 
-    private enum class Stage { NONE, ARMED, FULL }
-
-    private val clipPath = Path()
-
     /**
-     * One action capsule, with its glyph centred inside it.
+     * The same gesture on a list of things that are not library tracks - Lidarr's search results -
+     * where both directions mean the one thing worth doing: request it.
      *
-     * Fully rounded rather than a rounded rectangle: at this height the radius is half the capsule,
-     * which is what makes two of them side by side read as buttons rather than as a split panel.
-     *
-     * The glyph is clipped to its own capsule. Centring it outright would put it outside a capsule
-     * narrower than the glyph - and over the neighbouring one - so instead it holds a margin from
-     * the growing edge and slides into view as the capsule widens, which is what the drag is
-     * describing anyway.
-     */
-    private fun drawAction(
-        canvas: Canvas,
-        paint: Paint,
-        color: Int,
-        icon: android.graphics.drawable.Drawable?,
-        iconSize: Int,
-        left: Float,
-        top: Float,
-        right: Float,
-        bottom: Float,
-    ) {
-        if (right <= left) return
-        val capsule = RectF(left, top, right, bottom)
-        val radius = (bottom - top) / 2F
-        paint.color = color
-        canvas.drawRoundRect(capsule, radius, radius, paint)
-
-        icon ?: return
-        val half = iconSize / 2F
-        val margin = radius / 2F
-        val centerY = ((top + bottom) / 2F).toInt()
-        val raw = (left + right) / 2F
-        // Held clear of whichever edge this capsule grows from.
-        val growsFromLeft = true
-        val centerX = if (growsFromLeft) {
-            raw.coerceAtMost(right - half - margin)
-        } else {
-            raw.coerceAtLeast(left + half + margin)
-        }.toInt()
-        icon.alpha = 255
-        icon.setTint(Color.WHITE)
-        icon.setBounds(
-            centerX - iconSize / 2, centerY - iconSize / 2,
-            centerX + iconSize / 2, centerY + iconSize / 2,
-        )
-        canvas.save()
-        canvas.clipRect(capsule)
-        icon.draw(canvas)
-        canvas.restore()
-    }
-
-    /**
-     * The same gesture on a list of things that are not library tracks - Lidarr's search
-     * results - where both directions mean the one thing worth doing: request it.
+     * Shares the renderer with every other swipe, so it is the same capsule, the same travel and
+     * the same escalation. It used to be a near-copy of the song-row implementation, which is how
+     * the two drifted apart.
      *
      * @param canSwipe whether the row at this position can be requested at all.
      */
@@ -331,16 +221,15 @@ object TrackSwipeActions {
         canSwipe: (Int) -> Boolean,
         onRequest: (Int) -> Unit,
     ) {
-        val resources = recyclerView.resources
-        val icon = ResourcesCompat.getDrawable(resources, R.drawable.ic_download, null)
-        val accent = resources.getColor(R.color.accentColor, null)
-        val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-        val corner = 12.dp.px
-        val iconMargin = 14.dp.px
-        val inset = 16.dp.px
-        val swipeHaptics = ResistiveSwipeHaptics()
+        val action = SwipeActionPanel.Action(R.color.accentColor, R.drawable.ic_download)
+        val panel = SwipeActionPanel(
+            context = recyclerView.context,
+            leading = listOf(action),
+            trailing = listOf(action),
+        )
+
         var trackedHolder: RecyclerView.ViewHolder? = null
-        var armedDirection = 0
+        var armed = -1
         var actionDispatched = false
 
         val callback = object : ItemTouchHelper.SimpleCallback(
@@ -354,9 +243,8 @@ object TrackSwipeActions {
             override fun getSwipeDirs(
                 recyclerView: RecyclerView,
                 viewHolder: RecyclerView.ViewHolder
-            ) = if (canSwipe(viewHolder.absoluteAdapterPosition)) {
-                super.getSwipeDirs(recyclerView, viewHolder)
-            } else 0
+            ): Int = if (!canSwipe(viewHolder.absoluteAdapterPosition)) 0
+            else super.getSwipeDirs(recyclerView, viewHolder)
 
             override fun onMove(
                 recyclerView: RecyclerView,
@@ -384,10 +272,10 @@ object TrackSwipeActions {
                 viewHolder: RecyclerView.ViewHolder,
             ) {
                 super.clearView(recyclerView, viewHolder)
-                swipeHaptics.release(viewHolder.itemView)
                 trackedHolder = null
-                armedDirection = 0
+                armed = -1
                 actionDispatched = false
+                panel.reset()
             }
 
             override fun onChildDraw(
@@ -400,75 +288,28 @@ object TrackSwipeActions {
                 isCurrentlyActive: Boolean
             ) {
                 val view = viewHolder.itemView
-                val limit = view.width * MAX_TRAVEL
-                val damped = resistedSwipeDistance(dX, limit, FOLLOW)
+                val damped = panel.distance(dX, view)
+
                 if (actionState == ItemTouchHelper.ACTION_STATE_SWIPE && damped != 0F) {
                     if (isCurrentlyActive) {
                         if (trackedHolder !== viewHolder) {
                             trackedHolder = viewHolder
-                            armedDirection = 0
+                            armed = -1
                             actionDispatched = false
+                            panel.reset()
                         }
-                        swipeHaptics.update(
-                            view,
-                            dX,
-                            view.width * SWIPE_THRESHOLD,
-                        )
-                        armedDirection = when {
-                            abs(dX) < view.width * SWIPE_THRESHOLD -> 0
-                            dX > 0F -> ItemTouchHelper.RIGHT
-                            else -> ItemTouchHelper.LEFT
+                        val next = panel.armedIndex(damped)
+                        if (next != armed) {
+                            if (next >= 0) Haptics.commit(view)
+                            armed = next
                         }
-                    } else if (!actionDispatched && armedDirection != 0) {
+                    } else if (!actionDispatched && armed >= 0) {
                         val position = viewHolder.absoluteAdapterPosition
-                        if (canSwipe(position)) {
-                            swipeHaptics.commit(view)
-                            onRequest(position)
-                        }
+                        if (canSwipe(position)) onRequest(position)
                         actionDispatched = true
                     }
-                    backgroundPaint.color = accent
-                    val cover = view.findViewById<android.view.View?>(R.id.cover)
-                    val artworkStart = cover?.left ?: inset.toInt()
-                    val bounds = if (damped > 0) {
-                        RectF(
-                            (view.left + artworkStart).toFloat(), view.top.toFloat(),
-                            (view.left + damped).coerceAtLeast(view.left + artworkStart.toFloat()),
-                            view.bottom.toFloat()
-                        )
-                    } else {
-                        RectF(
-                            view.right + damped, view.top.toFloat(),
-                            view.right.toFloat(), view.bottom.toFloat()
-                        )
-                    }
-                    canvas.drawRoundRect(bounds, corner, corner, backgroundPaint)
-                    icon?.let {
-                        val reveal = (
-                            abs(dX) / (view.width * SWIPE_THRESHOLD)
-                        ).coerceIn(0F, 1F)
-                        it.alpha = (255 * reveal).toInt()
-                        val size = 22.dp.px.toInt()
-                        val centerY = (view.top + view.bottom) / 2
-                        // Centred in the panel that is actually on screen, rather than pinned to
-                        // where the panel starts. Anchored, the glyph sat against one edge and the
-                        // gap grew as the reveal widened, so the two read as unrelated.
-                        //
-                        // Clamped so it is never half outside a panel narrower than itself: it
-                        // keeps a margin from the leading edge until there is room, then centres.
-                        val half = size / 2f
-                        val rawCenter = (bounds.left + bounds.right) / 2f
-                        val centerX = if (damped > 0) {
-                            rawCenter.coerceAtMost(bounds.right - half - iconMargin)
-                        } else {
-                            rawCenter.coerceAtLeast(bounds.left + half + iconMargin)
-                        }.toInt()
-                        it.setTint(Color.WHITE)
-                        it.setBounds(
-                            centerX - size / 2, centerY - size / 2,
-                            centerX + size / 2, centerY + size / 2
-                        )
-                        it.draw(canvas)
+                    if (panel.draw(canvas, view, damped, recyclerView.frameNanos())) {
+                        recyclerView.invalidate()
                     }
                 }
                 super.onChildDraw(
@@ -477,21 +318,9 @@ object TrackSwipeActions {
             }
         }
         ItemTouchHelper(callback).attachToRecyclerView(recyclerView)
-        // Now a plain predicate, so a list holding no MediaItems no longer needs a stand-in one.
         claimHorizontalGestures(recyclerView) { position -> canSwipe(position) }
     }
 
-    /**
-     * Stops the page stealing a sideways drag that started on a row.
-     *
-     * FragmentSwitcherView treats any horizontal movement past the touch slop as its back-swipe and
-     * intercepts it, unless a child reports it can scroll horizontally - which a vertical list never
-     * does. The row swipe therefore never happened: the whole page slid instead.
-     *
-     * A parent decides whether to intercept before the child sees the move, so the decision has to
-     * be made on the way down and reversed once the gesture turns out to be vertical, which is the
-     * list's own scrolling and none of our business.
-     */
     private fun claimHorizontalGestures(
         recyclerView: RecyclerView,
         swipeableAt: (Int) -> Boolean,
@@ -540,22 +369,6 @@ object TrackSwipeActions {
      * How wide one action button is. The stops are measured in these, so the gesture is the same
      * shape on a small phone as on a large one.
      */
-    private const val ACTION_WIDTH_DP = 76
-
-    /** Air between the capsules, and between the last one and the row it belongs to. */
-    private const val ACTION_GAP_DP = 8
-
-    /** How far the capsules sit inside the row, top and bottom. Sets their corner radius too. */
-    private const val ACTION_INSET_DP = 6
-
-    private const val FOLLOW = 0.56F
-
-    /**
-     * The hard stop, past the switch to Play Next with room to spare - there has to be somewhere
-     * left to drag after the panel changes hands, or the switch would land on the clamp and feel
-     * like the gesture had jammed rather than escalated.
-     */
-    private const val MAX_TRAVEL = 0.46F
 
     /** The Lidarr request gesture below still has a single stop. */
     private const val SWIPE_THRESHOLD = 0.36F

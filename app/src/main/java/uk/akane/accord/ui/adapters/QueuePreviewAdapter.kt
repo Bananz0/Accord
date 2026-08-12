@@ -1,5 +1,10 @@
 package uk.akane.accord.ui.adapters
 
+import android.content.Context
+import uk.akane.accord.ui.components.frameNanos
+import uk.akane.accord.ui.components.Haptics
+import uk.akane.accord.ui.components.SwipeActionPanel
+
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -140,20 +145,41 @@ class QueuePreviewAdapter(
     }
 }
 
+/**
+ * Reorder by dragging the handle, remove by swiping.
+ *
+ * Draws through the shared [SwipeActionPanel], like every other swipe in the app. It used to have
+ * geometry of its own - a flat grey panel that stopped part-way across the row while the song lists
+ * had grown capsules that ran the full width. Two implementations of one gesture is how that
+ * happens; there is now one.
+ */
 class QueueItemTouchHelperCallback(
     private val adapter: QueuePreviewAdapter,
+    context: Context,
     private val onRemove: (Int) -> Unit,
 ) : ItemTouchHelper.Callback() {
     private var currentDragViewHolder: RecyclerView.ViewHolder? = null
     private var trackedSwipeHolder: RecyclerView.ViewHolder? = null
-    private var armedForRemoval = false
+    private var armed = -1
     private var removalDispatched = false
     private var pendingRemovalUid: Any? = null
-    private val swipeHaptics = ResistiveSwipeHaptics()
-    private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(90, 90, 96)
-    }
-    private var trashIcon: android.graphics.drawable.Drawable? = null
+
+    /**
+     * Removal on either edge.
+     *
+     * The trailing edge is where it belongs, but the leading one is the drag handle's neighbour and
+     * a queue row has nothing else a sideways drag could mean - so the same thing happens whichever
+     * way it goes, rather than one direction quietly doing nothing.
+     */
+    private val panel = SwipeActionPanel(
+        context = context,
+        leading = listOf(
+            SwipeActionPanel.Action(R.color.swipeDestructive, R.drawable.ic_trash)
+        ),
+        trailing = listOf(
+            SwipeActionPanel.Action(R.color.swipeDestructive, R.drawable.ic_trash)
+        ),
+    )
 
     override fun isLongPressDragEnabled(): Boolean = false
 
@@ -216,62 +242,30 @@ class QueueItemTouchHelperCallback(
         }
 
         val view = viewHolder.itemView
-        val threshold = view.width * SWIPE_THRESHOLD
-        val damped = resistedSwipeDistance(dX, view.width * MAX_TRAVEL, SWIPE_FOLLOW)
+        val damped = panel.distance(dX, view)
 
         if (damped != 0F) {
             if (isCurrentlyActive) {
                 if (trackedSwipeHolder !== viewHolder) {
                     trackedSwipeHolder = viewHolder
-                    armedForRemoval = false
+                    armed = -1
                     removalDispatched = false
                     pendingRemovalUid = null
+                    panel.reset()
                     adapter.onDragStart()
                 }
-                swipeHaptics.update(view, dX, threshold)
-                armedForRemoval = abs(dX) >= threshold
-            } else if (armedForRemoval && !removalDispatched) {
-                swipeHaptics.commit(view)
+                val next = panel.armedIndex(damped)
+                if (next != armed) {
+                    if (next >= 0) Haptics.commit(view)
+                    armed = next
+                }
+            } else if (armed >= 0 && !removalDispatched) {
                 pendingRemovalUid = adapter.itemAt(viewHolder.bindingAdapterPosition)?.uid
                 removalDispatched = true
             }
 
-            val cover = view.findViewById<View?>(R.id.cover)
-            val artworkStart = cover?.left ?: ICON_INSET_DP.dp.px.toInt()
-            val bounds = if (damped > 0F) {
-                RectF(
-                    (view.left + artworkStart).toFloat(), view.top.toFloat(),
-                    (view.left + damped).coerceAtLeast(view.left + artworkStart.toFloat()),
-                    view.bottom.toFloat(),
-                )
-            } else {
-                RectF(
-                    view.right + damped, view.top.toFloat(),
-                    view.right.toFloat(), view.bottom.toFloat(),
-                )
-            }
-            canvas.drawRoundRect(bounds, CORNER_RADIUS_DP.dp.px, CORNER_RADIUS_DP.dp.px, backgroundPaint)
-
-            val icon = trashIcon ?: androidx.core.content.res.ResourcesCompat.getDrawable(
-                recyclerView.resources, R.drawable.ic_trash, null
-            )?.also { trashIcon = it }
-            icon?.let {
-                val reveal = (abs(dX) / threshold).coerceIn(0F, 1F)
-                it.alpha = (255 * reveal).toInt()
-                it.setTint(Color.WHITE)
-                val size = ICON_SIZE_DP.dp.px.toInt()
-                val inset = ICON_INSET_DP.dp.px.toInt()
-                val centerY = (view.top + view.bottom) / 2
-                val centerX = if (damped > 0F) {
-                    view.left + artworkStart + (cover?.width ?: size) / 2
-                } else {
-                    view.right - inset - size / 2
-                }
-                it.setBounds(
-                    centerX - size / 2, centerY - size / 2,
-                    centerX + size / 2, centerY + size / 2,
-                )
-                it.draw(canvas)
+            if (panel.draw(canvas, view, damped, recyclerView.frameNanos())) {
+                recyclerView.invalidate()
             }
         }
 
@@ -310,12 +304,12 @@ class QueueItemTouchHelperCallback(
         super.clearView(recyclerView, viewHolder)
         adapter.onDragEnd()
 
-        swipeHaptics.release(viewHolder.itemView)
         val removalUid = pendingRemovalUid
         trackedSwipeHolder = null
-        armedForRemoval = false
+        armed = -1
         removalDispatched = false
         pendingRemovalUid = null
+        panel.reset()
         if (removalUid != null) {
             val position = adapter.indexOf(removalUid)
             if (position >= 0) onRemove(position)
@@ -335,14 +329,9 @@ class QueueItemTouchHelperCallback(
     }
 
     companion object {
+        // Geometry now lives in SwipeActionPanel; only the two ItemTouchHelper knobs remain.
         private const val NEVER_SWIPE_AWAY = 10F
-        private const val SWIPE_FOLLOW = 0.56F
-        private const val SWIPE_THRESHOLD = 0.32F
-        private const val MAX_TRAVEL = SWIPE_THRESHOLD * SWIPE_FOLLOW
         private const val SWIPE_SETTLE_MS = 190L
-        private const val CORNER_RADIUS_DP = 12
-        private const val ICON_SIZE_DP = 22
-        private const val ICON_INSET_DP = 16
     }
 }
 
