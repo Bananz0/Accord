@@ -5,6 +5,15 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import uk.akane.accord.ui.MainActivity
+import uk.akane.accord.ui.components.NavigationBar
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.RectF
+import androidx.core.content.ContextCompat
+import org.akanework.gramophone.logic.dpToPx
 import android.widget.EditText
 import androidx.core.widget.doAfterTextChanged
 import androidx.lifecycle.Lifecycle
@@ -45,18 +54,23 @@ class BlacklistSettingsFragment : BaseFragment() {
         savedInstanceState: Bundle?
     ): View? {
         val rootView = inflater.inflate(R.layout.fragment_blacklist_settings, container, false)
-        val topAppBar = rootView.findViewById<MaterialToolbar>(R.id.topAppBar)
-
-        rootView.findViewById<AppBarLayout>(R.id.appbarlayout).enableEdgeToEdgePaddingListener()
-
-        topAppBar.setNavigationOnClickListener {
-            requireActivity().supportFragmentManager.popBackStack()
+        val navigationBar = rootView.findViewById<NavigationBar>(R.id.navigation_bar)
+        ViewCompat.setOnApplyWindowInsetsListener(navigationBar) { v, insets ->
+            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            v.setPadding(v.paddingLeft, systemBars.top, v.paddingRight, v.paddingBottom)
+            insets
+        }
+        navigationBar.setOnReturnClickListener {
+            (activity as? MainActivity)?.fragmentSwitcherView?.popBackTopFragmentIfExists()
+                ?: requireActivity().supportFragmentManager.popBackStack()
         }
 
         adapter = BlacklistAdapter((requireActivity().application as Accord).blacklist)
         rootView.findViewById<RecyclerView>(R.id.recyclerview).apply {
             layoutManager = LinearLayoutManager(requireContext())
             adapter = this@BlacklistSettingsFragment.adapter
+            addItemDecoration(GroupBackgroundDecoration())
+            navigationBar.attach(this, applyTopPadding = false)
         }
 
         rootView.findViewById<EditText>(R.id.blacklist_filter).doAfterTextChanged {
@@ -66,6 +80,52 @@ class BlacklistSettingsFragment : BaseFragment() {
 
         observeLibrary()
         return rootView
+    }
+
+    /**
+     * Paints the rounded card behind each run of rows.
+     *
+     * Drawn rather than given to the rows themselves, because only the first and last of a run are
+     * rounded and a row does not know where it sits - the same reason the preference screens do it
+     * this way, and the reason both end up looking like one card instead of a stack of tiles.
+     */
+    private inner class GroupBackgroundDecoration : RecyclerView.ItemDecoration() {
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = ContextCompat.getColor(requireContext(), R.color.settings_card_background)
+        }
+        private val radius = 14.dpToPx(requireContext()).toFloat()
+
+        override fun onDraw(canvas: Canvas, parent: RecyclerView, state: RecyclerView.State) {
+            var top: Float? = null
+            var bottom = 0F
+            var left = 0F
+            var right = 0F
+
+            fun flush() {
+                val start = top ?: return
+                canvas.drawRoundRect(
+                    RectF(left, start, right, bottom), radius, radius, paint
+                )
+                top = null
+            }
+
+            for (index in 0 until parent.childCount) {
+                val child = parent.getChildAt(index)
+                val position = parent.getChildAdapterPosition(child)
+                if (position == RecyclerView.NO_POSITION) continue
+                if (adapter.isHeader(position)) {
+                    flush()
+                    continue
+                }
+                if (top == null) {
+                    top = child.top.toFloat()
+                    left = child.left.toFloat()
+                    right = child.right.toFloat()
+                }
+                bottom = child.bottom.toFloat()
+            }
+            flush()
+        }
     }
 
     /**

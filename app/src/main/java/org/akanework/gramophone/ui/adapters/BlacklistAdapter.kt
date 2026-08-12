@@ -5,7 +5,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
-import com.google.android.material.checkbox.MaterialCheckBox
+import android.widget.ImageView
 import org.akanework.gramophone.logic.data.library.BlacklistStore
 import uk.akane.accord.R
 
@@ -56,18 +56,33 @@ class BlacklistAdapter(
                 label = row.name,
                 detail = null,
                 checked = blacklist.isArtistBlocked(row.name),
-            ) { checked -> blacklist.setArtistBlocked(row.name, checked) }
+                lastInGroup = endsGroup(position),
+            ) { checked ->
+                blacklist.setArtistBlocked(row.name, checked)
+                notifyItemChanged(position)
+            }
 
             is Row.Song -> (holder as EntryViewHolder).bind(
                 label = row.title,
                 detail = row.artist,
                 checked = blacklist.isSongBlocked(row.mediaId),
-            ) { checked -> blacklist.setSongBlocked(row.mediaId, checked) }
+                lastInGroup = endsGroup(position),
+            ) { checked ->
+                blacklist.setSongBlocked(row.mediaId, checked)
+                notifyItemChanged(position)
+            }
         }
     }
 
+    /** Whether [position] is a section heading, for the decoration that paints the groups. */
+    fun isHeader(position: Int): Boolean = rows.getOrNull(position) is Row.Header
+
+    /** True where the next row is a heading, or there is no next row at all. */
+    private fun endsGroup(position: Int): Boolean =
+        position == rows.lastIndex || rows[position + 1] is Row.Header
+
     private class HeaderViewHolder(view: View) : RecyclerView.ViewHolder(view) {
-        private val title: TextView = view.findViewById(R.id.header_title)
+        private val title: TextView = view.findViewById(R.id.title)
 
         fun bind(row: Row.Header) {
             title.text = if (row.count > 0) {
@@ -79,25 +94,31 @@ class BlacklistAdapter(
     }
 
     private class EntryViewHolder(view: View) : RecyclerView.ViewHolder(view) {
-        private val checkBox: MaterialCheckBox = view.findViewById(R.id.checkbox)
+        private val tick: ImageView = view.findViewById(R.id.checkbox)
         private val title: TextView = view.findViewById(R.id.title)
         private val subtitle: TextView = view.findViewById(R.id.subtitle)
+        private val divider: View = view.findViewById(R.id.divider)
+        private val content: View = view.findViewById(R.id.row_content)
 
         fun bind(
             label: String,
             detail: String?,
             checked: Boolean,
+            lastInGroup: Boolean,
             onToggle: (Boolean) -> Unit,
         ) {
             title.text = label
             subtitle.text = detail
             subtitle.visibility = if (detail.isNullOrBlank()) View.GONE else View.VISIBLE
-            // Cleared first: a recycled row would otherwise fire the previous row's toggle while
-            // this one's state is being restored.
-            checkBox.setOnCheckedChangeListener(null)
-            checkBox.isChecked = checked
-            checkBox.setOnCheckedChangeListener { _, isChecked -> onToggle(isChecked) }
-            itemView.setOnClickListener { checkBox.isChecked = !checkBox.isChecked }
+            tick.visibility = if (checked) View.VISIBLE else View.GONE
+            // The last row of a run has the next heading under it, not another row.
+            divider.visibility = if (lastInGroup) View.GONE else View.VISIBLE
+            // State is held by the blacklist, not the view: no listener to clear, and a recycled
+            // row cannot fire the previous row's toggle on the way past.
+            content.setOnClickListener {
+                uk.akane.accord.ui.components.Haptics.press(it)
+                onToggle(!checked)
+            }
         }
     }
 

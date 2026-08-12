@@ -1,15 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Section heading. Same weight, colour and caps as the settings section headers. -->
 <TextView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
-    android:id="@+id/header_title"
+    android:id="@+id/title"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:fontFamily="sans-serif-medium"
-    android:paddingStart="20dp"
-    android:paddingEnd="16dp"
-    android:paddingTop="24dp"
+    android:paddingStart="4dp"
+    android:paddingEnd="4dp"
+    android:paddingTop="22dp"
     android:paddingBottom="8dp"
+    android:fontFamily="@font/inter_semibold"
+    android:includeFontPadding="false"
+    android:letterSpacing="0.06"
     android:textAllCaps="true"
-    android:textColor="?attr/colorPrimary"
-    android:textSize="13sp"
-    tools:text="ARTISTS · 214" />
+    android:textColor="@color/onSurfaceColorInactive"
+    android:textSize="12sp"
+    tools:text="Artists · 328" />
