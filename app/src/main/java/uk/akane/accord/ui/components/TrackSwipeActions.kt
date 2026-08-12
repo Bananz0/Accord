@@ -3,6 +3,7 @@ package uk.akane.accord.ui.components
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RectF
 import android.widget.Toast
 import androidx.core.content.res.ResourcesCompat
@@ -36,46 +37,58 @@ object TrackSwipeActions {
      * @param onRemove supplied by a playlist, where a left swipe means "take it out" rather than
      *   "download it".
      */
+    /**
+     * What a right-to-left swipe does on this list, or null where it does nothing.
+     *
+     * Left is deliberately empty on ordinary song lists. It used to mean "download", which in a
+     * client whose whole library already lives on a server it can reach is an answer to a question
+     * nobody asked - and a panel that appears under every row teaches people not to swipe at all.
+     * It survives only where the trailing edge means something specific: taking a track out of a
+     * playlist or the queue, or asking Lidarr for music that is not here yet.
+     */
+    class Trailing(
+        val iconRes: Int,
+        val colorRes: Int,
+        /** Whether this row can do it. A row that cannot simply will not swipe that way. */
+        val enabledAt: (Int) -> Boolean = { true },
+        val onAction: (Int) -> Unit,
+    )
+
+    /**
+     * @param trackAt what row [position] is showing, or null for rows that are not tracks - a
+     *   header, a footer, an "add music" button - which must not swipe at all.
+     * @param trailing what a left swipe does here, if anything.
+     */
     fun attach(
         recyclerView: RecyclerView,
         activity: MainActivity,
         trackAt: (Int) -> MediaItem?,
-        onRemove: ((MediaItem) -> Unit)? = null,
+        trailing: Trailing? = null,
     ) {
         val resources = recyclerView.resources
-        val queueIcon = ResourcesCompat.getDrawable(resources, R.drawable.ic_bulletin_select, null)
-        val leftIcon = ResourcesCompat.getDrawable(
-            resources,
-            if (onRemove != null) R.drawable.ic_trash else R.drawable.ic_download,
-            null
-        )
-        val accent = resources.getColor(R.color.accentColor, null)
-        val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        val playNextIcon = ResourcesCompat.getDrawable(resources, R.drawable.ic_play_next, null)
+        val playLaterIcon = ResourcesCompat.getDrawable(resources, R.drawable.ic_play_later, null)
+        val trailingIcon = trailing?.let {
+            ResourcesCompat.getDrawable(resources, it.iconRes, null)
+        }
+        val playNextColor = resources.getColor(R.color.swipePlayNext, null)
+        val playLaterColor = resources.getColor(R.color.swipePlayLater, null)
+        val trailingColor = trailing?.let { resources.getColor(it.colorRes, null) }
+        val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
         val corner = 12.dp.px
         val iconMargin = 14.dp.px
-        val inset = 16.dp.px
+        val iconSize = 22.dp.px.toInt()
 
-        val swipeHaptics = ResistiveSwipeHaptics()
         var trackedHolder: RecyclerView.ViewHolder? = null
-        var armedDirection = 0
+        var stage = Stage.NONE
         var actionDispatched = false
-        var removeAfterRecoil: MediaItem? = null
+        var pendingAfterRecoil: (() -> Unit)? = null
 
         val callback = object : ItemTouchHelper.SimpleCallback(
             0,
             ItemTouchHelper.LEFT or ItemTouchHelper.RIGHT
         ) {
-            /** How far the finger must travel, as a fraction of the row, to mean it. */
-            // Actions never use ItemTouchHelper's "swipe away" completion. Its cancel path is the
-            // one that keeps drawing the reveal while both it and the row recoil to zero.
             override fun getSwipeThreshold(viewHolder: RecyclerView.ViewHolder) = NEVER_SWIPE_AWAY
-
-            /**
-             * A flick should not throw the row off the screen. Raising the escape velocity
-             * well above the default means the distance decides, not the speed.
-             */
-            // A short, decisive flick carries enough momentum to complete the action even when the
-            // finger leaves just before the distance threshold.
             override fun getSwipeEscapeVelocity(defaultValue: Float) = Float.MAX_VALUE
             override fun getSwipeVelocityThreshold(defaultValue: Float) = Float.MAX_VALUE
 
@@ -83,12 +96,16 @@ object TrackSwipeActions {
                 recyclerView: RecyclerView,
                 viewHolder: RecyclerView.ViewHolder
             ): Int {
-                // Headers and footers share the list; swiping one would act on a track it is not.
                 // Absolute, not binding: inside a ConcatAdapter the binding position restarts at
-                // zero for each child adapter, so every song looked like row zero and the header
-                // offset took it negative - nothing was ever swipeable.
-                return if (trackAt(viewHolder.absoluteAdapterPosition) == null) 0
-                else super.getSwipeDirs(recyclerView, viewHolder)
+                // zero for each child adapter, so every song looked like row zero.
+                // Each edge decides for itself. A Lidarr result is not a library track and can
+                // never be queued, but it is exactly the row worth asking the server to fetch, so
+                // gating both directions on the same test would have left it inert.
+                val position = viewHolder.absoluteAdapterPosition
+                var dirs = 0
+                if (trackAt(position) != null) dirs = dirs or ItemTouchHelper.RIGHT
+                if (trailing?.enabledAt(position) == true) dirs = dirs or ItemTouchHelper.LEFT
+                return dirs
             }
 
             override fun onMove(
@@ -109,7 +126,6 @@ object TrackSwipeActions {
             }
 
             override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
-                // Defensive only: the thresholds above make this path unreachable.
                 recyclerView.adapter?.notifyItemChanged(viewHolder.absoluteAdapterPosition)
             }
 
@@ -118,18 +134,23 @@ object TrackSwipeActions {
                 viewHolder: RecyclerView.ViewHolder,
             ) {
                 super.clearView(recyclerView, viewHolder)
-                swipeHaptics.release(viewHolder.itemView)
-                val pendingRemoval = removeAfterRecoil
+                val pending = pendingAfterRecoil
                 trackedHolder = null
-                armedDirection = 0
+                stage = Stage.NONE
                 actionDispatched = false
-                removeAfterRecoil = null
-                pendingRemoval?.let { onRemove?.invoke(it) }
+                pendingAfterRecoil = null
+                // Run after the row has settled, so a list that reorders itself does not do so
+                // underneath a view still animating.
+                pending?.invoke()
             }
 
             /**
-             * Draws what the swipe will do behind the row: the queue on the right, downloading -
-             * or removing - on the left.
+             * Draws what releasing would do.
+             *
+             * Two actions share the leading edge, as Apple Music does it: a partial drag reveals
+             * Play Later and Play Next side by side, and carrying the drag further hands the whole
+             * panel to Play Next. So a halfway release appends and a full release jumps the queue,
+             * and the panel says which is armed before the finger lifts.
              */
             override fun onChildDraw(
                 canvas: Canvas,
@@ -141,58 +162,54 @@ object TrackSwipeActions {
                 isCurrentlyActive: Boolean
             ) {
                 val view = viewHolder.itemView
-                // The row follows at a fraction of the finger and stops at a limit well short
-                // of the edge: it never leaves, so it always reads as something that will come
-                // back, and the extra travel of the finger is the resistance.
                 val limit = view.width * MAX_TRAVEL
                 val damped = resistedSwipeDistance(dX, limit, FOLLOW)
 
                 if (actionState == ItemTouchHelper.ACTION_STATE_SWIPE && damped != 0F) {
+                    val armAt = view.width * ARM_TRAVEL
+                    val fullAt = view.width * FULL_TRAVEL
+                    val reach = abs(damped)
+
                     if (isCurrentlyActive) {
                         if (trackedHolder !== viewHolder) {
                             trackedHolder = viewHolder
-                            armedDirection = 0
+                            stage = Stage.NONE
                             actionDispatched = false
-                            removeAfterRecoil = null
+                            pendingAfterRecoil = null
                         }
-                        swipeHaptics.update(
-                            view,
-                            dX,
-                            view.width * SWIPE_THRESHOLD,
-                        )
-                        armedDirection = when {
-                            abs(dX) < view.width * SWIPE_THRESHOLD -> 0
-                            dX > 0F -> ItemTouchHelper.RIGHT
-                            else -> ItemTouchHelper.LEFT
+                        val next = when {
+                            reach >= fullAt && damped > 0F -> Stage.FULL
+                            reach >= armAt -> Stage.ARMED
+                            else -> Stage.NONE
                         }
-                    } else if (!actionDispatched && armedDirection != 0) {
-                        trackAt(viewHolder.absoluteAdapterPosition)?.let { item ->
-                            swipeHaptics.commit(view)
-                            when {
-                                armedDirection == ItemTouchHelper.RIGHT -> addToQueue(activity, item)
-                                onRemove != null -> removeAfterRecoil = item
-                                else -> {
-                                    activity.lifecycleScope.launch(Dispatchers.IO) {
-                                        JellyfinDownloadManager.download(activity, listOf(item))
-                                    }
-                                    Toast.makeText(
-                                        activity,
-                                        R.string.download_started,
-                                        Toast.LENGTH_SHORT,
-                                    ).show()
-                                }
+                        if (next != stage) {
+                            // Distinct weights, so the two stops are told apart by feel alone -
+                            // which is the entire point of having two.
+                            when (next) {
+                                Stage.ARMED -> Haptics.arm(view)
+                                Stage.FULL -> Haptics.commit(view)
+                                Stage.NONE -> Unit
                             }
+                            stage = next
+                        }
+                    } else if (!actionDispatched && stage != Stage.NONE) {
+                        val position = viewHolder.absoluteAdapterPosition
+                        if (damped > 0F) {
+                            trackAt(position)?.let { item ->
+                                if (stage == Stage.FULL) playNext(activity, item)
+                                else playLater(activity, item)
+                            }
+                        } else if (trailing != null) {
+                            Haptics.commit(view)
+                            pendingAfterRecoil = { trailing.onAction(position) }
                         }
                         actionDispatched = true
                     }
-                    backgroundPaint.color = if (damped > 0) accent else Color.argb(255, 90, 90, 96)
-                    val cover = view.findViewById<android.view.View?>(R.id.cover)
-                    val artworkStart = cover?.left ?: inset.toInt()
-                    val bounds = if (damped > 0) {
+
+                    val bounds = if (damped > 0F) {
                         RectF(
-                            (view.left + artworkStart).toFloat(), view.top.toFloat(),
-                            (view.left + damped).coerceAtLeast(view.left + artworkStart.toFloat()),
-                            view.bottom.toFloat()
+                            view.left.toFloat(), view.top.toFloat(),
+                            view.left + damped, view.bottom.toFloat()
                         )
                     } else {
                         RectF(
@@ -200,36 +217,42 @@ object TrackSwipeActions {
                             view.right.toFloat(), view.bottom.toFloat()
                         )
                     }
-                    canvas.drawRoundRect(bounds, corner, corner, backgroundPaint)
 
-                    val icon = if (damped > 0) queueIcon else leftIcon
-                    icon?.let {
-                        val reveal = (
-                            abs(dX) / (view.width * SWIPE_THRESHOLD)
-                        ).coerceIn(0F, 1F)
-                        it.alpha = (255 * reveal).toInt()
-                        val size = 22.dp.px.toInt()
-                        val centerY = (view.top + view.bottom) / 2
-                        // Centred in the panel that is actually on screen, rather than pinned to
-                        // where the panel starts. Anchored, the glyph sat against one edge and the
-                        // gap grew as the reveal widened, so the two read as unrelated.
-                        //
-                        // Clamped so it is never half outside a panel narrower than itself: it
-                        // keeps a margin from the leading edge until there is room, then centres.
-                        val half = size / 2f
-                        val rawCenter = (bounds.left + bounds.right) / 2f
-                        val centerX = if (damped > 0) {
-                            rawCenter.coerceAtMost(bounds.right - half - iconMargin)
+                    canvas.save()
+                    // Clipped to the rounded panel and filled with plain rects, so the join between
+                    // the two colours is a clean edge rather than two rounded cards touching.
+                    clipPath.reset()
+                    clipPath.addRoundRect(bounds, corner, corner, Path.Direction.CW)
+                    canvas.clipPath(clipPath)
+
+                    if (damped > 0F) {
+                        if (stage == Stage.FULL) {
+                            fillPaint.color = playNextColor
+                            canvas.drawRect(bounds, fillPaint)
+                            drawIcon(canvas, playNextIcon, bounds, iconSize, iconMargin, true)
                         } else {
-                            rawCenter.coerceAtLeast(bounds.left + half + iconMargin)
-                        }.toInt()
-                        it.setTint(Color.WHITE)
-                        it.setBounds(
-                            centerX - size / 2, centerY - size / 2,
-                            centerX + size / 2, centerY + size / 2
-                        )
-                        it.draw(canvas)
+                            val split = bounds.left + bounds.width() / 2F
+                            fillPaint.color = playLaterColor
+                            canvas.drawRect(bounds.left, bounds.top, split, bounds.bottom, fillPaint)
+                            fillPaint.color = playNextColor
+                            canvas.drawRect(split, bounds.top, bounds.right, bounds.bottom, fillPaint)
+                            drawIcon(
+                                canvas, playLaterIcon,
+                                RectF(bounds.left, bounds.top, split, bounds.bottom),
+                                iconSize, iconMargin, true,
+                            )
+                            drawIcon(
+                                canvas, playNextIcon,
+                                RectF(split, bounds.top, bounds.right, bounds.bottom),
+                                iconSize, iconMargin, true,
+                            )
+                        }
+                    } else if (trailingColor != null) {
+                        fillPaint.color = trailingColor
+                        canvas.drawRect(bounds, fillPaint)
+                        drawIcon(canvas, trailingIcon, bounds, iconSize, iconMargin, false)
                     }
+                    canvas.restore()
                 }
                 super.onChildDraw(
                     canvas, recyclerView, viewHolder, damped, dY, actionState, isCurrentlyActive
@@ -237,7 +260,45 @@ object TrackSwipeActions {
             }
         }
         ItemTouchHelper(callback).attachToRecyclerView(recyclerView)
-        claimHorizontalGestures(recyclerView, trackAt)
+        claimHorizontalGestures(recyclerView) { position ->
+            trackAt(position) != null || trailing?.enabledAt(position) == true
+        }
+    }
+
+    private enum class Stage { NONE, ARMED, FULL }
+
+    private val clipPath = Path()
+
+    /**
+     * Centres [icon] in [panel], holding a margin from the edge the panel grows from.
+     *
+     * Pinned to a fixed offset the glyph drifted further off-centre the wider the reveal got; free
+     * to centre, it would be half outside a panel narrower than itself.
+     */
+    private fun drawIcon(
+        canvas: Canvas,
+        icon: android.graphics.drawable.Drawable?,
+        panel: RectF,
+        size: Int,
+        margin: Float,
+        fromLeft: Boolean,
+    ) {
+        icon ?: return
+        val half = size / 2F
+        val centerY = ((panel.top + panel.bottom) / 2F).toInt()
+        val raw = (panel.left + panel.right) / 2F
+        val centerX = if (fromLeft) {
+            raw.coerceAtMost(panel.right - half - margin)
+        } else {
+            raw.coerceAtLeast(panel.left + half + margin)
+        }.toInt()
+        icon.alpha = 255
+        icon.setTint(Color.WHITE)
+        icon.setBounds(
+            centerX - size / 2, centerY - size / 2,
+            centerX + size / 2, centerY + size / 2,
+        )
+        icon.draw(canvas)
     }
 
     /**
@@ -397,14 +458,9 @@ object TrackSwipeActions {
             }
         }
         ItemTouchHelper(callback).attachToRecyclerView(recyclerView)
-        claimHorizontalGestures(recyclerView) { position ->
-            // Reuses the track hook only as a yes/no; the value itself is never read.
-            if (canSwipe(position)) PLACEHOLDER else null
-        }
+        // Now a plain predicate, so a list holding no MediaItems no longer needs a stand-in one.
+        claimHorizontalGestures(recyclerView) { position -> canSwipe(position) }
     }
-
-    /** Stands in for "there is something swipeable here" on lists that hold no MediaItems. */
-    private val PLACEHOLDER: MediaItem = MediaItem.EMPTY
 
     /**
      * Stops the page stealing a sideways drag that started on a row.
@@ -419,7 +475,7 @@ object TrackSwipeActions {
      */
     private fun claimHorizontalGestures(
         recyclerView: RecyclerView,
-        trackAt: (Int) -> MediaItem?,
+        swipeableAt: (Int) -> Boolean,
     ) {
         val touchSlop = ViewConfiguration.get(recyclerView.context).scaledTouchSlop
         var downX = 0F
@@ -435,7 +491,7 @@ object TrackSwipeActions {
                         // page, and should take the user back the way they came.
                         val child = rv.findChildViewUnder(e.x, e.y)
                         val onTrack = child != null &&
-                            trackAt(rv.getChildAdapterPosition(child)) != null
+                            swipeableAt(rv.getChildAdapterPosition(child))
                         rv.parent?.requestDisallowInterceptTouchEvent(onTrack)
                     }
 
@@ -454,14 +510,25 @@ object TrackSwipeActions {
         })
     }
 
-    /** The hard stop is reached at the same instant the shorter swipe arms its action. */
-    private const val SWIPE_THRESHOLD = 0.36F
+    /**
+     * Two stops on the leading edge, and room to reach both.
+     *
+     * The travel limit sits past the second stop, or the gesture would clamp before Play Next could
+     * ever arm. The gap between them is deliberately wide: they are told apart by feel, and two
+     * detents a few pixels apart is one mushy detent.
+     */
+    private const val ARM_TRAVEL = 0.13F
+    private const val FULL_TRAVEL = 0.30F
     private const val FOLLOW = 0.56F
-    private const val MAX_TRAVEL = SWIPE_THRESHOLD * FOLLOW
+    private const val MAX_TRAVEL = 0.36F
+
+    /** The Lidarr request gesture below still has a single stop. */
+    private const val SWIPE_THRESHOLD = 0.36F
     private const val SETTLE_MS = 190L
     private const val NEVER_SWIPE_AWAY = 2F
 
-    private fun addToQueue(activity: MainActivity, item: MediaItem) {
+    /** Appends to the end of the queue. */
+    private fun playLater(activity: MainActivity, item: MediaItem) {
         val player = activity.getPlayer() ?: return
         if (player.mediaItemCount == 0) {
             player.setMediaItems(listOf(item), 0, C.TIME_UNSET)
@@ -471,5 +538,24 @@ object TrackSwipeActions {
             player.addMediaItem(item)
         }
         Toast.makeText(activity, R.string.queued, Toast.LENGTH_SHORT).show()
+    }
+
+    /**
+     * Slots the track in directly after whatever is playing.
+     *
+     * Inserted after the current index rather than at the front of the timeline: the front is
+     * where playback started, not where it is now, so putting it there would queue the track
+     * behind everything already played.
+     */
+    private fun playNext(activity: MainActivity, item: MediaItem) {
+        val player = activity.getPlayer() ?: return
+        if (player.mediaItemCount == 0) {
+            player.setMediaItems(listOf(item), 0, C.TIME_UNSET)
+            player.prepare()
+            player.play()
+        } else {
+            player.addMediaItem(player.currentMediaItemIndex + 1, item)
+        }
+        Toast.makeText(activity, R.string.queued_next, Toast.LENGTH_SHORT).show()
     }
 }

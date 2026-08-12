@@ -19,6 +19,9 @@ class LidarrSearchResultsAdapter(
 
     private val items = mutableListOf<LidarrClient.AlbumResult>()
 
+    /** The album at [position], for the swipe gesture. Null where the row is not one. */
+    fun itemAt(position: Int): LidarrClient.AlbumResult? = items.getOrNull(position)
+
     fun submit(results: List<LidarrClient.AlbumResult>) {
         val diff = DiffUtil.calculateDiff(Diff(items.toList(), results))
         items.clear()

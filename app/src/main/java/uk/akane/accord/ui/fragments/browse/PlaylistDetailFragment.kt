@@ -116,7 +116,13 @@ class PlaylistDetailFragment : SwitcherPostponeFragment() {
             recyclerView = contentRecycler,
             activity = activity,
             trackAt = { index -> trackAtAdapterPosition(index) },
-            onRemove = { item -> removeFromPlaylist(item) },
+            trailing = TrackSwipeActions.Trailing(
+                iconRes = R.drawable.ic_trash,
+                colorRes = R.color.swipeDestructive,
+                onAction = { index ->
+                    trackAtAdapterPosition(index)?.let { removeFromPlaylist(it) }
+                },
+            ),
         )
         // The three dots on this screen did nothing whatsoever.
         navigationBar.setMenuEntries(

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Play Next: the track slots in at the head of what is waiting.
+
+    The arrow sits hard against the top of the stack, and Play Later's against the bottom. At the
+    22dp these draw at, vertical position is the only difference readable at a glance - an arrow
+    that merely points a different way reads as the same glyph twice.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFF">
+    <!-- The incoming track. -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M3.2,3.2h11.6a1.1,1.1 0 0 1 0,2.2H3.2a1.1,1.1 0 0 1 0,-2.2z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M18.5,1.6l3.6,3.2a0.6,0.6 0 0 1 0,0.9l-3.6,3.2a0.55,0.55 0 0 1 -0.95,-0.42V2.02A0.55,0.55 0 0 1 18.5,1.6z" />
+    <!-- What is already queued, greyed by the tint being uniform but set back from the edge. -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M3.2,10.9h17.6a1.1,1.1 0 0 1 0,2.2H3.2a1.1,1.1 0 0 1 0,-2.2z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M3.2,15.6h17.6a1.1,1.1 0 0 1 0,2.2H3.2a1.1,1.1 0 0 1 0,-2.2z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M3.2,20.3h17.6a1.1,1.1 0 0 1 0,2.2H3.2a1.1,1.1 0 0 1 0,-2.2z" />
+</vector>

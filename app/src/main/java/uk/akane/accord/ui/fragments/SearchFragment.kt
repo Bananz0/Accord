@@ -200,13 +200,24 @@ class SearchFragment: Fragment() {
             v.updatePadding(bottom = (requireActivity() as MainActivity).bottomHeight)
             insets
         }
-        // Same gesture as every other list: right queues it, left downloads it.
+        // Right queues, on the library tab. Left only exists on the Lidarr tab, where it means
+        // "go and get this" - the one list in the app where the trailing edge has something to do.
         TrackSwipeActions.attach(
             recyclerView = searchResults,
             activity = requireActivity() as MainActivity,
             trackAt = { index ->
                 if (isAppleTabSelected) resultsAdapter.itemAt(index) else null
             },
+            trailing = TrackSwipeActions.Trailing(
+                iconRes = R.drawable.ic_download,
+                colorRes = R.color.accentColor,
+                enabledAt = { index ->
+                    !isAppleTabSelected && lidarrResultsAdapter.itemAt(index) != null
+                },
+                onAction = { index ->
+                    lidarrResultsAdapter.itemAt(index)?.let { requestLidarrAlbum(it) }
+                },
+            ),
         )
 
         observeLibrary()

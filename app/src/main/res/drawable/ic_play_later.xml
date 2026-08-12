@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Play Later: the track joins the end of the line. The mirror of ic_play_next, so the two read
+    as one choice with two ends rather than as two unrelated symbols.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFF">
+    <!-- What is already queued. -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M3.2,1.5h17.6a1.1,1.1 0 0 1 0,2.2H3.2a1.1,1.1 0 0 1 0,-2.2z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M3.2,6.2h17.6a1.1,1.1 0 0 1 0,2.2H3.2a1.1,1.1 0 0 1 0,-2.2z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M3.2,10.9h17.6a1.1,1.1 0 0 1 0,2.2H3.2a1.1,1.1 0 0 1 0,-2.2z" />
+    <!-- The incoming track, arriving at the end. -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M3.2,18.6h11.6a1.1,1.1 0 0 1 0,2.2H3.2a1.1,1.1 0 0 1 0,-2.2z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M18.5,17.0l3.6,3.2a0.6,0.6 0 0 1 0,0.9l-3.6,3.2a0.55,0.55 0 0 1 -0.95,-0.42v-6.46A0.55,0.55 0 0 1 18.5,17.0z" />
+</vector>

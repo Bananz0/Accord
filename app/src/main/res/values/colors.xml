@@ -227,4 +227,8 @@
     <color name="tabSelectedColor">#FFFFFF</color>
     <color name="searchTabShadowColor">#4D000000</color>
     <color name="searchTabShadowAmbientColor">#4D000000</color>
+    <!-- Swipe actions. Apple Music's systemOrange and systemPurple, so the pair reads the same way. -->
+    <color name="swipePlayLater">#FF9500</color>
+    <color name="swipePlayNext">#AF52DE</color>
+    <color name="swipeDestructive">#FF3B30</color>
 </resources>
