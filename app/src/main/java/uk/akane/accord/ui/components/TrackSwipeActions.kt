@@ -75,9 +75,12 @@ object TrackSwipeActions {
         val playLaterColor = resources.getColor(R.color.swipePlayLater, null)
         val trailingColor = trailing?.let { resources.getColor(it.colorRes, null) }
         val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-        val corner = 12.dp.px
-        val iconMargin = 14.dp.px
         val iconSize = 22.dp.px.toInt()
+        // Separate capsules with air between them, not one panel divided by colour. Two actions
+        // sharing a single background read as one striped thing; two buttons read as a choice.
+        val buttonWidth = ACTION_WIDTH_DP.dp.px
+        val gap = ACTION_GAP_DP.dp.px
+        val verticalInset = ACTION_INSET_DP.dp.px
 
         var trackedHolder: RecyclerView.ViewHolder? = null
         var stage = Stage.NONE
@@ -166,8 +169,11 @@ object TrackSwipeActions {
                 val damped = resistedSwipeDistance(dX, limit, FOLLOW)
 
                 if (actionState == ItemTouchHelper.ACTION_STATE_SWIPE && damped != 0F) {
-                    val armAt = view.width * ARM_TRAVEL
-                    val fullAt = view.width * FULL_TRAVEL
+                    // Play Later arms once its own capsule is fully out; Play Next once the pair
+                    // is. Measured in capsules and the air between them rather than in screen
+                    // fractions, so the gesture is the same shape on any width of phone.
+                    val armAt = gap + buttonWidth
+                    val fullAt = gap + buttonWidth + gap + buttonWidth
                     val reach = abs(damped)
 
                     if (isCurrentlyActive) {
@@ -178,8 +184,10 @@ object TrackSwipeActions {
                             pendingAfterRecoil = null
                         }
                         val next = when {
-                            reach >= fullAt && damped > 0F -> Stage.FULL
-                            reach >= armAt -> Stage.ARMED
+                            damped > 0F && reach >= fullAt -> Stage.FULL
+                            damped > 0F && reach >= armAt -> Stage.ARMED
+                            // One action on this edge, so one stop, where a single capsule is out.
+                            damped < 0F && reach >= gap + buttonWidth -> Stage.ARMED
                             else -> Stage.NONE
                         }
                         if (next != stage) {
@@ -206,53 +214,44 @@ object TrackSwipeActions {
                         actionDispatched = true
                     }
 
-                    val bounds = if (damped > 0F) {
-                        RectF(
-                            view.left.toFloat(), view.top.toFloat(),
-                            view.left + damped, view.bottom.toFloat()
-                        )
-                    } else {
-                        RectF(
-                            view.right + damped, view.top.toFloat(),
-                            view.right.toFloat(), view.bottom.toFloat()
-                        )
-                    }
-
-                    canvas.save()
-                    // Clipped to the rounded panel and filled with plain rects, so the join between
-                    // the two colours is a clean edge rather than two rounded cards touching.
-                    clipPath.reset()
-                    clipPath.addRoundRect(bounds, corner, corner, Path.Direction.CW)
-                    canvas.clipPath(clipPath)
+                    val top = view.top + verticalInset
+                    val bottom = view.bottom - verticalInset
 
                     if (damped > 0F) {
+                        // Three phases. Play Later grows out of the edge on its own; once it is
+                        // full it holds still and Play Next grows beside it; once that one is full
+                        // too the pair gives way to a single Play Next capsule that keeps growing.
+                        // Each phase is a different answer to "what happens if I let go now".
                         if (stage == Stage.FULL) {
-                            fillPaint.color = playNextColor
-                            canvas.drawRect(bounds, fillPaint)
-                            drawIcon(canvas, playNextIcon, bounds, iconSize, iconMargin, true)
+                            drawAction(
+                                canvas, fillPaint, playNextColor, playNextIcon, iconSize,
+                                view.left + gap, top, view.left + damped, bottom,
+                            )
                         } else {
-                            val split = bounds.left + bounds.width() / 2F
-                            fillPaint.color = playLaterColor
-                            canvas.drawRect(bounds.left, bounds.top, split, bounds.bottom, fillPaint)
-                            fillPaint.color = playNextColor
-                            canvas.drawRect(split, bounds.top, bounds.right, bounds.bottom, fillPaint)
-                            drawIcon(
-                                canvas, playLaterIcon,
-                                RectF(bounds.left, bounds.top, split, bounds.bottom),
-                                iconSize, iconMargin, true,
-                            )
-                            drawIcon(
-                                canvas, playNextIcon,
-                                RectF(split, bounds.top, bounds.right, bounds.bottom),
-                                iconSize, iconMargin, true,
-                            )
+                            val laterWidth = (damped - gap).coerceIn(0F, buttonWidth)
+                            if (laterWidth > 0F) {
+                                val left = view.left + gap
+                                drawAction(
+                                    canvas, fillPaint, playLaterColor, playLaterIcon, iconSize,
+                                    left, top, left + laterWidth, bottom,
+                                )
+                            }
+                            val nextLeft = gap + buttonWidth + gap
+                            val nextWidth = (damped - nextLeft).coerceIn(0F, buttonWidth)
+                            if (nextWidth > 0F) {
+                                val left = view.left + nextLeft
+                                drawAction(
+                                    canvas, fillPaint, playNextColor, playNextIcon, iconSize,
+                                    left, top, left + nextWidth, bottom,
+                                )
+                            }
                         }
                     } else if (trailingColor != null) {
-                        fillPaint.color = trailingColor
-                        canvas.drawRect(bounds, fillPaint)
-                        drawIcon(canvas, trailingIcon, bounds, iconSize, iconMargin, false)
+                        drawAction(
+                            canvas, fillPaint, trailingColor, trailingIcon, iconSize,
+                            view.right + damped, top, view.right - gap, bottom,
+                        )
                     }
-                    canvas.restore()
                 }
                 super.onChildDraw(
                     canvas, recyclerView, viewHolder, damped, dY, actionState, isCurrentlyActive
@@ -270,35 +269,55 @@ object TrackSwipeActions {
     private val clipPath = Path()
 
     /**
-     * Centres [icon] in [panel], holding a margin from the edge the panel grows from.
+     * One action capsule, with its glyph centred inside it.
      *
-     * Pinned to a fixed offset the glyph drifted further off-centre the wider the reveal got; free
-     * to centre, it would be half outside a panel narrower than itself.
+     * Fully rounded rather than a rounded rectangle: at this height the radius is half the capsule,
+     * which is what makes two of them side by side read as buttons rather than as a split panel.
+     *
+     * The glyph is clipped to its own capsule. Centring it outright would put it outside a capsule
+     * narrower than the glyph - and over the neighbouring one - so instead it holds a margin from
+     * the growing edge and slides into view as the capsule widens, which is what the drag is
+     * describing anyway.
      */
-    private fun drawIcon(
+    private fun drawAction(
         canvas: Canvas,
+        paint: Paint,
+        color: Int,
         icon: android.graphics.drawable.Drawable?,
-        panel: RectF,
-        size: Int,
-        margin: Float,
-        fromLeft: Boolean,
+        iconSize: Int,
+        left: Float,
+        top: Float,
+        right: Float,
+        bottom: Float,
     ) {
+        if (right <= left) return
+        val capsule = RectF(left, top, right, bottom)
+        val radius = (bottom - top) / 2F
+        paint.color = color
+        canvas.drawRoundRect(capsule, radius, radius, paint)
+
         icon ?: return
-        val half = size / 2F
-        val centerY = ((panel.top + panel.bottom) / 2F).toInt()
-        val raw = (panel.left + panel.right) / 2F
-        val centerX = if (fromLeft) {
-            raw.coerceAtMost(panel.right - half - margin)
+        val half = iconSize / 2F
+        val margin = radius / 2F
+        val centerY = ((top + bottom) / 2F).toInt()
+        val raw = (left + right) / 2F
+        // Held clear of whichever edge this capsule grows from.
+        val growsFromLeft = true
+        val centerX = if (growsFromLeft) {
+            raw.coerceAtMost(right - half - margin)
         } else {
-            raw.coerceAtLeast(panel.left + half + margin)
+            raw.coerceAtLeast(left + half + margin)
         }.toInt()
         icon.alpha = 255
         icon.setTint(Color.WHITE)
         icon.setBounds(
-            centerX - size / 2, centerY - size / 2,
-            centerX + size / 2, centerY + size / 2,
+            centerX - iconSize / 2, centerY - iconSize / 2,
+            centerX + iconSize / 2, centerY + iconSize / 2,
         )
+        canvas.save()
+        canvas.clipRect(capsule)
         icon.draw(canvas)
+        canvas.restore()
     }
 
     /**
@@ -517,10 +536,26 @@ object TrackSwipeActions {
      * ever arm. The gap between them is deliberately wide: they are told apart by feel, and two
      * detents a few pixels apart is one mushy detent.
      */
-    private const val ARM_TRAVEL = 0.13F
-    private const val FULL_TRAVEL = 0.30F
+    /**
+     * How wide one action button is. The stops are measured in these, so the gesture is the same
+     * shape on a small phone as on a large one.
+     */
+    private const val ACTION_WIDTH_DP = 76
+
+    /** Air between the capsules, and between the last one and the row it belongs to. */
+    private const val ACTION_GAP_DP = 8
+
+    /** How far the capsules sit inside the row, top and bottom. Sets their corner radius too. */
+    private const val ACTION_INSET_DP = 6
+
     private const val FOLLOW = 0.56F
-    private const val MAX_TRAVEL = 0.36F
+
+    /**
+     * The hard stop, past the switch to Play Next with room to spare - there has to be somewhere
+     * left to drag after the panel changes hands, or the switch would land on the clamp and feel
+     * like the gesture had jammed rather than escalated.
+     */
+    private const val MAX_TRAVEL = 0.46F
 
     /** The Lidarr request gesture below still has a single stop. */
     private const val SWIPE_THRESHOLD = 0.36F
