@@ -86,6 +86,7 @@ import uk.akane.accord.logic.utils.CalculationUtils.lerp
 import uk.akane.accord.ui.adapters.QueueItemTouchHelperCallback
 import uk.akane.accord.logic.UserQueue
 import uk.akane.accord.ui.adapters.QueuePreviewAdapter
+import uk.akane.accord.ui.components.Haptics
 import uk.akane.accord.ui.components.QueueSectionDecoration
 import uk.akane.accord.ui.MainActivity
 import uk.akane.accord.ui.adapters.QueueItem
@@ -418,6 +419,16 @@ class FullPlayer @JvmOverloads constructor(
                 speakerFullHintView.playAnim()
             }
         })
+        // Grab and release, not a tick per pixel. A slider fires value changes continuously and
+        // the guidance is explicit that a cue at that rate stops being information; the two ends of
+        // the gesture are the moments worth marking.
+        val sliderTracking = object : OverlaySlider.ValueChangeListener {
+            override fun onStartTracking(slider: OverlaySlider) = Haptics.gestureStart(slider)
+            override fun onStopTracking(slider: OverlaySlider) = Haptics.gestureEnd(slider)
+        }
+        volumeOverlaySlider.addValueChangeListener(sliderTracking)
+        progressOverlaySlider.addValueChangeListener(sliderTracking)
+
         volumeOverlaySlider.addValueChangeListener(object : OverlaySlider.ValueChangeListener {
             override fun onStartTracking(slider: OverlaySlider) {
                 isUserVolumeScrubbing = true
@@ -1667,6 +1678,13 @@ class FullPlayer @JvmOverloads constructor(
     ) {
         coverSwipeHaptics.reset()
         fullPlayerToolbar.onMediaItemTransition(mediaItem, reason)
+        // The headings are relative to what is playing, and advancing a track moves that line
+        // without changing the timeline - so they have to be recomputed here as well, or the track
+        // now playing keeps the "Playing Next" that was true a moment ago.
+        instance?.currentTimeline?.let { timeline ->
+            (queueRecyclerView.adapter as? QueuePreviewAdapter)
+                ?.updateItems(buildQueueItems(timeline))
+        }
         // Hide until the new item's tracks arrive, so the previous track's badge does not linger
         // over a different song.
         qualityBadge.visibility = GONE

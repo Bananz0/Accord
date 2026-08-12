@@ -37,6 +37,7 @@ import uk.akane.accord.logic.utils.CalculationUtils.lerp
 import uk.akane.accord.logic.utils.UiUtils
 import uk.akane.accord.setupwizard.fragments.SetupWizardFragment
 import uk.akane.accord.ui.components.player.FloatingPanelLayout
+import uk.akane.accord.ui.components.GlobalTapHaptics
 import uk.akane.accord.ui.components.performPressHaptic
 import uk.akane.accord.ui.fragments.BrowseFragment
 import uk.akane.accord.ui.fragments.HomeFragment
@@ -180,6 +181,10 @@ class MainActivity : AppCompatActivity() {
         LyricsIndexWorker.enqueue(applicationContext)
 
         setContentView(R.layout.activity_main)
+
+        // Every clickable view gets a press cue from here, so feedback does not depend on whether
+        // whoever wrote a given screen remembered to ask for it.
+        GlobalTapHaptics.install(window)
 
         // Gated on having a Jellyfin server rather than on media permissions: the library lives on
         // the server, so an install with permissions but no server still has nothing to show.

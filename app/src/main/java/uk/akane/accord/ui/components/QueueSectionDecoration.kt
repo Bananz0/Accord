@@ -35,7 +35,14 @@ class QueueSectionDecoration(
 
     private val headingHeight = 34.dp.px
     private val baselineLift = 10.dp.px
-    private val startInset = 4.dp.px
+
+    /**
+     * Lines up with the artwork the rows start at, not with the edge of the list.
+     *
+     * The rows are inset; a heading hard against the screen edge reads as belonging to the panel
+     * rather than to the tracks underneath it.
+     */
+    private val startInset = 32.dp.px
 
     override fun getItemOffsets(
         outRect: android.graphics.Rect,
