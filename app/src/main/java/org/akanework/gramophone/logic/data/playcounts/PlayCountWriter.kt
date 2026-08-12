@@ -9,7 +9,8 @@ import org.akanework.gramophone.logic.data.db.AppDatabase
 import org.akanework.gramophone.logic.data.db.entity.ImportContribution
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinClientHolder
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinReporter.Companion.toDashedUuid
-import org.jellyfin.sdk.api.client.extensions.itemsApi
+import org.jellyfin.sdk.api.client.extensions.libraryApi
+import org.jellyfin.sdk.api.client.extensions.userDataApi
 import org.jellyfin.sdk.model.DateTime
 import org.jellyfin.sdk.model.api.UpdateUserItemDataDto
 import java.time.Instant
@@ -99,7 +100,7 @@ class PlayCountWriter(private val context: Context) {
         api: org.jellyfin.sdk.api.client.ApiClient,
         change: PlannedChange,
     ): Boolean = try {
-        api.itemsApi.updateItemUserData(
+        api.userDataApi.updateItemUserData(
             itemId = UUID.fromString(change.jellyfinId.toDashedUuid()),
             data = UpdateUserItemDataDto(
                 playCount = change.newTotal,

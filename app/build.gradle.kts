@@ -7,10 +7,15 @@ import java.util.Properties
 /**
  * The Jellyfin SDK this app is built against.
  *
+ * A prerelease on purpose. The SDK is generated from the server's OpenAPI spec, and the two lines
+ * target different servers: 1.8.x declares a minimum of 10.11 while 1.9.0 raises it to 12.0. This
+ * app talks to Jellyfin 12, so the stable line is the mismatched one - it was generated against an
+ * API two generations older than the server it is pointed at.
+ *
  * Declared here rather than beside the dependency so the About screen can credit it from
  * BuildConfig: an attribution that has to be updated by hand is one that goes stale.
  */
-val jellyfinSdkVersion = "1.8.12"
+val jellyfinSdkVersion = "1.9.0-beta.3"
 
 plugins {
     id("com.android.application")

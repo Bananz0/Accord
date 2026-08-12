@@ -47,7 +47,7 @@ import org.jellyfin.sdk.api.client.exception.InvalidStatusException
 import org.jellyfin.sdk.api.client.exception.SecureConnectionException
 import org.jellyfin.sdk.api.client.exception.TimeoutException
 import org.jellyfin.sdk.api.client.extensions.authenticateUserByName
-import org.jellyfin.sdk.api.client.extensions.quickConnectApi
+import org.jellyfin.sdk.api.client.extensions.authenticationApi
 import org.jellyfin.sdk.api.client.extensions.userApi
 import org.jellyfin.sdk.discovery.RecommendedServerInfo
 import org.jellyfin.sdk.discovery.RecommendedServerInfoScore
@@ -251,7 +251,7 @@ class JellyfinLoginActivity : AppCompatActivity() {
     }
 
     private suspend fun quickConnectEnabled(api: ApiClient): Boolean = try {
-        api.quickConnectApi.getQuickConnectEnabled().content
+        api.authenticationApi.getQuickConnectEnabled().content
     } catch (e: Exception) {
         Log.d(TAG, "Quick Connect unavailable", e)
         false
@@ -272,7 +272,7 @@ class JellyfinLoginActivity : AppCompatActivity() {
         lifecycleScope.launch {
             val result = withContext(Dispatchers.IO) {
                 runAuthentication(server) {
-                    it.userApi.authenticateUserByName(username, password).content
+                    it.authenticationApi.authenticateUserByName(username, password).content
                 }
             }
             finishAuthentication(result)
@@ -293,7 +293,7 @@ class JellyfinLoginActivity : AppCompatActivity() {
         quickConnectJob = lifecycleScope.launch {
             val initiated = withContext(Dispatchers.IO) {
                 try {
-                    api.quickConnectApi.initiateQuickConnect().content
+                    api.authenticationApi.initiateQuickConnect().content
                 } catch (e: Exception) {
                     Log.w(TAG, "Could not start Quick Connect", e)
                     null
@@ -318,7 +318,7 @@ class JellyfinLoginActivity : AppCompatActivity() {
                     delay(QUICK_CONNECT_POLL_MS)
                     val state = withContext(Dispatchers.IO) {
                         try {
-                            api.quickConnectApi.getQuickConnectState(secret).content
+                            api.authenticationApi.getQuickConnectState(secret).content
                         } catch (e: Exception) {
                             // The code expires server-side; treat that as still waiting and let the
                             // user cancel rather than failing under them.
@@ -334,7 +334,7 @@ class JellyfinLoginActivity : AppCompatActivity() {
                 status.setText(R.string.jellyfin_signing_in)
                 val result = withContext(Dispatchers.IO) {
                     runAuthentication(server) {
-                        it.userApi.authenticateWithQuickConnect(QuickConnectDto(secret)).content
+                        it.authenticationApi.authenticateWithQuickConnect(QuickConnectDto(secret)).content
                     }
                 }
                 finishAuthentication(result)

@@ -18,7 +18,7 @@ import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.exception.ApiClientException
 import org.jellyfin.sdk.api.client.extensions.audioApi
 import org.jellyfin.sdk.api.client.extensions.imageApi
-import org.jellyfin.sdk.api.client.extensions.itemsApi
+import org.jellyfin.sdk.api.client.extensions.libraryApi
 import org.jellyfin.sdk.model.api.BaseItemDto
 import org.jellyfin.sdk.model.api.BaseItemDtoQueryResult
 import org.jellyfin.sdk.model.api.BaseItemKind
@@ -221,7 +221,7 @@ class JellyfinLibraryLoader(
 
         while (true) {
             val response = try {
-                val result by client.itemsApi.getItems(
+                val result by client.libraryApi.getItems(
                     includeItemTypes = setOf(BaseItemKind.MUSIC_ALBUM),
                     recursive = true,
                     fields = ALBUM_PROBE_FIELDS,
@@ -255,7 +255,7 @@ class JellyfinLibraryLoader(
     private suspend fun fetchAlbumTracks(albumJellyfinId: String): List<BaseItemDto>? {
         val client = api ?: return null
         return try {
-            val result by client.itemsApi.getItems(
+            val result by client.libraryApi.getItems(
                 parentId = UUID.fromString(albumJellyfinId.toDashedUuid()),
                 includeItemTypes = setOf(BaseItemKind.AUDIO),
                 recursive = true,
@@ -287,7 +287,7 @@ class JellyfinLibraryLoader(
         val client = checkNotNull(api) { "ApiClient is required for network sync" }
         repeat(MAX_PAGE_ATTEMPTS) { attempt ->
             try {
-                val response by client.itemsApi.getItems(
+                val response by client.libraryApi.getItems(
                     includeItemTypes = setOf(BaseItemKind.AUDIO),
                     recursive = true,
                     sortBy = setOf(ItemSortBy.SORT_NAME),

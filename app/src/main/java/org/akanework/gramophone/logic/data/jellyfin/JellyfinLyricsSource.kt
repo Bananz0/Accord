@@ -4,7 +4,7 @@ import android.content.Context
 import android.util.Log
 import org.akanework.gramophone.logic.utils.LrcUtils
 import org.akanework.gramophone.logic.utils.MediaStoreUtils
-import org.jellyfin.sdk.api.client.extensions.lyricsApi
+import org.jellyfin.sdk.api.client.extensions.lyricApi
 
 /**
  * Lyrics served by the Jellyfin server.
@@ -42,7 +42,7 @@ object JellyfinLyricsSource {
             val uuid = java.util.UUID.fromString(
                 with(JellyfinReporter) { remoteId.toDashedUuid() }
             )
-            val lines = api.lyricsApi.getLyrics(uuid).content.lyrics
+            val lines = api.lyricApi.getLyrics(uuid).content.lyrics
             if (lines.isNullOrEmpty()) return null
             val lrc = buildString {
                 lines.forEach { line ->

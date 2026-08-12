@@ -14,7 +14,7 @@ import org.akanework.gramophone.logic.data.db.entity.LyricsIndex
 import org.akanework.gramophone.logic.data.db.entity.LyricsState
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinClientHolder
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinReporter.Companion.toDashedUuid
-import org.jellyfin.sdk.api.client.extensions.lyricsApi
+import org.jellyfin.sdk.api.client.extensions.lyricApi
 import java.util.UUID
 
 /**
@@ -98,7 +98,7 @@ class LyricsIndexer(private val context: Context) {
         api: org.jellyfin.sdk.api.client.ApiClient,
         jellyfinId: String,
     ): String? = try {
-        val lyric = api.lyricsApi.getLyrics(UUID.fromString(jellyfinId.toDashedUuid())).content
+        val lyric = api.lyricApi.getLyrics(UUID.fromString(jellyfinId.toDashedUuid())).content
         lyric.lyrics
             ?.mapNotNull { it.text?.trim()?.takeIf(String::isNotEmpty) }
             ?.joinToString(SEPARATOR)

@@ -2,7 +2,7 @@ package org.akanework.gramophone.logic.data.playcounts
 
 import android.util.Log
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinClientHolder
-import org.jellyfin.sdk.api.client.extensions.pluginsApi
+import org.jellyfin.sdk.api.client.extensions.pluginApi
 
 /**
  * Whether the server is already importing a service's play counts by itself.
@@ -42,7 +42,7 @@ object ServerSideScrobbling {
         val names = PLAY_COUNT_PLUGINS[source] ?: return false
         val api = JellyfinClientHolder.api() ?: return null
         return try {
-            val plugins = api.pluginsApi.getPlugins().content
+            val plugins = api.pluginApi.getPlugins().content
             plugins.any { plugin ->
                 val name = plugin.name.lowercase()
                 names.any { name.contains(it) }

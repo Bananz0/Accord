@@ -10,8 +10,8 @@ import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import org.jellyfin.sdk.api.client.extensions.playStateApi
-import org.jellyfin.sdk.api.client.extensions.userLibraryApi
+import org.jellyfin.sdk.api.client.extensions.sessionApi
+import org.jellyfin.sdk.api.client.extensions.libraryApi
 import org.jellyfin.sdk.model.api.PlayMethod
 import org.jellyfin.sdk.model.api.PlaybackOrder
 import org.jellyfin.sdk.model.api.PlaybackProgressInfo
@@ -42,7 +42,7 @@ class JellyfinReporter(private val context: Context) {
     private fun Long.msToTicks(): Long = this * TICKS_PER_MILLISECOND
 
     fun reportStart(mediaId: String?, positionMs: Long, isPaused: Boolean) = report(mediaId) { api, id ->
-        api.playStateApi.reportPlaybackStart(
+        api.sessionApi.reportPlaybackStart(
             PlaybackStartInfo(
                 itemId = id,
                 positionTicks = positionMs.msToTicks(),
@@ -63,7 +63,7 @@ class JellyfinReporter(private val context: Context) {
     }
 
     fun reportProgress(mediaId: String?, positionMs: Long, isPaused: Boolean) = report(mediaId) { api, id ->
-        api.playStateApi.reportPlaybackProgress(
+        api.sessionApi.reportPlaybackProgress(
             PlaybackProgressInfo(
                 itemId = id,
                 positionTicks = positionMs.msToTicks(),
@@ -83,7 +83,7 @@ class JellyfinReporter(private val context: Context) {
     }
 
     fun reportStopped(mediaId: String?, positionMs: Long) = report(mediaId) { api, id ->
-        api.playStateApi.reportPlaybackStopped(
+        api.sessionApi.reportPlaybackStopped(
             PlaybackStopInfo(
                 itemId = id,
                 positionTicks = positionMs.msToTicks(),
