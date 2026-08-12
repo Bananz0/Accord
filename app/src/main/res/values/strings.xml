@@ -166,6 +166,11 @@
 Accord itself is open source under the GNU General Public License v3.0, and began as a fork of Gramophone by the Akane Foundation.
 
 Jellyfin is a Free Software Media System and is not affiliated with Accord.</string>
+    <string name="output_picker_title">Play on</string>
+    <string name="output_this_phone">This phone</string>
+    <string name="output_system_switcher">Bluetooth &amp; speakers…</string>
+    <string name="output_nothing_to_send">Nothing in the queue to hand over</string>
+    <string name="output_handover_failed">Could not reach that device</string>
     <string name="category_lyrics">Lyrics</string>
     <string name="settings_lyric_search">Lyric search</string>
     <string name="lyric_index_empty">Not indexed yet</string>

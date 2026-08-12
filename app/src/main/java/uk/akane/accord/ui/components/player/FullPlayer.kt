@@ -53,7 +53,10 @@ import androidx.media3.common.Tracks
 import androidx.annotation.DrawableRes
 import androidx.lifecycle.findViewTreeLifecycleOwner
 import androidx.lifecycle.lifecycleScope
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinItemResolver
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinRemoteTargets
+import org.jellyfin.sdk.model.api.PlaystateCommand
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinLibraryLoader.Companion.EXTRA_SOURCE_CONTAINER
 import org.akanework.gramophone.logic.data.jellyfin.StreamQuality
 import org.akanework.gramophone.logic.utils.AudioQuality
@@ -166,6 +169,7 @@ class FullPlayer @JvmOverloads constructor(
     private var currentQualityDetails: AudioQuality.Details? = null
     private var outputDeviceIcon: ImageView
     private var outputDeviceName: TextView
+    private var remoteTargetJob: kotlinx.coroutines.Job? = null
     private var audioDeviceCallback: AudioDeviceCallback? = null
 
     private var fullPlayerToolbar: FullPlayerToolbar
@@ -356,9 +360,6 @@ class FullPlayer @JvmOverloads constructor(
         queueContainer.doOnLayout {
             queueEnterOffset = resolveQueueEnterOffset()
         }
-        findViewTreeLifecycleOwner()?.lifecycleScope?.launch {
-            JellyfinRemoteTargets.active.collect { refreshOutputDevice() }
-        }
 
         ellipsisButton.setOnCheckedChangeListener { v, _ ->
             v.performPressHaptic()
@@ -548,7 +549,7 @@ class FullPlayer @JvmOverloads constructor(
         airplayOverlayButton.setOnClickListener {
             it.performPressHaptic()
             animateBottomButtonPress(airplayOverlayButton)
-            startSystemMediaControl()
+            showOutputPicker()
         }
 
 
@@ -614,6 +615,107 @@ class FullPlayer @JvmOverloads constructor(
         }
 
         updateVolumeSlider()
+    }
+
+    /**
+     * Where the sound comes out: this phone, another Jellyfin client, or a Bluetooth device.
+     *
+     * Android's own output switcher cannot be extended, so the Jellyfin devices could not simply be
+     * added to it. This sheet lists what the app knows about and keeps a way through to the system
+     * one, rather than replacing a picker people already know with a worse copy of it - the
+     * headphones in your pocket still belong to Android.
+     */
+    private fun showOutputPicker() {
+        val owner = findViewTreeLifecycleOwner() ?: return
+        owner.lifecycleScope.launch {
+            val targets = JellyfinRemoteTargets.available()
+            val active = JellyfinRemoteTargets.active.value
+
+            val labels = mutableListOf<CharSequence>()
+            val actions = mutableListOf<() -> Unit>()
+
+            labels += context.getString(R.string.output_this_phone)
+            actions += { handBackToThisPhone() }
+
+            targets.forEach { target ->
+                labels += target.deviceName.ifBlank { target.client } +
+                    "\n" + target.client
+                actions += { handOverTo(target) }
+            }
+
+            labels += context.getString(R.string.output_system_switcher)
+            actions += { startSystemMediaControl() }
+
+            // Marks where sound is going now, so the sheet answers "where is this playing" as well
+            // as "where could it play".
+            val checked = if (active == null) 0
+            else targets.indexOfFirst { it.sessionId == active.sessionId }.let {
+                if (it >= 0) it + 1 else 0
+            }
+
+            MaterialAlertDialogBuilder(context)
+                .setTitle(R.string.output_picker_title)
+                .setSingleChoiceItems(labels.toTypedArray(), checked) { dialog, which ->
+                    dialog.dismiss()
+                    actions.getOrNull(which)?.invoke()
+                }
+                .setNegativeButton(android.R.string.cancel, null)
+                .show()
+        }
+    }
+
+    /**
+     * Hands the queue to another client and stops playing it here.
+     *
+     * The local player is paused rather than cleared: coming back should not mean rebuilding the
+     * queue, and the other device is playing from the server anyway. Position travels with it, so
+     * the track resumes where it was rather than restarting.
+     */
+    private fun handOverTo(target: JellyfinRemoteTargets.Target) {
+        val owner = findViewTreeLifecycleOwner() ?: return
+        val player = instance ?: return
+        val startIndex = player.currentMediaItemIndex
+        val positionMs = player.currentPosition
+        val localIds = (0 until player.mediaItemCount).map {
+            player.getMediaItemAt(it).mediaId
+        }
+        owner.lifecycleScope.launch {
+            val remoteIds = withContext(Dispatchers.IO) {
+                localIds.mapNotNull {
+                    JellyfinItemResolver.remoteIdForMediaId(context, it)
+                }
+            }
+            if (remoteIds.isEmpty()) {
+                Toast.makeText(context, R.string.output_nothing_to_send, Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            val sent = JellyfinRemoteTargets.playOn(
+                target = target,
+                remoteIds = remoteIds,
+                startIndex = startIndex,
+                startPositionMs = positionMs,
+            )
+            if (sent) {
+                player.pause()
+            } else {
+                Toast.makeText(context, R.string.output_handover_failed, Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    /**
+     * Takes playback back.
+     *
+     * Stops the other device first, or two things are playing at once - which is what the user was
+     * trying to avoid by moving it in the first place.
+     */
+    private fun handBackToThisPhone() {
+        val owner = findViewTreeLifecycleOwner() ?: return
+        owner.lifecycleScope.launch {
+            JellyfinRemoteTargets.sendTransport(PlaystateCommand.STOP)
+            JellyfinRemoteTargets.playLocally()
+            instance?.play()
+        }
     }
 
     private fun startSystemMediaControl() {
@@ -2139,6 +2241,8 @@ class FullPlayer @JvmOverloads constructor(
     }
 
     override fun onDetachedFromWindow() {
+        remoteTargetJob?.cancel()
+        remoteTargetJob = null
         stopPositionUpdates()
         removeCallbacks(hideControlsRunnable)
         controlsAnimator?.cancel()
@@ -2171,6 +2275,14 @@ class FullPlayer @JvmOverloads constructor(
         super.onAttachedToWindow()
         if (audioDeviceCallback == null) {
             audioDeviceCallback = AudioOutput.register(context) { refreshOutputDevice() }
+        }
+        // Not in the constructor: there is no lifecycle owner in the view tree until it is
+        // attached, so the collector was never started and handing playback over silently left the
+        // button showing the wrong thing. The null-safe call is what made it silent.
+        if (remoteTargetJob == null) {
+            remoteTargetJob = findViewTreeLifecycleOwner()?.lifecycleScope?.launch {
+                JellyfinRemoteTargets.active.collect { refreshOutputDevice() }
+            }
         }
         refreshOutputDevice()
         if (!isVolumeReceiverRegistered) {
