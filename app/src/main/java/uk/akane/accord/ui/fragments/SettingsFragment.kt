@@ -145,6 +145,17 @@ class SettingsFragment : Fragment() {
             .show()
     }
 
+    /** What this app is built on, and under what terms. */
+    private fun showAttribution() {
+        MaterialAlertDialogBuilder(requireContext())
+            .setTitle(R.string.settings_open_source)
+            .setMessage(
+                getString(R.string.settings_attribution_body, BuildConfig.JELLYFIN_SDK_VERSION)
+            )
+            .setPositiveButton(android.R.string.ok, null)
+            .show()
+    }
+
     private fun push(fragment: Fragment) {
         mainActivity.fragmentSwitcherView.addFragmentToCurrentStack(fragment)
     }
@@ -347,6 +358,16 @@ class SettingsFragment : Fragment() {
                         title = getString(R.string.settings_version),
                         summary = BuildConfig.MY_VERSION_NAME
                     ) { /* Nothing to open yet. */ },
+                    // Credited because the app is built on it, and because the SDK's licence and
+                    // the project's own ask for it. A version is included: "which Jellyfin SDK"
+                    // is the first question any bug report against this app has to answer.
+                    SettingsListBuilder.Row.Navigation(
+                        title = getString(R.string.settings_open_source),
+                        summary = getString(
+                            R.string.settings_open_source_summary,
+                            BuildConfig.JELLYFIN_SDK_VERSION,
+                        )
+                    ) { showAttribution() },
                 )
             ),
         )

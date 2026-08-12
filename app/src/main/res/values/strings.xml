@@ -159,6 +159,13 @@
     <string name="import_source_ytmusic_summary">Needs your YouTube history from Google Takeout.</string>
     <string name="queue_section_next">Playing Next</string>
     <string name="queue_section_from">Playing Next From: %1$s</string>
+    <string name="settings_open_source">Open source</string>
+    <string name="settings_open_source_summary">Built on the Jellyfin SDK %1$s</string>
+    <string name="settings_attribution_body">Accord is a Jellyfin client, built on the official Jellyfin Kotlin SDK (version %1$s) and licensed under the Mozilla Public License 2.0.
+
+Accord itself is open source under the GNU General Public License v3.0, and began as a fork of Gramophone by the Akane Foundation.
+
+Jellyfin is a Free Software Media System and is not affiliated with Accord.</string>
     <string name="category_lyrics">Lyrics</string>
     <string name="settings_lyric_search">Lyric search</string>
     <string name="lyric_index_empty">Not indexed yet</string>

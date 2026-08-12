@@ -4,6 +4,14 @@ import com.android.build.gradle.tasks.PackageAndroidArtifact
 import org.jetbrains.kotlin.util.removeSuffixIfPresent
 import java.util.Properties
 
+/**
+ * The Jellyfin SDK this app is built against.
+ *
+ * Declared here rather than beside the dependency so the About screen can credit it from
+ * BuildConfig: an attribution that has to be updated by hand is one that goes stale.
+ */
+val jellyfinSdkVersion = "1.8.12"
+
 plugins {
     id("com.android.application")
     kotlin("android")
@@ -79,6 +87,11 @@ android {
             "String",
             "MY_VERSION_NAME",
             "\"Beta 2\""
+        )
+        buildConfigField(
+            "String",
+            "JELLYFIN_SDK_VERSION",
+            "\"$jellyfinSdkVersion\""
         )
         buildConfigField(
             "String",
@@ -234,7 +247,6 @@ configurations.configureEach {
 dependencies {
     val media3Version = "1.9.0"
     val roomVersion = "2.7.0-rc02"
-    val jellyfinSdkVersion = "1.8.12"
     val slf4jVersion = "2.0.18"
 
     ksp("androidx.room:room-compiler:$roomVersion")
