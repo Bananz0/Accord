@@ -37,7 +37,7 @@ import androidx.recyclerview.widget.RecyclerView
 import uk.akane.accord.R
 import org.akanework.gramophone.logic.allowDiskAccessInStrictMode
 import org.akanework.gramophone.logic.dpToPx
-import org.akanework.gramophone.logic.enableEdgeToEdgePaddingListener
+import uk.akane.accord.ui.components.NavigationBar
 
 /**
  * BasePreferenceFragment:
@@ -64,14 +64,18 @@ abstract class BasePreferenceFragment : PreferenceFragmentCompat(),
         view.setBackgroundColor(
             ContextCompat.getColor(
                 requireContext(),
-                R.color.contrast_colorBackground
+                R.color.settings_background
             )
         )
         view.findViewById<RecyclerView>(androidx.preference.R.id.recycler_view).apply {
             val side = 16.dpToPx(context)
             setPadding(side, paddingTop + 4.dpToPx(context), side, paddingBottom)
             addItemDecoration(SettingsGroupDecoration())
-            enableEdgeToEdgePaddingListener()
+            // The original Accord screen lets its navigation bar own the scroll insets and title
+            // collapse. Doing that here removes the last visible Material-settings seam.
+            requireParentFragment().view
+                ?.findViewById<NavigationBar>(R.id.navigation_bar)
+                ?.attach(this)
         }
     }
 

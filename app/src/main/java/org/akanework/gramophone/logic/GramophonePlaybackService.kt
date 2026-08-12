@@ -40,6 +40,7 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.IllegalSeekPositionException
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -102,6 +103,7 @@ import org.akanework.gramophone.logic.utils.exoplayer.GramophoneRenderFactory
 import uk.akane.accord.ui.MainActivity
 import kotlin.random.Random
 import org.akanework.gramophone.logic.data.jellyfin.QueuePrefetcher
+import uk.akane.accord.logic.player.UsbHiFiManager
 
 
 /**
@@ -110,7 +112,8 @@ import org.akanework.gramophone.logic.data.jellyfin.QueuePrefetcher
  */
 @androidx.annotation.OptIn(UnstableApi::class)
 class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Listener,
-    MediaLibraryService.MediaLibrarySession.Callback, Player.Listener {
+    MediaLibraryService.MediaLibrarySession.Callback, Player.Listener,
+    SharedPreferences.OnSharedPreferenceChangeListener {
 
     companion object {
         private const val TAG = "GramoPlaybackService"
@@ -128,6 +131,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         const val SERVICE_SET_TIMER = "set_timer"
         const val SERVICE_QUERY_TIMER = "query_timer"
         const val SERVICE_GET_LYRICS = "get_lyrics"
+        const val SERVICE_GET_AUDIO_FORMAT = "get_audio_format"
 
         /** How many tracks past the current one are warmed; see QueuePrefetcher. */
         private const val PREFETCH_LOOKAHEAD = 5
@@ -154,6 +158,8 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
     private lateinit var prefs: SharedPreferences
     private lateinit var reporter: JellyfinReporter
     private lateinit var scrobbler: LastFmScrobbler
+    private lateinit var usbHiFiManager: UsbHiFiManager
+    private var audioSinkInputFormat: Format? = null
 
     /** The track currently reported to Jellyfin as playing, by media3 media id. */
     private var reportedMediaId: String? = null
@@ -211,6 +217,12 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         super.onCreate()
         nm = NotificationManagerCompat.from(this)
         prefs = PreferenceManager.getDefaultSharedPreferences(this)
+        prefs.registerOnSharedPreferenceChangeListener(this)
+        usbHiFiManager = UsbHiFiManager(
+            context = this,
+            enabled = { prefs.getBoolean("usb_hifi", true) },
+            onChanged = { broadcastAudioFormat() },
+        )
         setListener(this)
         setMediaNotificationProvider(
             DefaultMediaNotificationProvider.Builder(this).build().apply {
@@ -277,9 +289,17 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         val player = EndedWorkaroundPlayer(
             ExoPlayer.Builder(
                 this,
-                GramophoneRenderFactory(this)
+                GramophoneRenderFactory(
+                    this,
+                    configurationListener = ::onAudioSinkInputFormatChanged,
+                )
                     .setEnableAudioFloatOutput(
-                        prefs.getBooleanStrict("floatoutput", false)
+                        // Media3 otherwise truncates 24/32-bit PCM to 16-bit. IEEE float carries
+                        // every 24-bit PCM value exactly and is the released library's supported
+                        // high-resolution path; the USB manager then asks Android for that exact
+                        // format rather than pretending the decoder input reached AudioTrack.
+                        prefs.getBoolean("usb_hifi", true) ||
+                            prefs.getBooleanStrict("floatoutput", false)
                     )
                     .setEnableDecoderFallback(true)
                     .setEnableAudioTrackPlaybackParams( // hardware/system-accelerated playback speed
@@ -453,6 +473,8 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         // Important: this must happen before sending stop() as that changes state ENDED -> IDLE.
         // Immediately, not debounced: nothing will be around to run a delayed save.
         lastPlayedManager.saveNow()
+        prefs.unregisterOnSharedPreferenceChangeListener(this)
+        usbHiFiManager.release()
         mediaSession!!.player.stop()
         broadcastAudioSessionClose()
         controller!!.release()
@@ -463,6 +485,10 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         lyrics = null
         unregisterReceiver(headSetReceiver)
         super.onDestroy()
+    }
+
+    override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
+        if (key == "usb_hifi") usbHiFiManager.refreshRoute()
     }
 
     // This onGetSession is a necessary method override needed by
@@ -496,6 +522,20 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         }
     }
 
+    /** Runs before DefaultAudioSink creates AudioTrack, so Android sees the USB preference in time. */
+    private fun onAudioSinkInputFormatChanged(format: Format?) {
+        audioSinkInputFormat = format
+        usbHiFiManager.configure(format)
+        broadcastAudioFormat()
+    }
+
+    private fun broadcastAudioFormat() {
+        mediaSession?.broadcastCustomCommand(
+            SessionCommand(SERVICE_GET_AUDIO_FORMAT, Bundle.EMPTY),
+            Bundle.EMPTY,
+        )
+    }
+
     // Configure commands available to the controller in onConnect()
     override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo)
             : MediaSession.ConnectionResult {
@@ -516,6 +556,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         availableSessionCommands.add(SessionCommand(SERVICE_GET_SESSION, Bundle.EMPTY))
         availableSessionCommands.add(SessionCommand(SERVICE_QUERY_TIMER, Bundle.EMPTY))
         availableSessionCommands.add(SessionCommand(SERVICE_GET_LYRICS, Bundle.EMPTY))
+        availableSessionCommands.add(SessionCommand(SERVICE_GET_AUDIO_FORMAT, Bundle.EMPTY))
         handler.post {
             session.sendCustomCommand(
                 controller,
@@ -560,6 +601,13 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
             SERVICE_GET_LYRICS -> {
                 SessionResult(SessionResult.RESULT_SUCCESS).also {
                     it.extras.putParcelableArray("lyrics", lyrics?.toTypedArray())
+                }
+            }
+
+            SERVICE_GET_AUDIO_FORMAT -> {
+                SessionResult(SessionResult.RESULT_SUCCESS).also {
+                    it.extras.putBundle("sink_format", audioSinkInputFormat?.toBundle())
+                    it.extras.putParcelable("usb_hifi", usbHiFiManager.status)
                 }
             }
 

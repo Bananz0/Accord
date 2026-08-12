@@ -339,6 +339,16 @@ This happens on its own while charging on Wi‑Fi, so it costs no battery or dat
     <string name="music_quality_depth_rate">%1$d-bit/%2$s kHz</string>
     <string name="music_quality_rate">%1$s kHz</string>
     <string name="music_quality_unknown">The player did not report a format for this track</string>
+    <string name="music_quality_bit_perfect">Bit-perfect</string>
+    <string name="music_quality_usb_lossless">Lossless · USB</string>
+    <string name="music_quality_source">Source: %1$s</string>
+    <string name="music_quality_output">Output: %1$s</string>
+    <string name="music_quality_usb_device">DAC: %1$s</string>
+    <string name="music_quality_bit_perfect_detail">Bit-perfect: no system mixing, resampling, volume scaling, or effects</string>
+    <string name="music_quality_usb_exact_detail">Exact USB mixer format; the device does not advertise Android’s optional bit-perfect mode</string>
+    <string name="music_quality_sheet_subtitle">The signal Accord is sending right now</string>
+    <string name="settings_usb_hifi">High-fidelity USB output</string>
+    <string name="settings_usb_hifi_summary">Match the DAC’s sample rate and format on Android 14+; uses bit-perfect mode when the device supports it</string>
 
     <!-- Setup wizard, Jellyfin page (replaces upstream's media permission page). -->
     <string name="setup_jellyfin_title">Connect your library</string>

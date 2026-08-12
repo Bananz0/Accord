@@ -5,10 +5,10 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import com.google.android.material.appbar.AppBarLayout
-import com.google.android.material.appbar.MaterialToolbar
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import uk.akane.accord.R
-import org.akanework.gramophone.logic.enableEdgeToEdgePaddingListener
+import uk.akane.accord.ui.components.NavigationBar
 
 abstract class BaseSettingFragment(
     private val str: Int,
@@ -20,11 +20,14 @@ abstract class BaseSettingFragment(
         savedInstanceState: Bundle?,
     ): View? {
         val rootView = inflater.inflate(R.layout.fragment_top_settings, container, false)
-        val topAppBar = rootView.findViewById<MaterialToolbar>(R.id.topAppBar)
-
-        rootView.findViewById<AppBarLayout>(R.id.appbarlayout).enableEdgeToEdgePaddingListener()
-        topAppBar.title = getString(str)
-        topAppBar.setNavigationOnClickListener {
+        val navigationBar = rootView.findViewById<NavigationBar>(R.id.navigation_bar)
+        navigationBar.setTitle(getString(str))
+        ViewCompat.setOnApplyWindowInsetsListener(navigationBar) { view, insets ->
+            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            view.setPadding(view.paddingLeft, systemBars.top, view.paddingRight, view.paddingBottom)
+            insets
+        }
+        navigationBar.setOnReturnClickListener {
             // These screens are now reached from the Accord shell, whose back stack is the
             // fragment switcher's rather than the activity's. Fall back to the old behaviour for
             // whatever still hosts them the previous way.

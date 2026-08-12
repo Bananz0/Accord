@@ -1,7 +1,6 @@
 package uk.akane.accord.ui.components.player
 
 import android.annotation.SuppressLint
-import android.app.AlertDialog
 import android.content.Context
 import android.graphics.RectF
 import android.graphics.Rect
@@ -129,6 +128,7 @@ import android.view.animation.OvershootInterpolator
 import androidx.preference.PreferenceManager
 import org.akanework.gramophone.logic.data.library.songListSnapshot
 import org.akanework.gramophone.logic.data.AutoplayQueue
+import uk.akane.accord.logic.player.UsbHiFiStatus
 
 class FullPlayer @JvmOverloads constructor(
     context: Context,
@@ -169,6 +169,7 @@ class FullPlayer @JvmOverloads constructor(
     private var qualityBadge: TextView
     private var qualityAvailableHint: TextView
     private var currentQualityDetails: AudioQuality.Details? = null
+    private var currentUsbHiFiStatus: UsbHiFiStatus? = null
     private var outputDeviceIcon: ImageView
     private var outputDeviceName: TextView
     private var remoteTargetJob: kotlinx.coroutines.Job? = null
@@ -559,15 +560,22 @@ class FullPlayer @JvmOverloads constructor(
         // command once it has them, which for a Jellyfin lookup is well after the track started.
         activity.controllerViewModel.customCommandListeners.addCallback(activity.lifecycle) {
                 _, command, _ ->
-            if (command.customAction == GramophonePlaybackService.SERVICE_GET_LYRICS) {
-                refreshLyrics()
-                Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
-            } else {
+            when (command.customAction) {
+                GramophonePlaybackService.SERVICE_GET_LYRICS -> {
+                    refreshLyrics()
+                    Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                }
+                GramophonePlaybackService.SERVICE_GET_AUDIO_FORMAT -> {
+                    refreshAudioOutputStatus()
+                    Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                }
+                else -> {
                 // The dispatcher walks listeners until one claims the command, so anything not
                 // handled here has to decline rather than swallow it.
-                Futures.immediateFuture(
-                    SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED)
-                )
+                    Futures.immediateFuture(
+                        SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED)
+                    )
+                }
             }
         }
 
@@ -587,6 +595,7 @@ class FullPlayer @JvmOverloads constructor(
             onMediaMetadataChanged(instance?.mediaMetadata ?: MediaMetadata.EMPTY)
             instance?.currentTracks?.let { onTracksChanged(it) }
             refreshLyrics()
+            refreshAudioOutputStatus()
             updateVolumeSlider()
             firstTime = false
         }
@@ -1624,9 +1633,46 @@ class FullPlayer @JvmOverloads constructor(
             qualityBadge.visibility = GONE
             showAvailableQualityHint()
         } else {
-            qualityBadge.setText(details.quality.label)
+            updateQualityBadgeText()
             syncQualityBadgeVisibility()
         }
+        refreshAudioOutputStatus()
+    }
+
+    /** Reads the exact USB mixer mode that Android accepted for this stream. */
+    private fun refreshAudioOutputStatus() {
+        val controller = instance ?: return
+        CoroutineScope(Dispatchers.Main).launch {
+            val extras = runCatching {
+                val future = controller.sendCustomCommand(
+                    SessionCommand(
+                        GramophonePlaybackService.SERVICE_GET_AUDIO_FORMAT,
+                        Bundle.EMPTY,
+                    ),
+                    Bundle.EMPTY,
+                )
+                withContext(Dispatchers.IO) { future.get().extras }
+            }.onFailure { Log.e(TAG, "fetching audio output format failed", it) }.getOrNull()
+                ?: return@launch
+            currentUsbHiFiStatus = BundleCompat.getParcelable(
+                extras,
+                "usb_hifi",
+                UsbHiFiStatus::class.java,
+            )
+            updateQualityBadgeText()
+        }
+    }
+
+    private fun updateQualityBadgeText() {
+        val details = currentQualityDetails ?: return
+        qualityBadge.setText(qualityBadgeText(details))
+    }
+
+    private fun qualityBadgeText(details: AudioQuality.Details): Int = when {
+        details.quality == AudioQuality.DOLBY_ATMOS -> details.quality.label
+        currentUsbHiFiStatus?.bitPerfect == true -> R.string.music_quality_bit_perfect
+        currentUsbHiFiStatus != null -> R.string.music_quality_usb_lossless
+        else -> details.quality.label
     }
 
     /**
@@ -1684,26 +1730,63 @@ class FullPlayer @JvmOverloads constructor(
     private fun showQualityDetails() {
         val details = currentQualityDetails ?: return
         val parts = buildList {
-            details.codec?.let { add(it) }
-            val bitDepth = details.bitDepth
-            val sampleRate = details.sampleRateHz
-            if (bitDepth != null && sampleRate != null) {
-                add(context.getString(R.string.music_quality_depth_rate, bitDepth, sampleRate.khz()))
-            } else if (sampleRate != null) {
-                add(context.getString(R.string.music_quality_rate, sampleRate.khz()))
+            val source = buildList {
+                details.codec?.let { add(it) }
+                val bitDepth = details.bitDepth
+                val sampleRate = details.sampleRateHz
+                if (bitDepth != null && sampleRate != null) {
+                    add(context.getString(R.string.music_quality_depth_rate, bitDepth, sampleRate.khz()))
+                } else if (sampleRate != null) {
+                    add(context.getString(R.string.music_quality_rate, sampleRate.khz()))
+                }
+            }.joinToString(" ")
+            if (source.isNotEmpty()) add(context.getString(R.string.music_quality_source, source))
+
+            currentUsbHiFiStatus?.let { usb ->
+                add(context.getString(R.string.music_quality_usb_device, usb.deviceName))
+                val output = buildString {
+                    usb.encoding.bitDepthName()?.let { append(it).append("/") }
+                    append(usb.sampleRateHz.khz()).append(" kHz")
+                }
+                add(context.getString(R.string.music_quality_output, output))
+                add(
+                    context.getString(
+                        if (usb.bitPerfect) R.string.music_quality_bit_perfect_detail
+                        else R.string.music_quality_usb_exact_detail
+                    )
+                )
             }
         }
-        AlertDialog.Builder(context)
-            .setTitle(details.quality.label)
-            .setMessage(
-                parts.joinToString(" ").ifEmpty { context.getString(R.string.music_quality_unknown) }
-            )
-            .setPositiveButton(android.R.string.ok, null)
-            .show()
+        val sheet = BottomSheetDialog(context, R.style.Theme_Accord_OutputPicker)
+        val root = LayoutInflater.from(context)
+            .inflate(R.layout.layout_audio_quality_sheet, null, false)
+        root.findViewById<TextView>(R.id.audio_quality_title)
+            .setText(qualityBadgeText(details))
+        val rows = root.findViewById<LinearLayout>(R.id.audio_quality_rows)
+        val messages = parts.ifEmpty { listOf(context.getString(R.string.music_quality_unknown)) }
+        messages.forEachIndexed { index, message ->
+            val row = LayoutInflater.from(context)
+                .inflate(R.layout.layout_audio_quality_row, rows, false)
+            row.findViewById<TextView>(R.id.audio_quality_row_text).text = message
+            row.findViewById<View>(R.id.audio_quality_row_divider).visibility =
+                if (index == messages.lastIndex) GONE else VISIBLE
+            rows.addView(row)
+        }
+        sheet.setContentView(root)
+        sheet.show()
     }
 
     /** 44100 reads as "44.1", 48000 as "48" - trailing zeroes here are noise. */
     private fun Int.khz(): String = "%.1f".format(this / 1000f).removeSuffix(".0")
+
+    private fun Int.bitDepthName(): String? = when (this) {
+        android.media.AudioFormat.ENCODING_PCM_8BIT -> "8-bit"
+        android.media.AudioFormat.ENCODING_PCM_16BIT -> "16-bit"
+        android.media.AudioFormat.ENCODING_PCM_24BIT_PACKED -> "24-bit"
+        android.media.AudioFormat.ENCODING_PCM_32BIT,
+        android.media.AudioFormat.ENCODING_PCM_FLOAT -> "32-bit"
+        else -> null
+    }
 
     /**
      * Where the artwork is, for the panel's gesture handling. Null while the player is not fully
