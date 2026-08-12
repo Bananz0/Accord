@@ -2,6 +2,7 @@ package uk.akane.accord.ui.components
 
 import android.animation.ValueAnimator
 import android.content.Context
+import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.graphics.Path
 import android.graphics.BlendMode
@@ -13,6 +14,7 @@ import android.graphics.RenderNode
 import android.graphics.RectF
 import android.graphics.Shader
 import android.text.TextPaint
+import android.text.TextUtils
 import android.util.AttributeSet
 import android.util.Log
 import android.view.MotionEvent
@@ -32,6 +34,7 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.findViewTreeLifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.RecyclerView
+import androidx.preference.PreferenceManager
 import coil3.imageLoader
 import coil3.request.Disposable
 import coil3.request.ImageRequest
@@ -108,8 +111,15 @@ class NavigationBar @JvmOverloads constructor(
 
     private val expandedNavigationBarBackgroundColor = resources.getColor(R.color.navigationBarExpandedBackground, null)
 
-    private val blurAppendColor = resources.getColor(R.color.navigationBarBlurAppendColor, null)
-    private val blurAppendColorDark = resources.getColor(R.color.navigationBarBlurAppendDarkModeColor, null)
+    private val blurAppendColor =
+        resources.getColor(R.color.navigationBarHeaderBlurAppendColor, null)
+    private val blurAppendColorDark =
+        resources.getColor(R.color.navigationBarHeaderBlurAppendDarkModeColor, null)
+    private val preferences = PreferenceManager.getDefaultSharedPreferences(context)
+    private val statusBarPreferenceListener =
+        SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == BACKGROUNDLESS_STATUS_BAR) invalidate()
+        }
 
     private var titleText = ""
     private var returnButtonText = ""
@@ -206,6 +216,7 @@ class NavigationBar @JvmOverloads constructor(
     private var renderShowProgress = 0F
     private var scrollOffsetPx = 0
     private var collapseStartOffsetPx = 0
+    private var holdExpandedUntilUserScroll = false
 
     var blurRadius: Float = 0F
         set(value) {
@@ -253,7 +264,7 @@ class NavigationBar @JvmOverloads constructor(
         typeface = ResourcesCompat.getFont(context, R.font.inter_bold)
     }
     private val expandedTitleFontMetrics by lazy { expandedTitlePaint.fontMetrics }
-    private val collapsedTitlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    private val collapsedTitlePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         color = resources.getColor(R.color.navigationBarTitle, null)
         textSize = 18.sp.px
         textAlign = Paint.Align.CENTER
@@ -317,7 +328,10 @@ class NavigationBar @JvmOverloads constructor(
             0F,
             width.toFloat(),
             height.toFloat(),
-            ((1f - collapseProgress) * 255).toInt()
+            // These titles occupy almost the same vertical space while the bar collapses. A
+            // crossfade therefore reads as duplicated text, while a gap leaves pages such as
+            // Downloads nameless after the first scroll. Hand ownership over directly instead.
+            if (collapseProgress < TITLE_SWITCH_PROGRESS) 255 else 0
         )
 
         drawExpandedTitle(canvas)
@@ -342,13 +356,22 @@ class NavigationBar @JvmOverloads constructor(
                 (renderShowProgress * 255).toInt()
             )
 
-            canvas.withTranslation(0F, -translationY) {
-                renderNode?.let {
-                    canvas.drawRenderNode(it)
+            canvas.withSave {
+                // When requested, the status inset is genuinely backgroundless. The system owns
+                // the indicators; Accord starts its collapsed/blurred surface underneath them.
+                clipRect(
+                    0F,
+                    statusBarSurfaceTop(),
+                    width.toFloat(),
+                    height.toFloat(),
+                )
+                withTranslation(0F, -translationY) {
+                    renderNode?.let {
+                        drawRenderNode(it)
+                    }
                 }
+                drawRenderNodeOverlay(this)
             }
-
-            drawRenderNodeOverlay(canvas)
             drawBottomDivider(canvas)
 
             canvas.restoreToCount(layerRender)
@@ -391,8 +414,18 @@ class NavigationBar @JvmOverloads constructor(
             expandedNavigationBarBackgroundColor
         }
         if (Color.alpha(color) == 0) return
-        canvas.drawColor(color)
+        canvas.withSave {
+            clipRect(0F, statusBarSurfaceTop(), width.toFloat(), height.toFloat())
+            drawColor(color)
+        }
     }
+
+    private fun statusBarSurfaceTop(): Float =
+        if (preferences.getBoolean(BACKGROUNDLESS_STATUS_BAR, true)) {
+            paddingTop.toFloat()
+        } else {
+            0F
+        }
 
     private fun drawBottomDivider(canvas: Canvas) {
         canvas.drawRect(
@@ -429,9 +462,25 @@ class NavigationBar @JvmOverloads constructor(
 
     private fun drawCollapsedTitle(canvas: Canvas) {
         val paint = collapsedTitlePaint
-        val text = titleText
-
         val x = width / 2f
+
+        // A centered title must not draw through the leading "Settings" return control. Long
+        // settings names used to collide with it while short names such as Spotify happened to fit.
+        // Preserve true centering, but shorten the title to the symmetrical space left around it.
+        val titleGap = 12.dp.px
+        val leadingEdge = if (shouldDrawReturnButton) {
+            updateReturnButtonBounds().right + titleGap
+        } else {
+            EXPANDED_SIDE_PADDING.dp.px
+        }
+        val trailingEdge = width - EXPANDED_SIDE_PADDING.dp.px
+        val halfWidth = minOf(x - leadingEdge, trailingEdge - x).coerceAtLeast(0f)
+        val text = TextUtils.ellipsize(
+            titleText,
+            paint,
+            halfWidth * 2f,
+            TextUtils.TruncateAt.END,
+        ).toString()
 
         val fm = paint.fontMetrics
 
@@ -444,7 +493,7 @@ class NavigationBar @JvmOverloads constructor(
 
         val baseline = centerY - (fm.ascent + fm.descent) / 2f
 
-        paint.alpha = (255 * collapseProgress).toInt()
+        paint.alpha = if (collapseProgress >= TITLE_SWITCH_PROGRESS) 255 else 0
 
         canvas.drawText(text, x, baseline, paint)
 
@@ -756,18 +805,44 @@ class NavigationBar @JvmOverloads constructor(
             lifecycle?.addObserver(this)
 
             view.clipToPadding = false
-            view.setPadding(
-                view.paddingLeft,
-                view.paddingTop + (if (applyTopPadding) height else 0),
-                view.paddingEnd,
-                if (applyBottomPadding) activity.bottomHeight else view.paddingBottom
-            )
+            val contentTopPadding = view.paddingTop
+            var appliedNavigationHeight = -1
+            fun updateNavigationPadding() {
+                val navigationHeight = if (applyTopPadding) height else 0
+                if (navigationHeight == appliedNavigationHeight) return
+                appliedNavigationHeight = navigationHeight
+                view.setPadding(
+                    view.paddingLeft,
+                    contentTopPadding + navigationHeight,
+                    view.paddingEnd,
+                    if (applyBottomPadding) activity.bottomHeight else view.paddingBottom,
+                )
+            }
+            updateNavigationPadding()
+            addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+                updateNavigationPadding()
+            }
 
             drawRenderNode()
 
             val scrollListener = object : RecyclerView.OnScrollListener() {
+                override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
+                    super.onScrollStateChanged(recyclerView, newState)
+                    if (newState == RecyclerView.SCROLL_STATE_DRAGGING) {
+                        holdExpandedUntilUserScroll = false
+                    }
+                }
+
                 override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
                     super.onScrolled(recyclerView, dx, dy)
+                    // Preference rows can update their summaries just after a destination opens.
+                    // RecyclerView reports the resulting relayout through this callback even
+                    // though the user has not moved the list. Let the freshly opened destination
+                    // keep the same fully expanded header as Scrobbling until an actual drag.
+                    if (holdExpandedUntilUserScroll) {
+                        handleScroll(0)
+                        return
+                    }
                     scrollOffsetPx = (scrollOffsetPx + dy).coerceAtLeast(0)
                     computeRecyclerTopOffset(recyclerView)?.let { scrollOffsetPx = it }
                     handleScroll(scrollOffsetPx)
@@ -802,12 +877,23 @@ class NavigationBar @JvmOverloads constructor(
             lifecycle?.addObserver(this)
 
             view.clipToPadding = false
-            view.setPadding(
-                view.paddingLeft,
-                view.paddingTop + (if (applyTopPadding) height else 0),
-                view.paddingRight,
-                if (applyBottomPadding) activity.bottomHeight else view.paddingBottom
-            )
+            val contentTopPadding = view.paddingTop
+            var appliedNavigationHeight = -1
+            fun updateNavigationPadding() {
+                val navigationHeight = if (applyTopPadding) height else 0
+                if (navigationHeight == appliedNavigationHeight) return
+                appliedNavigationHeight = navigationHeight
+                view.setPadding(
+                    view.paddingLeft,
+                    contentTopPadding + navigationHeight,
+                    view.paddingRight,
+                    if (applyBottomPadding) activity.bottomHeight else view.paddingBottom,
+                )
+            }
+            updateNavigationPadding()
+            addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+                updateNavigationPadding()
+            }
 
             drawRenderNode()
 
@@ -829,6 +915,20 @@ class NavigationBar @JvmOverloads constructor(
             scrollOffsetPx = currentOffset
             handleScroll(currentOffset)
         }
+    }
+
+    /** Settings destinations always enter like Scrobbling: expanded and at their first row. */
+    fun resetToExpandedState() {
+        holdExpandedUntilUserScroll = true
+        when (val target = targetView) {
+            is RecyclerView -> target.scrollToPosition(0)
+            is NestedScrollView -> target.scrollTo(0, 0)
+        }
+        scrollOffsetPx = 0
+        translationY = 0F
+        collapseProgress = 0F
+        renderShowProgress = 0F
+        invalidate()
     }
 
     private fun handleScroll(offsetPx: Int) {
@@ -1033,6 +1133,7 @@ class NavigationBar @JvmOverloads constructor(
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
+        preferences.registerOnSharedPreferenceChangeListener(statusBarPreferenceListener)
         observeAvatar()
     }
 
@@ -1080,6 +1181,7 @@ class NavigationBar @JvmOverloads constructor(
     }
 
     override fun onDetachedFromWindow() {
+        preferences.unregisterOnSharedPreferenceChangeListener(statusBarPreferenceListener)
         avatarJob?.cancel()
         avatarJob = null
         avatarRequest?.dispose()
@@ -1126,6 +1228,10 @@ class NavigationBar @JvmOverloads constructor(
     }
 
     private fun syncRecyclerScroll(recyclerView: RecyclerView) {
+        if (holdExpandedUntilUserScroll) {
+            handleScroll(0)
+            return
+        }
         val offset = computeRecyclerScrollOffset(recyclerView)
         if (offset == scrollOffsetPx) return
         scrollOffsetPx = offset
@@ -1229,6 +1335,7 @@ class NavigationBar @JvmOverloads constructor(
         EXPANDED_PADDED_HEIGHT.dp.px + EXPANDED_PADDED_HEIGHT_APPEND_RETURN.dp.px
 
     companion object {
+        private const val BACKGROUNDLESS_STATUS_BAR = "backgroundless_status_bar"
         const val EXPANDED_PADDED_HEIGHT = 22
         const val EXPANDED_PADDED_HEIGHT_APPEND_RETURN = -10
         const val EXPANDED_PADDED_HEIGHT_RETURN = 44
@@ -1243,6 +1350,7 @@ class NavigationBar @JvmOverloads constructor(
         const val COLLAPSED_STATE_HEIGHT = 44
         const val COLLAPSED_TITLE_Y_OFFSET = 8
         const val COLLAPSED_CHILD_TOP_PADDING = 8
+        private const val TITLE_SWITCH_PROGRESS = 0.45F
         const val DIVIDER_SIZE = 0.5F
         const val BLUR_STRENGTH = 50F
     }

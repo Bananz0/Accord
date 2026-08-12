@@ -46,6 +46,15 @@
             android:widgetLayout="@layout/preference_switch_widget"
             app:iconSpaceReserved="false" />
 
+        <SwitchPreferenceCompat
+            android:defaultValue="true"
+            android:key="backgroundless_status_bar"
+            android:layout="@layout/preference_switch"
+            android:summary="@string/settings_backgroundless_status_bar_summary"
+            android:title="@string/settings_backgroundless_status_bar"
+            android:widgetLayout="@layout/preference_switch_widget"
+            app:iconSpaceReserved="false" />
+
     </PreferenceCategory>
 
 </PreferenceScreen>

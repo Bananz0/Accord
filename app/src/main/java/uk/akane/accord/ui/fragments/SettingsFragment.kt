@@ -70,7 +70,13 @@ class SettingsFragment : Fragment() {
         val navigationBar = rootView.findViewById<NavigationBar>(R.id.navigation_bar)
         ViewCompat.setOnApplyWindowInsetsListener(navigationBar) { v, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            v.setPadding(v.paddingLeft, systemBars.top, v.paddingRight, v.paddingBottom)
+            val cutout = insets.getInsets(WindowInsetsCompat.Type.displayCutout())
+            v.setPadding(
+                v.paddingLeft,
+                maxOf(systemBars.top, cutout.top),
+                v.paddingRight,
+                v.paddingBottom,
+            )
             insets
         }
         navigationBar.setOnReturnClickListener {
@@ -83,6 +89,7 @@ class SettingsFragment : Fragment() {
             rootView.findViewById<NestedScrollView>(R.id.scrollContainer),
             applyTopPadding = false,
         )
+        navigationBar.post { navigationBar.resetToExpandedState() }
 
         builder = SettingsListBuilder(rootView.findViewById<LinearLayout>(R.id.settings_rows))
         return rootView

@@ -77,7 +77,13 @@ class PlayCountImportFragment : Fragment() {
         navigationBar.setTitle(getString(R.string.settings_import_play_counts))
         ViewCompat.setOnApplyWindowInsetsListener(navigationBar) { v, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            v.setPadding(v.paddingLeft, systemBars.top, v.paddingRight, v.paddingBottom)
+            val cutout = insets.getInsets(WindowInsetsCompat.Type.displayCutout())
+            v.setPadding(
+                v.paddingLeft,
+                maxOf(systemBars.top, cutout.top),
+                v.paddingRight,
+                v.paddingBottom,
+            )
             insets
         }
         navigationBar.setOnReturnClickListener {
@@ -87,6 +93,7 @@ class PlayCountImportFragment : Fragment() {
             rootView.findViewById<NestedScrollView>(R.id.scrollContainer),
             applyTopPadding = false,
         )
+        navigationBar.post { navigationBar.resetToExpandedState() }
 
         statusRow = rootView.findViewById(R.id.settings_rows)
         builder = SettingsListBuilder(statusRow)

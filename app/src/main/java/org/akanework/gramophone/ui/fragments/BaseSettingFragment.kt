@@ -24,7 +24,15 @@ abstract class BaseSettingFragment(
         navigationBar.setTitle(getString(str))
         ViewCompat.setOnApplyWindowInsetsListener(navigationBar) { view, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            view.setPadding(view.paddingLeft, systemBars.top, view.paddingRight, view.paddingBottom)
+            val cutout = insets.getInsets(WindowInsetsCompat.Type.displayCutout())
+            // Immersive mode hides systemBars, but it does not make the camera cutout safe to draw
+            // through. Keep the same top rhythm as Scrobbling in both modes.
+            view.setPadding(
+                view.paddingLeft,
+                maxOf(systemBars.top, cutout.top),
+                view.paddingRight,
+                view.paddingBottom,
+            )
             insets
         }
         navigationBar.setOnReturnClickListener {

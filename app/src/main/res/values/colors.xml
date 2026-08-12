@@ -201,6 +201,8 @@
     <color name="navigationBarExpandedBackground">#FFFFFF</color>
     <color name="navigationBarBlurAppendColor">#BFFFFFFF</color>
     <color name="navigationBarBlurAppendDarkModeColor">#E61C1C1C</color>
+    <color name="navigationBarHeaderBlurAppendColor">#BFFFFFFF</color>
+    <color name="navigationBarHeaderBlurAppendDarkModeColor">#FF000000</color>
     <color name="searchBarBackground">#1F787880</color>
     <color name="labels_tertiary">#993C3C43</color>
     <color name="systemRed">#FF3B30</color>

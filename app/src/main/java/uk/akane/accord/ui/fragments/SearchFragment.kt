@@ -450,8 +450,9 @@ class SearchFragment: Fragment() {
                 .searchWithText("\"" + phrase + "\"", LYRIC_LIMIT)
         }.getOrDefault(emptyList())
             .mapNotNull { match ->
-                if (match.jellyfinId in exclude) return@mapNotNull null
-                val item = byId[match.jellyfinId] ?: return@mapNotNull null
+                val mediaId = match.localId.toString()
+                if (mediaId in exclude) return@mapNotNull null
+                val item = byId[mediaId] ?: return@mapNotNull null
                 SearchResultsAdapter.Row.LyricRow(item, snippet(match.text, phrase))
             }
     }

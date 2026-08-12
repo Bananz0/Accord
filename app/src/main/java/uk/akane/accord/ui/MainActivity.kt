@@ -2,6 +2,7 @@ package uk.akane.accord.ui
 
 import android.content.SharedPreferences
 import android.content.res.Resources
+import android.graphics.Color
 import android.os.Bundle
 import android.view.RoundedCorner
 import android.view.View
@@ -71,6 +72,7 @@ class MainActivity : AppCompatActivity() {
         private const val PLAY_ON_LAUNCH = "autoplay"
         private const val IMMERSIVE_MODE = "immersive_mode"
         private const val IMMERSIVE_MODE_RESET = "immersive_mode_reset"
+        private const val BACKGROUNDLESS_STATUS_BAR = "backgroundless_status_bar"
 
         /** How long a launch will wait for the playback service to hand back the saved queue. */
         private const val PLAY_ON_LAUNCH_TIMEOUT_MS = 10_000L
@@ -160,7 +162,7 @@ class MainActivity : AppCompatActivity() {
                 .putBoolean(IMMERSIVE_MODE, false)
                 .apply()
         }
-        applyImmersiveMode(prefs.getBoolean(IMMERSIVE_MODE, false))
+        applySystemBarMode()
 
         // Only a genuine launch. A recreation - rotation, theme change - arrives with saved state,
         // and starting the music again there would be a rotation that plays music.
@@ -268,24 +270,28 @@ class MainActivity : AppCompatActivity() {
                 "Search"
             )
         )
+        fragmentSwitcherView.onStackChangeListener = { continueStackUnwind() }
 
         var bottomNavigationHapticsReady = false
         bottomNavigationView.setOnItemSelectedListener { item ->
             if (bottomNavigationHapticsReady) bottomNavigationView.performPressHaptic()
-            fragmentSwitcherView.switchBaseFragment(
-                when (item.itemId) {
+            val target = when (item.itemId) {
                     R.id.home -> 0
                     R.id.browse -> 1
                     R.id.library -> 2
                     R.id.search -> 3
                     else -> throw IllegalArgumentException("Invalid itemId!")
                 }
-            )
+            fragmentSwitcherView.switchBaseFragment(target)
+            if (item.itemId == R.id.home) unwindCurrentStackTo(0)
             true
         }
         bottomNavigationView.setOnItemReselectedListener { item ->
             if (bottomNavigationHapticsReady) bottomNavigationView.performPressHaptic()
-            if (item.itemId == R.id.search) searchFragment.focusSearch()
+            when (item.itemId) {
+                R.id.home -> unwindCurrentStackTo(0)
+                R.id.search -> searchFragment.focusSearch()
+            }
         }
         // Listener setup can select the initial Home item; startup should never buzz by itself.
         bottomNavigationView.post { bottomNavigationHapticsReady = true }
@@ -493,7 +499,40 @@ class MainActivity : AppCompatActivity() {
 
     /** Opens settings, from the profile control on whichever screen is showing. */
     fun openSettings() {
+        // Settings itself owns an avatar and a general overflow menu. Both can route here, and
+        // pushing again used to create Settings-on-Settings. If its root already exists, return to
+        // that root instead of duplicating it.
+        val existing = supportFragmentManager.fragments.any {
+            it is SettingsFragment && it.isAdded
+        }
+        if (existing) {
+            unwindCurrentStackTo(1)
+            return
+        }
         fragmentSwitcherView.addFragmentToCurrentStack(SettingsFragment())
+    }
+
+    private var stackUnwindTarget: Int? = null
+
+    /** Pops a detail stack one animated page at a time; used by Home and duplicate Settings taps. */
+    private fun unwindCurrentStackTo(size: Int) {
+        stackUnwindTarget = size.coerceAtLeast(0)
+        continueStackUnwind()
+    }
+
+    private fun continueStackUnwind() {
+        val target = stackUnwindTarget ?: return
+        if (fragmentSwitcherView.isNavigationInProgress) {
+            fragmentSwitcherView.postDelayed(::continueStackUnwind, 32L)
+            return
+        }
+        if (fragmentSwitcherView.currentStackSize <= target) {
+            stackUnwindTarget = null
+            return
+        }
+        if (!fragmentSwitcherView.popBackTopFragmentIfExists()) {
+            fragmentSwitcherView.postDelayed(::continueStackUnwind, 32L)
+        }
     }
 
     /** Gets the now-playing panel out of the way before a screen is pushed behind it. */
@@ -618,10 +657,21 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    /** Hides or restores the system bars, leaving the edge-to-edge layout otherwise untouched. */
-    private fun applyImmersiveMode(enabled: Boolean) {
+    /** Applies the two Appearance choices without giving up the edge-to-edge layout. */
+    @Suppress("DEPRECATION")
+    private fun applySystemBarMode() {
         val controller = WindowInsetsControllerCompat(window, window.decorView)
-        if (enabled) {
+        val immersive = prefs.getBoolean(IMMERSIVE_MODE, false)
+        val backgroundless = prefs.getBoolean(BACKGROUNDLESS_STATUS_BAR, true)
+
+        // Android 15+ enforces edge-to-edge for this target SDK; setting the colour still keeps
+        // Android 12–14 correct. NavigationBar handles the actual inset surface on newer systems.
+        window.statusBarColor =
+            if (backgroundless) Color.TRANSPARENT else getColor(R.color.windowColor)
+        window.isStatusBarContrastEnforced = !backgroundless
+        controller.isAppearanceLightStatusBars = !isDarkMode()
+
+        if (immersive) {
             controller.systemBarsBehavior =
                 WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             controller.hide(WindowInsetsCompat.Type.systemBars())
@@ -637,9 +687,9 @@ class MainActivity : AppCompatActivity() {
      * without this the user flips a switch that visibly does nothing.
      */
     private val preferenceListener =
-        SharedPreferences.OnSharedPreferenceChangeListener { preferences, key ->
-            if (key == IMMERSIVE_MODE) {
-                applyImmersiveMode(preferences.getBoolean(key, false))
+        SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == IMMERSIVE_MODE || key == BACKGROUNDLESS_STATUS_BAR) {
+                applySystemBarMode()
             }
         }
 
@@ -661,7 +711,7 @@ class MainActivity : AppCompatActivity() {
      */
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus && prefs.getBoolean(IMMERSIVE_MODE, false)) applyImmersiveMode(true)
+        if (hasFocus) applySystemBarMode()
     }
 
     private val prefs: SharedPreferences by lazy {

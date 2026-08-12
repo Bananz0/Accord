@@ -57,7 +57,13 @@ class BlacklistSettingsFragment : BaseFragment() {
         val navigationBar = rootView.findViewById<NavigationBar>(R.id.navigation_bar)
         ViewCompat.setOnApplyWindowInsetsListener(navigationBar) { v, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            v.setPadding(v.paddingLeft, systemBars.top, v.paddingRight, v.paddingBottom)
+            val cutout = insets.getInsets(WindowInsetsCompat.Type.displayCutout())
+            v.setPadding(
+                v.paddingLeft,
+                maxOf(systemBars.top, cutout.top),
+                v.paddingRight,
+                v.paddingBottom,
+            )
             insets
         }
         navigationBar.setOnReturnClickListener {
@@ -70,7 +76,8 @@ class BlacklistSettingsFragment : BaseFragment() {
             layoutManager = LinearLayoutManager(requireContext())
             adapter = this@BlacklistSettingsFragment.adapter
             addItemDecoration(GroupBackgroundDecoration())
-            navigationBar.attach(this, applyTopPadding = false)
+            navigationBar.attach(this)
+            navigationBar.post { navigationBar.resetToExpandedState() }
         }
 
         rootView.findViewById<EditText>(R.id.blacklist_filter).doAfterTextChanged {

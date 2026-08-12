@@ -75,7 +75,14 @@ abstract class BasePreferenceFragment : PreferenceFragmentCompat(),
             // collapse. Doing that here removes the last visible Material-settings seam.
             requireParentFragment().view
                 ?.findViewById<NavigationBar>(R.id.navigation_bar)
-                ?.attach(this)
+                ?.let { navigationBar ->
+                    scrollToPosition(0)
+                    navigationBar.attach(this)
+                    navigationBar.post {
+                        scrollToPosition(0)
+                        navigationBar.resetToExpandedState()
+                    }
+                }
         }
     }
 

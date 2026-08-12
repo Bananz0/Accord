@@ -50,12 +50,16 @@ interface LyricsDao {
 
     /** The matching lines themselves, for showing why a song matched. */
     @Query(
-        "SELECT jellyfinId, text FROM $LYRICS_INDEX_TABLE_NAME " +
+        "SELECT songs.localId AS localId, lyrics.text AS text " +
+            "FROM $LYRICS_INDEX_TABLE_NAME AS lyrics " +
+            "INNER JOIN $CACHED_SONG_TABLE_NAME AS songs " +
+            "ON songs.jellyfinId = lyrics.jellyfinId " +
             "WHERE $LYRICS_INDEX_TABLE_NAME MATCH :query LIMIT :limit"
     )
     fun searchWithText(query: String, limit: Int): List<LyricMatch>
 
-    data class LyricMatch(val jellyfinId: String, val text: String)
+    /** [localId] is the MediaItem id Accord uses; the FTS table itself stores Jellyfin GUIDs. */
+    data class LyricMatch(val localId: Long, val text: String)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     fun insertIndex(entries: List<LyricsIndex>)

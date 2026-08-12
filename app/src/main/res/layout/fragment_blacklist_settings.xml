@@ -12,60 +12,7 @@
     android:layout_height="match_parent"
     android:background="@color/settings_background">
 
-    <uk.akane.accord.ui.components.NavigationBar
-        android:id="@+id/navigation_bar"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        app:hasReturnButton="true"
-        app:layout_constraintTop_toTopOf="parent"
-        app:returnButtonText="@string/settings"
-        app:title="@string/settings_blacklist_folder" />
-
-    <!-- The app's own search field, so this page filters the way every other list does. -->
-    <androidx.constraintlayout.widget.ConstraintLayout
-        android:id="@+id/blacklist_filter_container"
-        android:layout_width="match_parent"
-        android:layout_height="38dp"
-        android:layout_marginHorizontal="22dp"
-        android:layout_marginTop="4dp"
-        android:layout_marginBottom="10dp"
-        android:background="@drawable/search_bar_background"
-        app:layout_constraintTop_toBottomOf="@id/navigation_bar">
-
-        <ImageView
-            android:id="@+id/blacklist_filter_icon"
-            android:layout_width="19dp"
-            android:layout_height="19dp"
-            android:layout_marginStart="10dp"
-            android:importantForAccessibility="no"
-            android:src="@drawable/ic_magnifying_glass"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toTopOf="parent"
-            app:tint="@color/labels_tertiary" />
-
-        <EditText
-            android:id="@+id/blacklist_filter"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="6dp"
-            android:layout_marginEnd="16dp"
-            android:autofillHints=""
-            android:background="@null"
-            android:fontFamily="@font/inter_medium"
-            android:hint="@string/blacklist_filter_hint"
-            android:inputType="text"
-            android:singleLine="true"
-            android:textColor="@color/onSurfaceColor"
-            android:textColorHint="@color/labels_tertiary"
-            android:textSize="18sp"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintStart_toEndOf="@id/blacklist_filter_icon"
-            app:layout_constraintTop_toTopOf="parent" />
-
-    </androidx.constraintlayout.widget.ConstraintLayout>
-
+    <!-- Content is declared first so the collapsing navigation surface always paints above it. -->
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/recyclerview"
         android:layout_width="match_parent"
@@ -76,6 +23,64 @@
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/blacklist_filter_container" />
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <uk.akane.accord.ui.components.NavigationBar
+        android:id="@+id/navigation_bar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        app:hasReturnButton="true"
+        app:layout_constraintTop_toTopOf="parent"
+        app:returnButtonText="@string/settings"
+        app:title="@string/settings_blacklist_folder">
+
+        <!--
+            NavigationBar owns this child so the title and search field collapse as one surface.
+            Keeping the field as a sibling left it at its original constraint position while the
+            bar translated upward, which made the two controls pass through each other.
+        -->
+        <androidx.constraintlayout.widget.ConstraintLayout
+            android:id="@+id/blacklist_filter_container"
+            android:layout_width="match_parent"
+            android:layout_height="38dp"
+            android:layout_marginHorizontal="22dp"
+            android:layout_marginBottom="15dp"
+            android:background="@drawable/search_bar_background">
+
+            <ImageView
+                android:id="@+id/blacklist_filter_icon"
+                android:layout_width="19dp"
+                android:layout_height="19dp"
+                android:layout_marginStart="10dp"
+                android:importantForAccessibility="no"
+                android:src="@drawable/ic_magnifying_glass"
+                app:layout_constraintBottom_toBottomOf="parent"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toTopOf="parent"
+                app:tint="@color/labels_tertiary" />
+
+            <EditText
+                android:id="@+id/blacklist_filter"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:layout_marginEnd="16dp"
+                android:autofillHints=""
+                android:background="@null"
+                android:fontFamily="@font/inter_medium"
+                android:hint="@string/blacklist_filter_hint"
+                android:inputType="text"
+                android:singleLine="true"
+                android:textColor="@color/onSurfaceColor"
+                android:textColorHint="@color/labels_tertiary"
+                android:textSize="18sp"
+                app:layout_constraintBottom_toBottomOf="parent"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintStart_toEndOf="@id/blacklist_filter_icon"
+                app:layout_constraintTop_toTopOf="parent" />
+
+        </androidx.constraintlayout.widget.ConstraintLayout>
+
+    </uk.akane.accord.ui.components.NavigationBar>
 
 </androidx.constraintlayout.widget.ConstraintLayout>

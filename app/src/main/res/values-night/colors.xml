@@ -179,6 +179,8 @@
     <color name="navigationBarEllipsisBackground">#3D787880</color>
     <color name="navigationBarExpandedBackground">#000000</color>
     <color name="navigationBarBlurAppendColor">#7C7C7C</color>
+    <!-- Header-only token: the mini player still needs the translucent blur above. -->
+    <color name="navigationBarHeaderBlurAppendColor">#000000</color>
     <color name="searchBarBackground">#3D787880</color>
     <color name="labels_tertiary">#99EBEBF5</color>
     <color name="systemRed">#FF453A</color>

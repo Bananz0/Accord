@@ -228,6 +228,8 @@ This happens on its own while charging on Wi‑Fi, so it costs no battery or dat
 
     <string name="settings_immersive_mode">Immersive mode</string>
     <string name="settings_immersive_mode_summary">Hide the status and navigation bars; swipe from an edge to bring them back</string>
+    <string name="settings_backgroundless_status_bar">Backgroundless status bar</string>
+    <string name="settings_backgroundless_status_bar_summary">Keep Android’s battery, Wi‑Fi and status indicators over the page without a separate bar surface</string>
     <string name="settings_blacklist">Blacklist</string>
     <string name="settings_blacklist_folder_summary">Hide artists and songs from your library</string>
     <string name="settings_blacklist_folder">Hidden music</string>
