@@ -16,6 +16,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinDownloadManager
 import uk.akane.accord.R
+import uk.akane.accord.logic.UserQueue
 import uk.akane.accord.logic.dp
 import uk.akane.accord.ui.MainActivity
 import android.view.MotionEvent
@@ -189,7 +190,10 @@ object TrackSwipeActions {
                         actionDispatched = true
                     }
 
-                    if (panel.draw(canvas, view, damped, recyclerView.frameNanos())) {
+                    if (panel.draw(
+                            canvas, view, damped, recyclerView.frameNanos(), isCurrentlyActive
+                        )
+                    ) {
                         // The takeover is still moving and the finger may not be, so ask for the
                         // next frame rather than waiting for one to happen along.
                         recyclerView.invalidate()
@@ -308,7 +312,10 @@ object TrackSwipeActions {
                         if (canSwipe(position)) onRequest(position)
                         actionDispatched = true
                     }
-                    if (panel.draw(canvas, view, damped, recyclerView.frameNanos())) {
+                    if (panel.draw(
+                            canvas, view, damped, recyclerView.frameNanos(), isCurrentlyActive
+                        )
+                    ) {
                         recyclerView.invalidate()
                     }
                 }
@@ -383,7 +390,7 @@ object TrackSwipeActions {
             player.prepare()
             player.play()
         } else {
-            player.addMediaItem(item)
+            player.addMediaItem(UserQueue.mark(item))
         }
         Toast.makeText(activity, R.string.queued, Toast.LENGTH_SHORT).show()
     }
@@ -402,7 +409,7 @@ object TrackSwipeActions {
             player.prepare()
             player.play()
         } else {
-            player.addMediaItem(player.currentMediaItemIndex + 1, item)
+            player.addMediaItem(player.currentMediaItemIndex + 1, UserQueue.mark(item))
         }
         Toast.makeText(activity, R.string.queued_next, Toast.LENGTH_SHORT).show()
     }

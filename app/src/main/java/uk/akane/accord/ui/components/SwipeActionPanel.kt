@@ -100,14 +100,23 @@ class SwipeActionPanel(
      * frame. onChildDraw only runs when something moves; without that nudge a takeover triggered by
      * a finger that has stopped would freeze part-way.
      */
-    fun draw(canvas: Canvas, view: View, damped: Float, frameNanos: Long): Boolean {
+    fun draw(
+        canvas: Canvas,
+        view: View,
+        damped: Float,
+        frameNanos: Long,
+        active: Boolean = true,
+    ): Boolean {
         if (damped == 0F) return false
         val edge = if (damped > 0F) LEADING else TRAILING
         val actions = resolved(edge)
         if (actions.isEmpty()) return false
 
-        val target = if (isFull(damped)) 1F else 0F
-        val animating = advance(target, frameNanos)
+        // Once the finger is up the escalation is frozen where it was, and only the row's recoil
+        // shrinks the panel. Letting it animate back would replay the phases in reverse - a release
+        // from a full swipe would flash the first action on the way out, advertising a choice that
+        // has already been made and not the one that was made.
+        val animating = if (active) advance(if (isFull(damped)) 1F else 0F, frameNanos) else false
 
         val top = view.top + verticalInset
         val bottom = view.bottom - verticalInset

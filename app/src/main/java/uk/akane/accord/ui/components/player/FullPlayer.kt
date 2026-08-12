@@ -84,7 +84,9 @@ import uk.akane.accord.logic.setTextAnimation
 import uk.akane.accord.logic.utils.CalculationUtils.convertDurationToTimeStamp
 import uk.akane.accord.logic.utils.CalculationUtils.lerp
 import uk.akane.accord.ui.adapters.QueueItemTouchHelperCallback
+import uk.akane.accord.logic.UserQueue
 import uk.akane.accord.ui.adapters.QueuePreviewAdapter
+import uk.akane.accord.ui.components.QueueSectionDecoration
 import uk.akane.accord.ui.MainActivity
 import uk.akane.accord.ui.adapters.QueueItem
 import uk.akane.accord.ui.adapters.browse.PlaylistAdapter
@@ -341,6 +343,11 @@ class FullPlayer @JvmOverloads constructor(
         ).apply {
             attachToRecyclerView(queueRecyclerView)
         }
+        queueRecyclerView.addItemDecoration(
+            QueueSectionDecoration(queueRecyclerView) { position ->
+                (queueRecyclerView.adapter as? QueuePreviewAdapter)?.sectionLabelAt(position)
+            }
+        )
         queueContainer.doOnLayout {
             queueEnterOffset = resolveQueueEnterOffset()
         }
@@ -2036,13 +2043,44 @@ class FullPlayer @JvmOverloads constructor(
         if (reason == Player.TIMELINE_CHANGE_REASON_SOURCE_UPDATE) {
             updateProgressDisplay()
         }
+        (queueRecyclerView.adapter as? QueuePreviewAdapter)?.updateItems(buildQueueItems(timeline))
+    }
+
+    /**
+     * The queue, split into what was asked for and what follows on.
+     *
+     * Tracks queued by hand play before the album resumes, and saying so is the difference between
+     * a queue you can read and a list of songs. Only what is still ahead gets a heading: labelling
+     * something already played "Playing Next" would be a lie about the direction of travel.
+     */
+    private fun buildQueueItems(timeline: Timeline): List<QueueItem> {
         val window = Timeline.Window()
+        val current = instance?.currentMediaItemIndex ?: 0
         val items = mutableListOf<QueueItem>()
+        var labelledUserRun = false
+        var labelledSource = false
+
         for (i in 0 until timeline.windowCount) {
             val w = timeline.getWindow(i, window)
-            items.add(QueueItem(w.uid, w.mediaItem))
+            val queuedByHand = UserQueue.isUserQueued(w.mediaItem)
+            var label: String? = null
+            if (i > current) {
+                if (queuedByHand && !labelledUserRun) {
+                    label = context.getString(R.string.queue_section_next)
+                    labelledUserRun = true
+                } else if (!queuedByHand && !labelledSource) {
+                    // Named after the record it is playing through, which is what the user chose;
+                    // without a name there is nothing useful to say, so the heading is dropped.
+                    val album = w.mediaItem.mediaMetadata.albumTitle?.toString()
+                    label = album?.takeIf { it.isNotBlank() }?.let {
+                        context.getString(R.string.queue_section_from, it)
+                    }
+                    labelledSource = true
+                }
+            }
+            items.add(QueueItem(w.uid, w.mediaItem, label))
         }
-        (queueRecyclerView.adapter as? QueuePreviewAdapter)?.updateItems(items)
+        return items
     }
 
     override fun onDetachedFromWindow() {

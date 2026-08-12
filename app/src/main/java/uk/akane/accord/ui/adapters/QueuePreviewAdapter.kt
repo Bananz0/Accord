@@ -30,7 +30,15 @@ import java.util.Collections
 import kotlinx.coroutines.*
 import kotlin.math.abs
 
-data class QueueItem(val uid: Any, val mediaItem: MediaItem)
+/**
+ * @param sectionLabel the heading drawn above this row, on the first row of each run - the tracks
+ *   the user queued by hand, then wherever the rest is coming from. Null everywhere else.
+ */
+data class QueueItem(
+    val uid: Any,
+    val mediaItem: MediaItem,
+    val sectionLabel: String? = null,
+)
 
 class QueuePreviewAdapter(
     private val items: MutableList<QueueItem>,
@@ -135,6 +143,9 @@ class QueuePreviewAdapter(
     fun itemAt(position: Int): QueueItem? = items.getOrNull(position)
 
     fun indexOf(uid: Any): Int = items.indexOfFirst { it.uid == uid }
+
+    /** The heading above [position], for the section decoration. */
+    fun sectionLabelAt(position: Int): String? = items.getOrNull(position)?.sectionLabel
 
     class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val title: TextView = view.findViewById(R.id.title)
@@ -264,7 +275,10 @@ class QueueItemTouchHelperCallback(
                 removalDispatched = true
             }
 
-            if (panel.draw(canvas, view, damped, recyclerView.frameNanos())) {
+            if (panel.draw(
+                    canvas, view, damped, recyclerView.frameNanos(), isCurrentlyActive
+                )
+            ) {
                 recyclerView.invalidate()
             }
         }
@@ -351,6 +365,8 @@ class QueueDiffCallback(
         val newMeta = newList[newItemPosition].mediaItem.mediaMetadata
         return oldMeta.title == newMeta.title &&
                 oldMeta.artist == newMeta.artist &&
-                oldMeta.artworkUri == newMeta.artworkUri
+                oldMeta.artworkUri == newMeta.artworkUri &&
+                // Included, or a row keeps a heading that has moved on to another track.
+                oldList[oldItemPosition].sectionLabel == newList[newItemPosition].sectionLabel
     }
 }

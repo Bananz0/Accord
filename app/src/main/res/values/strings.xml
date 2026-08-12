@@ -157,6 +157,8 @@
     <string name="import_source_apple_summary">Needs the Apple Media Services archive from Data &amp; Privacy.</string>
     <string name="import_source_ytmusic">YouTube Music</string>
     <string name="import_source_ytmusic_summary">Needs your YouTube history from Google Takeout.</string>
+    <string name="queue_section_next">Playing Next</string>
+    <string name="queue_section_from">Playing Next From: %1$s</string>
     <string name="category_lyrics">Lyrics</string>
     <string name="settings_lyric_search">Lyric search</string>
     <string name="lyric_index_empty">Not indexed yet</string>
