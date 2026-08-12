@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    One output. Leading glyph, name, what it is, and a checkmark on the one in use.
+
+    The same 54dp row and 14dp padding as a settings row, so the two screens measure alike - a
+    picker that is nearly the settings metrics reads as a mistake rather than as a variation.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="?attr/selectableItemBackground"
+        android:clickable="true"
+        android:focusable="true"
+        android:gravity="center_vertical"
+        android:minHeight="58dp"
+        android:orientation="horizontal"
+        android:paddingHorizontal="14dp"
+        android:paddingVertical="6dp">
+
+        <ImageView
+            android:id="@+id/output_row_icon"
+            android:layout_width="26dp"
+            android:layout_height="26dp"
+            android:layout_marginEnd="14dp"
+            android:importantForAccessibility="no"
+            app:tint="@color/onSurfaceColor"
+            tools:src="@drawable/ic_output_phone" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/output_row_title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:fontFamily="@font/inter_regular"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:textColor="@color/onSurfaceColor"
+                android:textSize="16sp"
+                tools:text="samsung SM-S948B" />
+
+            <TextView
+                android:id="@+id/output_row_subtitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="1dp"
+                android:ellipsize="end"
+                android:fontFamily="@font/inter_regular"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:textColor="@color/onSurfaceColorInactive"
+                android:textSize="13sp"
+                android:visibility="gone"
+                tools:text="Accord"
+                tools:visibility="visible" />
+
+        </LinearLayout>
+
+        <!--
+            Fixed width whether or not the tick is showing, so names do not shift sideways as the
+            selection moves between rows.
+        -->
+        <FrameLayout
+            android:layout_width="30dp"
+            android:layout_height="30dp"
+            android:layout_marginStart="8dp">
+
+            <ImageView
+                android:id="@+id/output_row_check"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center"
+                android:importantForAccessibility="no"
+                android:src="@drawable/ic_checkmark"
+                android:visibility="gone"
+                app:tint="@color/accentColor"
+                tools:visibility="visible" />
+
+        </FrameLayout>
+
+    </LinearLayout>
+
+    <View
+        android:id="@+id/output_row_divider"
+        android:layout_width="match_parent"
+        android:layout_height="0.5dp"
+        android:layout_marginStart="54dp"
+        android:background="@color/bottomNavigationDividerColor" />
+
+</LinearLayout>

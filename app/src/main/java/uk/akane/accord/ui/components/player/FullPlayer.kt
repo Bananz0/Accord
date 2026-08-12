@@ -56,7 +56,9 @@ import androidx.lifecycle.lifecycleScope
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinItemResolver
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinRemoteTargets
 import org.jellyfin.sdk.model.api.PlaystateCommand
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import android.view.LayoutInflater
+import android.widget.LinearLayout
+import com.google.android.material.bottomsheet.BottomSheetDialog
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinLibraryLoader.Companion.EXTRA_SOURCE_CONTAINER
 import org.akanework.gramophone.logic.data.jellyfin.StreamQuality
 import org.akanework.gramophone.logic.utils.AudioQuality
@@ -624,6 +626,10 @@ class FullPlayer @JvmOverloads constructor(
      * added to it. This sheet lists what the app knows about and keeps a way through to the system
      * one, rather than replacing a picker people already know with a worse copy of it - the
      * headphones in your pocket still belong to Android.
+     *
+     * Built from the grouped card the settings screens use, not a Material dialog. A stock dialog
+     * with radio buttons and a shouting CANCEL reads as a system prompt dropped on top of the app;
+     * this is meant to read as part of it.
      */
     private fun showOutputPicker() {
         val owner = findViewTreeLifecycleOwner() ?: return
@@ -631,38 +637,78 @@ class FullPlayer @JvmOverloads constructor(
             val targets = JellyfinRemoteTargets.available()
             val active = JellyfinRemoteTargets.active.value
 
-            val labels = mutableListOf<CharSequence>()
-            val actions = mutableListOf<() -> Unit>()
+            val sheet = BottomSheetDialog(context, R.style.Theme_Accord_OutputPicker)
+            val root = LayoutInflater.from(context)
+                .inflate(R.layout.layout_output_picker, null, false)
+            val rows = root.findViewById<LinearLayout>(R.id.output_picker_rows)
 
-            labels += context.getString(R.string.output_this_phone)
-            actions += { handBackToThisPhone() }
-
-            targets.forEach { target ->
-                labels += target.deviceName.ifBlank { target.client } +
-                    "\n" + target.client
-                actions += { handOverTo(target) }
-            }
-
-            labels += context.getString(R.string.output_system_switcher)
-            actions += { startSystemMediaControl() }
-
-            // Marks where sound is going now, so the sheet answers "where is this playing" as well
-            // as "where could it play".
-            val checked = if (active == null) 0
-            else targets.indexOfFirst { it.sessionId == active.sessionId }.let {
-                if (it >= 0) it + 1 else 0
-            }
-
-            MaterialAlertDialogBuilder(context)
-                .setTitle(R.string.output_picker_title)
-                .setSingleChoiceItems(labels.toTypedArray(), checked) { dialog, which ->
-                    dialog.dismiss()
-                    actions.getOrNull(which)?.invoke()
+            val entries = buildList {
+                add(
+                    OutputEntry(
+                        icon = R.drawable.ic_output_phone,
+                        title = context.getString(R.string.output_this_phone),
+                        subtitle = null,
+                        selected = active == null,
+                    ) { handBackToThisPhone() }
+                )
+                targets.forEach { target ->
+                    add(
+                        OutputEntry(
+                            icon = clientIconFor(target.client),
+                            title = target.deviceName.ifBlank { target.client },
+                            // What is already playing there, when there is something - it is the
+                            // difference between "a device" and "the device with the album on it".
+                            subtitle = target.nowPlaying?.let {
+                                context.getString(R.string.output_playing_now, it)
+                            } ?: target.client,
+                            selected = active?.sessionId == target.sessionId,
+                        ) { handOverTo(target) }
+                    )
                 }
-                .setNegativeButton(android.R.string.cancel, null)
-                .show()
+                add(
+                    OutputEntry(
+                        icon = R.drawable.ic_airplay_radio,
+                        title = context.getString(R.string.output_system_switcher),
+                        subtitle = null,
+                        selected = false,
+                    ) { startSystemMediaControl() }
+                )
+            }
+
+            entries.forEachIndexed { index, entry ->
+                val row = LayoutInflater.from(context)
+                    .inflate(R.layout.layout_output_picker_row, rows, false)
+                row.findViewById<ImageView>(R.id.output_row_icon).setImageResource(entry.icon)
+                row.findViewById<TextView>(R.id.output_row_title).text = entry.title
+                row.findViewById<TextView>(R.id.output_row_subtitle).apply {
+                    text = entry.subtitle
+                    visibility = if (entry.subtitle == null) GONE else VISIBLE
+                }
+                row.findViewById<ImageView>(R.id.output_row_check).visibility =
+                    if (entry.selected) VISIBLE else GONE
+                // The last row has nothing under it to be separated from.
+                row.findViewById<View>(R.id.output_row_divider).visibility =
+                    if (index == entries.lastIndex) GONE else VISIBLE
+                row.setOnClickListener {
+                    Haptics.press(it)
+                    sheet.dismiss()
+                    entry.onSelect()
+                }
+                rows.addView(row)
+            }
+
+            sheet.setContentView(root)
+            sheet.show()
         }
     }
+
+    private class OutputEntry(
+        @DrawableRes val icon: Int,
+        val title: String,
+        val subtitle: String?,
+        val selected: Boolean,
+        val onSelect: () -> Unit,
+    )
 
     /**
      * Hands the queue to another client and stops playing it here.

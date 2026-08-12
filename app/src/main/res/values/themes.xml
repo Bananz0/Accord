@@ -211,4 +211,18 @@
         <item name="android:windowSplashScreenBehavior" ns0:targetApi="tiramisu">icon_preferred</item>
     </style>
     <style name="Theme.Accord" parent="Base.Theme.Accord"/>
+
+    <!--
+        The output picker's sheet. Transparent window and no dim-behind default, so the rounded
+        background in the layout is the sheet rather than sitting inside a grey Material one.
+    -->
+    <style name="Theme.Accord.OutputPicker" parent="Theme.MaterialComponents.DayNight.BottomSheetDialog">
+        <item name="bottomSheetStyle">@style/Widget.Accord.OutputPickerSheet</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+
+    <style name="Widget.Accord.OutputPickerSheet" parent="Widget.MaterialComponents.BottomSheet">
+        <item name="android:background">@android:color/transparent</item>
+        <item name="backgroundTint">@android:color/transparent</item>
+    </style>
 </resources>

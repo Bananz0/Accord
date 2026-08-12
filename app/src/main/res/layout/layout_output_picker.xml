@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The output picker: this phone, other Jellyfin clients, and a way through to Android's own
+    switcher. Built from the same grouped card the settings screens use rather than a Material
+    dialog, so it reads as part of this app instead of as a system prompt dropped on top of it.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/bg_output_picker"
+    android:orientation="vertical"
+    android:paddingBottom="12dp">
+
+    <!-- The grabber, so the sheet reads as draggable before anyone touches it. -->
+    <View
+        android:layout_width="36dp"
+        android:layout_height="5dp"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginTop="10dp"
+        android:background="@drawable/bg_output_picker_grabber" />
+
+    <TextView
+        android:id="@+id/output_picker_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="26dp"
+        android:layout_marginTop="18dp"
+        android:layout_marginEnd="26dp"
+        android:fontFamily="@font/inter_semibold"
+        android:includeFontPadding="false"
+        android:text="@string/output_picker_title"
+        android:textColor="@color/onSurfaceColor"
+        android:textSize="22sp" />
+
+    <TextView
+        android:id="@+id/output_picker_subtitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="26dp"
+        android:layout_marginTop="2dp"
+        android:layout_marginEnd="26dp"
+        android:layout_marginBottom="14dp"
+        android:fontFamily="@font/inter_regular"
+        android:includeFontPadding="false"
+        android:text="@string/output_picker_subtitle"
+        android:textColor="@color/onSurfaceColorInactive"
+        android:textSize="13sp" />
+
+    <LinearLayout
+        android:id="@+id/output_picker_rows"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="18dp"
+        android:orientation="vertical" />
+
+</LinearLayout>

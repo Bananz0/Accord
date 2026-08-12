@@ -168,6 +168,8 @@ Accord itself is open source under the GNU General Public License v3.0, and bega
 Jellyfin is a Free Software Media System and is not affiliated with Accord.</string>
     <string name="output_picker_title">Play on</string>
     <string name="output_this_phone">This phone</string>
+    <string name="output_picker_subtitle">Choose where the music plays</string>
+    <string name="output_playing_now">Playing %1$s</string>
     <string name="output_system_switcher">Bluetooth &amp; speakers…</string>
     <string name="output_nothing_to_send">Nothing in the queue to hand over</string>
     <string name="output_handover_failed">Could not reach that device</string>
