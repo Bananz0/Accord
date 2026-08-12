@@ -44,6 +44,9 @@ class QueueSectionDecoration(
      */
     private val startInset = 32.dp.px
 
+    /** Reused across frames; onDraw runs per frame and must not allocate. */
+    private val drawn = HashSet<String>(4)
+
     override fun getItemOffsets(
         outRect: android.graphics.Rect,
         view: android.view.View,
@@ -56,11 +59,16 @@ class QueueSectionDecoration(
     }
 
     override fun onDraw(canvas: Canvas, parent: RecyclerView, state: RecyclerView.State) {
+        drawn.clear()
         for (index in 0 until parent.childCount) {
             val child = parent.getChildAt(index)
             val position = parent.getChildAdapterPosition(child)
             if (position == RecyclerView.NO_POSITION) continue
             val label = labelAt(position) ?: continue
+            // One heading per section per pass. Removing a row leaves the outgoing view on screen
+            // while the list behind it has already shifted, so for a few frames two children
+            // resolve to positions that both carry the same heading and it appears twice.
+            if (!drawn.add(label)) continue
             // Follows the row it belongs to rather than sticking: these are boundaries in a list
             // being scrolled past, not persistent chapter markers.
             canvas.drawText(
