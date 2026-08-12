@@ -50,6 +50,10 @@ import coil3.size.Scale
 import coil3.toBitmap
 import android.widget.TextView
 import androidx.media3.common.Tracks
+import androidx.annotation.DrawableRes
+import androidx.lifecycle.findViewTreeLifecycleOwner
+import androidx.lifecycle.lifecycleScope
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinRemoteTargets
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinLibraryLoader.Companion.EXTRA_SOURCE_CONTAINER
 import org.akanework.gramophone.logic.data.jellyfin.StreamQuality
 import org.akanework.gramophone.logic.utils.AudioQuality
@@ -351,6 +355,9 @@ class FullPlayer @JvmOverloads constructor(
         )
         queueContainer.doOnLayout {
             queueEnterOffset = resolveQueueEnterOffset()
+        }
+        findViewTreeLifecycleOwner()?.lifecycleScope?.launch {
+            JellyfinRemoteTargets.active.collect { refreshOutputDevice() }
         }
 
         ellipsisButton.setOnCheckedChangeListener { v, _ ->
@@ -1656,6 +1663,12 @@ class FullPlayer @JvmOverloads constructor(
      * was - a way into the system output picker.
      */
     private fun refreshOutputDevice() {
+        // A device being played to outranks a device plugged in. If sound is coming out of a
+        // computer across the house, the headphones in this phone are not what is playing.
+        JellyfinRemoteTargets.active.value?.let { target ->
+            showOutput(clientIconFor(target.client), target.deviceName.ifBlank { target.client })
+            return
+        }
         val device = AudioOutput.current(context)
         if (!device.isExternal || device.name == null) {
             outputDeviceIcon.visibility = GONE
@@ -1663,13 +1676,37 @@ class FullPlayer @JvmOverloads constructor(
             airplayOverlayButton.visibility = VISIBLE
             return
         }
-        outputDeviceIcon.setImageResource(device.icon)
+        showOutput(device.icon, device.name)
+    }
+
+    private fun showOutput(@DrawableRes icon: Int, name: String) {
+        outputDeviceIcon.setImageResource(icon)
         outputDeviceIcon.visibility = VISIBLE
-        outputDeviceName.text = device.name
+        outputDeviceName.text = name
         outputDeviceName.visibility = VISIBLE
         // Hidden rather than removed: the device icon is constrained to this button's bounds, so it
         // still has to occupy its place in the row.
         airplayOverlayButton.visibility = INVISIBLE
+    }
+
+    /**
+     * A glyph for the client being played to.
+     *
+     * Matched on the client name because Jellyfin does not serve an icon for one - it reports what
+     * the app called itself and nothing else. Known names get something recognisable and the rest
+     * fall back to the cast glyph, which is at least honest about being a device somewhere else.
+     */
+    @DrawableRes
+    private fun clientIconFor(client: String): Int {
+        val name = client.lowercase()
+        return when {
+            "web" in name || "desktop" in name || "media player" in name ->
+                R.drawable.ic_output_desktop
+            "android" in name || "findroid" in name || "accord" in name || "ios" in name ->
+                R.drawable.ic_output_phone
+            "kodi" in name || "tv" in name -> R.drawable.ic_output_desktop
+            else -> R.drawable.ic_airplay_radio
+        }
     }
 
     override fun onMediaItemTransition(
