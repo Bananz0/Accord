@@ -62,7 +62,16 @@ object JellyfinRemoteTargets {
         val api = JellyfinClientHolder.api() ?: return@withContext emptyList()
         try {
             val ownDeviceId = api.deviceInfo.id
-            api.sessionApi.getSessions(activeWithinSeconds = (MAX_IDLE_MINUTES * 60).toInt())
+            // controllableByUserId is not optional in practice. Without it the server answers with
+            // this client's own session and nothing else - a non-administrator is not allowed to
+            // enumerate sessions, only to ask which ones they may control. That is why the picker
+            // listed every device when queried with an admin key and none from inside the app.
+            val userId = JellyfinClientHolder.credentials.userId
+                ?.let { runCatching { UUID.fromString(it.toDashedUuid()) }.getOrNull() }
+            api.sessionApi.getSessions(
+                controllableByUserId = userId,
+                activeWithinSeconds = (MAX_IDLE_MINUTES * 60).toInt(),
+            )
                 .content
                 .filter { it.supportsRemoteControl == true }
                 .filter { it.deviceId != ownDeviceId }
