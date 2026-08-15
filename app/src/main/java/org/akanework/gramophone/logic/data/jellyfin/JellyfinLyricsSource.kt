@@ -2,20 +2,23 @@ package org.akanework.gramophone.logic.data.jellyfin
 
 import android.content.Context
 import android.util.Log
+import androidx.annotation.VisibleForTesting
 import org.akanework.gramophone.logic.utils.LrcUtils
 import org.akanework.gramophone.logic.utils.MediaStoreUtils
 import org.jellyfin.sdk.api.client.extensions.lyricApi
+import org.jellyfin.sdk.model.api.LyricLine
 
 /**
  * Lyrics served by the Jellyfin server.
  *
- * Covers the case embedded tags cannot: a `.lrc` sitting next to the track on the server, which the
+ * Covers the case embedded tags cannot: a `.lrc` or `.elrc` sitting next to the track on the server, which the
  * player never sees because it only ever receives the audio stream. Jellyfin indexes those sidecars
  * and hands them back as timed lines.
  *
  * The lines are rendered back into LRC text rather than mapped straight to [MediaStoreUtils.Lyric],
  * so they go through the same [LrcUtils.parseLrcString] every other source does and inherit its
- * handling of translations, speaker labels and word timing for free.
+ * handling of translations and speaker labels. Jellyfin's cue objects are rendered as Enhanced
+ * LRC markers first, preserving server-side word timing through that same parser.
  */
 object JellyfinLyricsSource {
 
@@ -46,11 +49,13 @@ object JellyfinLyricsSource {
             if (lines.isNullOrEmpty()) return null
             val lrc = buildString {
                 lines.forEach { line ->
-                    val text = line.text?.takeIf { it.isNotBlank() } ?: return@forEach
+                    val text = line.text.takeIf { it.isNotBlank() } ?: return@forEach
                     // Unsynced lyrics come back with no start time. Emitting them without a tag is
                     // correct - the parser treats untagged lines as plain, unsynced lyrics.
-                    line.start?.let { append(formatTimestamp(it / TICKS_PER_MILLISECOND)) }
-                    append(text).append('\n')
+                    val cues = line.cues.orEmpty()
+                    val lineStart = line.start ?: cues.firstOrNull()?.start
+                    lineStart?.let { append(formatTimestamp(it / TICKS_PER_MILLISECOND)) }
+                    append(renderCues(text, line)).append('\n')
                 }
             }
             if (lrc.isBlank()) return null
@@ -70,5 +75,34 @@ object JellyfinLyricsSource {
         val seconds = (safeMs % 60_000) / 1000
         val hundredths = (safeMs % 1000) / 10
         return "[%02d:%02d.%02d]".format(minutes, seconds, hundredths)
+    }
+
+    private fun formatWordTimestamp(ticks: Long): String =
+        formatTimestamp(ticks / TICKS_PER_MILLISECOND)
+            .replace('[', '<')
+            .replace(']', '>')
+
+    /** Restores the ELRC markers represented by Jellyfin's position/time cue objects. */
+    @VisibleForTesting
+    internal fun renderCues(text: String, line: LyricLine): String {
+        val cues = line.cues.orEmpty()
+            .filter { cue -> cue.position in 0..text.length }
+            .sortedWith(compareBy({ it.position }, { it.start }))
+        if (cues.isEmpty()) return text
+
+        val markers = linkedMapOf<Int, Long>()
+        cues.forEach { cue -> markers[cue.position] = cue.start }
+        cues.last().let { cue ->
+            cue.end?.let { end ->
+                if (cue.endPosition in 0..text.length) markers.putIfAbsent(cue.endPosition, end)
+            }
+        }
+
+        return buildString(text.length + markers.size * 12) {
+            for (offset in 0..text.length) {
+                markers[offset]?.let { append(formatWordTimestamp(it)) }
+                if (offset < text.length) append(text[offset])
+            }
+        }
     }
 }

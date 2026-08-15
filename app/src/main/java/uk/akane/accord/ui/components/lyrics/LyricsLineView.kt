@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RenderEffect
 import android.graphics.RenderNode
 import android.graphics.Shader
@@ -20,6 +21,7 @@ import uk.akane.accord.logic.floatAnimator
 import uk.akane.accord.logic.sp
 import uk.akane.cupertino.utils.AnimationUtils
 import kotlin.math.abs
+import kotlin.math.floor
 import kotlin.math.roundToInt
 
 @Suppress("ViewConstructor")
@@ -36,10 +38,14 @@ class LyricsLineView internal constructor(
         private set
 
     private lateinit var staticLayout: StaticLayout
+    private lateinit var karaokeBaseLayout: StaticLayout
     private val paint = TextPaint().apply {
         textSize = 34.sp.px
         color = Color.WHITE
         typeface = ResourcesCompat.getFont(context, R.font.inter_bold)
+    }
+    private val karaokeBasePaint = TextPaint(paint).apply {
+        alpha = (UPCOMING_WORD_ALPHA * 255).roundToInt()
     }
     private val contentPaint = Paint().apply {
         xfermode = AnimationUtils.addXfermode
@@ -50,6 +56,12 @@ class LyricsLineView internal constructor(
     } else {
         null
     }
+
+    val hasWordTimings: Boolean
+        get() = line.wordTimings.isNotEmpty()
+
+    private var isActiveLine = false
+    private var playbackPositionMs = Long.MIN_VALUE
 
     var textOffset: Float = 0f
         set(value) {
@@ -106,6 +118,19 @@ class LyricsLineView internal constructor(
         }
     }
 
+    /** Advances only the active Enhanced LRC line; unchanged positions do not redraw while paused. */
+    fun updatePlaybackPosition(positionMs: Long) {
+        if (!hasWordTimings || playbackPositionMs == positionMs) return
+        playbackPositionMs = positionMs
+        if (isActiveLine) postInvalidateOnAnimation()
+    }
+
+    private fun setActiveLine(active: Boolean) {
+        if (isActiveLine == active) return
+        isActiveLine = active
+        invalidate()
+    }
+
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         if (height < 0 || width < 0) return
         val hP = horizontalPadding.roundToInt()
@@ -119,6 +144,9 @@ class LyricsLineView internal constructor(
 
         staticLayout = StaticLayout.Builder
             .obtain(text, 0, text.length, paint, textWidth)
+            .build()
+        karaokeBaseLayout = StaticLayout.Builder
+            .obtain(text, 0, text.length, karaokeBasePaint, textWidth)
             .build()
 
         val layoutHeight = staticLayout.height + vP * 2
@@ -141,6 +169,11 @@ class LyricsLineView internal constructor(
         val count = canvas.saveLayer(0f, 0f, width.toFloat(), height.toFloat(), contentPaint)
         val staticLayout = staticLayout
         val scale = textScale
+        if (isActiveLine && hasWordTimings) {
+            drawKaraokeLine(canvas, staticLayout, scale)
+            canvas.restoreToCount(count)
+            return
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             if (canvas.isHardwareAccelerated && blurRenderNode != null) {
                 with(blurRenderNode) {
@@ -165,6 +198,73 @@ class LyricsLineView internal constructor(
             staticLayout.draw(canvas)
         }
         canvas.restoreToCount(count)
+    }
+
+    /**
+     * Draws the quiet full line first, then reveals the sung copy through a character-aware clip.
+     * Clipping each laid-out row separately makes long wrapped lyrics fill naturally instead of a
+     * single vertical wipe cutting through every row at once.
+     */
+    private fun drawKaraokeLine(canvas: Canvas, layout: StaticLayout, scale: Float) {
+        val alphaLayer = canvas.saveLayerAlpha(
+            0f,
+            0f,
+            width.toFloat(),
+            height.toFloat(),
+            (textAlpha * 255).roundToInt(),
+        )
+        canvas.translate(horizontalPadding, verticalPadding)
+        canvas.scale(scale, scale, layout.width / 2f, layout.height / 2f)
+        karaokeBaseLayout.draw(canvas)
+
+        val highlightOffset = line.highlightOffsetAt(playbackPositionMs).coerceIn(0f, line.text.length.toFloat())
+        if (highlightOffset > 0f) {
+            val highlighted = canvas.save()
+            if (highlightOffset < line.text.length) {
+                canvas.clipPath(highlightPath(layout, highlightOffset))
+            }
+            layout.draw(canvas)
+            canvas.restoreToCount(highlighted)
+        }
+        canvas.restoreToCount(alphaLayer)
+    }
+
+    private fun highlightPath(layout: StaticLayout, offset: Float): Path {
+        val textLength = line.text.length
+        val wholeOffset = floor(offset).toInt().coerceIn(0, textLength)
+        val drawableOffset = wholeOffset.coerceAtMost((textLength - 1).coerceAtLeast(0))
+        val currentLine = layout.getLineForOffset(drawableOffset)
+        val path = Path()
+
+        for (layoutLine in 0 until currentLine) {
+            path.addRect(
+                layout.getLineLeft(layoutLine),
+                layout.getLineTop(layoutLine).toFloat(),
+                layout.getLineRight(layoutLine),
+                layout.getLineBottom(layoutLine).toFloat(),
+                Path.Direction.CW,
+            )
+        }
+
+        val fraction = offset - wholeOffset
+        val startX = layout.getPrimaryHorizontal(wholeOffset)
+        val nextOffset = (wholeOffset + 1).coerceAtMost(textLength)
+        val nextLine = layout.getLineForOffset(nextOffset.coerceAtMost((textLength - 1).coerceAtLeast(0)))
+        val endX = if (nextLine == currentLine) layout.getPrimaryHorizontal(nextOffset) else {
+            if (layout.getParagraphDirection(currentLine) > 0) layout.getLineRight(currentLine)
+            else layout.getLineLeft(currentLine)
+        }
+        val edge = startX + (endX - startX) * fraction
+        val left = layout.getLineLeft(currentLine)
+        val right = layout.getLineRight(currentLine)
+        val top = layout.getLineTop(currentLine).toFloat()
+        val bottom = layout.getLineBottom(currentLine).toFloat()
+        if (layout.getParagraphDirection(currentLine) > 0) {
+            path.addRect(left, top, edge.coerceIn(left, right), bottom, Path.Direction.CW)
+        } else {
+            path.addRect(edge.coerceIn(left, right), top, right, bottom, Path.Direction.CW)
+        }
+        return path
     }
 
     /** Tapping a line jumps to it. This was left as a comment upstream and did nothing. */
@@ -219,6 +319,7 @@ class LyricsLineView internal constructor(
 
         fun updateImmediately(targetIndex: Int) {
             val isActivated = index == targetIndex
+            setActiveLine(isActivated)
             val targetAlpha = alphaFor(index, targetIndex)
             val targetScale = if (isActivated) ACTIVE_SCALE else INACTIVE_SCALE
             val targetBlurRadius = (abs(index - targetIndex) * blurRadiusStep).coerceAtMost(maxBlurRadius)
@@ -231,6 +332,7 @@ class LyricsLineView internal constructor(
 
         fun update(targetIndex: Int, preventBlurUpdate: Boolean = false) {
             val isActivated = index == targetIndex
+            setActiveLine(isActivated)
             val targetAlpha = alphaFor(index, targetIndex)
             val targetScale = if (isActivated) ACTIVE_SCALE else INACTIVE_SCALE
             val targetBlurRadius = (abs(index - targetIndex) * blurRadiusStep).coerceAtMost(maxBlurRadius)
@@ -284,6 +386,7 @@ class LyricsLineView internal constructor(
         const val NEIGHBOUR_ALPHA = 0.45f
 
         const val ACTIVE_ALPHA = 0.9f
+        const val UPCOMING_WORD_ALPHA = 0.32f
         // Readable, not shouting. At 0.2 the rest of the song disappeared entirely against
         // a pale album backdrop, which is not the same as being de-emphasised.
         const val INACTIVE_ALPHA = 0.34f

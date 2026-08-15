@@ -85,6 +85,7 @@ import org.akanework.gramophone.logic.GramophonePlaybackService
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinReporter
 import uk.akane.accord.ui.components.lyrics.Lyrics
 import uk.akane.accord.ui.components.lyrics.LyricsLine
+import uk.akane.accord.ui.components.lyrics.LyricsWordTiming
 import android.os.Bundle
 import androidx.core.os.BundleCompat
 import androidx.media3.session.SessionCommand
@@ -1931,7 +1932,21 @@ class FullPlayer @JvmOverloads constructor(
             val mapped = resolved.orEmpty()
                 // The service prepends an empty element as a lead-in; it has no text to show.
                 .filter { !it.content.isNullOrBlank() }
-                .map { LyricsLine(it.startTimestamp ?: 0L, null, it.content, it.translationContent) }
+                .map { lyric ->
+                    LyricsLine(
+                        timestamp = lyric.startTimestamp ?: 0L,
+                        agent = null,
+                        text = lyric.content,
+                        background = lyric.translationContent,
+                        wordTimings = lyric.wordTimestamps.map { timing ->
+                            LyricsWordTiming(
+                                endOffset = timing.first,
+                                startTimestamp = timing.second,
+                                endTimestamp = timing.third,
+                            )
+                        },
+                    )
+                }
             withContext(Dispatchers.Main) {
                 // An empty list renders as a black screen with nothing in it, which reads as a bug
                 // rather than as "this track has no lyrics". Say so instead.

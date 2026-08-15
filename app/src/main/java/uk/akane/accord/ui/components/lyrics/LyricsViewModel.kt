@@ -145,7 +145,8 @@ class LyricsViewModel(
                 // little context above, then gently settle it into the normal followed position.
                 // The current line is highlighted throughout; this is viewport motion, not a
                 // replay of every lyric between line zero and the current timestamp.
-                val index = getCurrentLyricsLineIndex(positionProvider())
+                val position = positionProvider()
+                val index = getCurrentLyricsLineIndex(position)
 
                 val currentLineChild = lyricsView.getChildAt(index) as? LyricsLineView ?: return@doOnLayout
                 val contextIndex = (index - INITIAL_CONTEXT_LINES).coerceAtLeast(0)
@@ -169,6 +170,7 @@ class LyricsViewModel(
                     child.animations.updateImmediately(index)
                     child.visibility = View.VISIBLE
                 }
+                currentLineChild.updatePlaybackPosition(position)
 
                 lastIndex = index
 
@@ -215,14 +217,23 @@ class LyricsViewModel(
         // onto a line; upstream simply never called it with a real one.
         scope.launch {
             while (isActive) {
-                if (isLayoutFinished && lyrics.value != Lyrics.Empty) {
-                    val index = getCurrentLyricsLineIndex(positionProvider())
-                    if (index != lastIndex && index >= 0) {
-                        lastIndex = index
-                        updateCurrentIndex(index)
+                var nextPollMs = POSITION_POLL_MS
+                if (lyrics.value != Lyrics.Empty) {
+                    val position = positionProvider()
+                    val index = getCurrentLyricsLineIndex(position)
+                    if (isLayoutFinished && index >= 0) {
+                        if (index != lastIndex) {
+                            lastIndex = index
+                            updateCurrentIndex(index)
+                        }
+                        val currentLine = lyricsView.getChildAt(index) as? LyricsLineView
+                        currentLine?.updatePlaybackPosition(position)
+                        if (currentLine?.hasWordTimings == true) {
+                            nextPollMs = WORD_POSITION_POLL_MS
+                        }
                     }
                 }
-                delay(POSITION_POLL_MS)
+                delay(nextPollMs)
             }
         }
 
@@ -274,5 +285,8 @@ class LyricsViewModel(
 
         /** Fast enough that a line change is not visibly late, cheap enough to leave running. */
         private const val POSITION_POLL_MS = 200L
+
+        /** A frame-rate clock is only used for the one Enhanced LRC line currently being sung. */
+        private const val WORD_POSITION_POLL_MS = 16L
     }
 }
