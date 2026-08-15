@@ -42,7 +42,7 @@ import java.io.File
 import kotlin.random.Random
 import uk.akane.accord.ui.components.CollectionPopupMenu
 import uk.akane.accord.ui.components.CollageArtView
-import android.widget.Toast
+import uk.akane.accord.ui.components.NoToast as Toast
 import uk.akane.accord.ui.components.TrackRowMenu
 import uk.akane.accord.ui.components.TrackSwipeActions
 import uk.akane.accord.ui.components.performPressHaptic

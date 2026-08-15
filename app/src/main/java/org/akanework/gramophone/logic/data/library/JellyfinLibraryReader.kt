@@ -70,6 +70,10 @@ class JellyfinLibraryReader(private val context: Context) : LibraryReader {
         store.map { s -> s?.albumArtistList?.map { it.toLibPhonograph() } ?: emptyList() }
     override val artistListFlow: Flow<List<Artist>> =
         store.map { s -> s?.artistList?.map { it.toLibPhonograph() } ?: emptyList() }
+    override val primaryArtistListFlow: Flow<List<Artist>> =
+        store.map { s -> s?.primaryArtistList?.map { it.toLibPhonograph() } ?: emptyList() }
+    override val featuredArtistListFlow: Flow<List<Artist>> =
+        store.map { s -> s?.featuredArtistList?.map { it.toLibPhonograph() } ?: emptyList() }
     override val genreListFlow: Flow<List<Genre>> =
         store.map { s -> s?.genreList?.map { it.toLibPhonograph() } ?: emptyList() }
     override val dateListFlow: Flow<List<Date>> =

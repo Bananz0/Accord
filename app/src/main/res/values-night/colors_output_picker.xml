@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark enough for white typography, translucent enough to retain the album colour. -->
+    <color name="output_picker_blur_scrim">#B3000000</color>
+</resources>

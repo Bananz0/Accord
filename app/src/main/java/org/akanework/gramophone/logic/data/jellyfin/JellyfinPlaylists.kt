@@ -173,6 +173,27 @@ object JellyfinPlaylists {
         }
     }
 
+    /**
+     * Replaces an imported playlist after the user explicitly chose exact mirroring.
+     *
+     * Create and verify the corrected copy before deleting the stale one. If removing the old copy
+     * fails, roll the new copy back so a failed replacement never leaves two identically named
+     * playlists behind.
+     */
+    @WorkerThread
+    fun replace(
+        context: Context,
+        playlistId: String,
+        name: String,
+        mediaIds: List<String>,
+    ): String? {
+        val replacementId = create(context, name, mediaIds) ?: return null
+        if (delete(playlistId)) return replacementId
+        Log.w(TAG, "Could not remove stale playlist $playlistId; rolling back $replacementId")
+        delete(replacementId)
+        return null
+    }
+
     /** Deletes a playlist from Jellyfin. The tracks themselves are never deleted. */
     @WorkerThread
     fun delete(playlistId: String): Boolean {

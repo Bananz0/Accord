@@ -33,14 +33,33 @@
             android:paddingTop="72dp"
             android:paddingBottom="40dp">
 
-            <TextView
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:fontFamily="@font/inter_bold"
-                android:includeFontPadding="false"
-                android:text="@string/jellyfin_login_title"
-                android:textColor="@color/onSurfaceColor"
-                android:textSize="34sp" />
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <com.google.android.material.imageview.ShapeableImageView
+                    style="@style/Widget.Accord.SetupWizard.PermissionPage.Icon"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:background="@drawable/ic_launcher_background"
+                    android:contentDescription="@null"
+                    android:padding="11dp"
+                    android:src="@drawable/ic_jellyfin_server"
+                    app:tint="@color/onAccentColor" />
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="16dp"
+                    android:layout_weight="1"
+                    android:fontFamily="@font/inter_bold"
+                    android:includeFontPadding="false"
+                    android:text="@string/jellyfin_login_title"
+                    android:textColor="@color/onSurfaceColor"
+                    android:textSize="34sp" />
+            </LinearLayout>
 
             <TextView
                 android:layout_width="match_parent"
@@ -85,15 +104,11 @@
                             android:textColor="@color/onSurfaceColor"
                             android:textSize="19sp" />
 
-                        <com.google.android.material.progressindicator.CircularProgressIndicator
+                        <uk.akane.cupertino.widget.special.CupertinoActivityIndicatorView
                             android:id="@+id/discovery_progress"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:indeterminate="true"
-                            app:indicatorColor="@color/accentColor"
-                            app:indicatorInset="0dp"
-                            app:indicatorSize="18dp"
-                            app:trackThickness="2dp" />
+                            android:layout_width="22dp"
+                            android:layout_height="22dp"
+                            android:indeterminateTint="@color/accentColor" />
                     </LinearLayout>
 
                     <TextView
@@ -151,6 +166,7 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:fontFamily="@font/inter_regular"
+                            android:importantForAutofill="no"
                             android:imeOptions="actionDone"
                             android:inputType="textUri"
                             android:paddingVertical="12dp"
@@ -163,14 +179,11 @@
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/connect"
+                style="@style/Widget.Accord.SetupWizard.WelcomePage.ContinueButton"
                 android:layout_width="match_parent"
-                android:layout_height="52dp"
+                android:layout_height="64dp"
                 android:layout_marginTop="22dp"
-                android:fontFamily="@font/inter_semibold"
-                android:text="@string/jellyfin_connect"
-                android:textSize="16sp"
-                app:backgroundTint="@color/accentColor"
-                app:cornerRadius="26dp" />
+                android:text="@string/jellyfin_connect" />
 
             <com.google.android.material.progressindicator.LinearProgressIndicator
                 android:id="@+id/server_progress"
@@ -204,6 +217,7 @@
         android:layout_height="match_parent"
         android:clipToPadding="false"
         android:fillViewport="true"
+        android:focusableInTouchMode="true"
         android:visibility="gone">
 
         <LinearLayout
@@ -219,14 +233,33 @@
                 at 34sp it wrapped mid-word into something that read like a broken title; it
                 belongs on the quiet line underneath, where a long one can simply ellipsize.
             -->
-            <TextView
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:fontFamily="@font/inter_bold"
-                android:includeFontPadding="false"
-                android:text="@string/jellyfin_sign_in"
-                android:textColor="@color/onSurfaceColor"
-                android:textSize="34sp" />
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <com.google.android.material.imageview.ShapeableImageView
+                    style="@style/Widget.Accord.SetupWizard.PermissionPage.Icon"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:background="@drawable/ic_launcher_background"
+                    android:contentDescription="@null"
+                    android:padding="11dp"
+                    android:src="@drawable/ic_person"
+                    app:tint="@color/onAccentColor" />
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="16dp"
+                    android:layout_weight="1"
+                    android:fontFamily="@font/inter_bold"
+                    android:includeFontPadding="false"
+                    android:text="@string/jellyfin_sign_in"
+                    android:textColor="@color/onSurfaceColor"
+                    android:textSize="34sp" />
+            </LinearLayout>
 
             <TextView
                 android:id="@+id/server_name"
@@ -245,7 +278,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="6dp"
-                android:background="?attr/selectableItemBackgroundBorderless"
+                android:background="?attr/selectableItemBackground"
                 android:fontFamily="@font/inter_semibold"
                 android:includeFontPadding="false"
                 android:paddingVertical="4dp"
@@ -311,7 +344,9 @@
                             android:id="@+id/username"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
+                            android:autofillHints="username"
                             android:fontFamily="@font/inter_regular"
+                            android:importantForAutofill="yes"
                             android:imeOptions="actionNext"
                             android:inputType="text"
                             android:paddingVertical="12dp"
@@ -339,7 +374,9 @@
                             android:id="@+id/password"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
+                            android:autofillHints="password"
                             android:fontFamily="@font/inter_regular"
+                            android:importantForAutofill="yes"
                             android:imeOptions="actionDone"
                             android:inputType="textPassword"
                             android:paddingVertical="12dp"
@@ -352,14 +389,11 @@
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/sign_in"
+                style="@style/Widget.Accord.SetupWizard.WelcomePage.ContinueButton"
                 android:layout_width="match_parent"
-                android:layout_height="52dp"
+                android:layout_height="64dp"
                 android:layout_marginTop="22dp"
-                android:fontFamily="@font/inter_semibold"
-                android:text="@string/jellyfin_sign_in"
-                android:textSize="16sp"
-                app:backgroundTint="@color/accentColor"
-                app:cornerRadius="26dp" />
+                android:text="@string/jellyfin_sign_in" />
 
             <!--
                 Text, not a second filled pill. Quick Connect is the alternative to signing in,

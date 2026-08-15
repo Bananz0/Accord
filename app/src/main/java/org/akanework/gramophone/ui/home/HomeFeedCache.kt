@@ -18,8 +18,27 @@ object HomeFeedCache {
     private const val CACHE_FILE_NAME = "home_feed_cache.json"
     private const val BANNER_CACHE_FILE_NAME = "home_banner_cache.json"
 
+    @Volatile
+    private var memorySections: List<HomeSection>? = null
+    @Volatile
+    private var memoryBanners: List<BannerItem>? = null
+
+    private fun persistentFile(context: Context, name: String) = File(context.filesDir, name)
+
+    /**
+     * Keep the last good feed outside cacheDir. Android may purge cacheDir whenever storage is
+     * tight, which turned an otherwise ordinary launch back into a full feed rebuild.
+     */
+    private fun readableFile(context: Context, name: String): File? {
+        val persistent = persistentFile(context, name)
+        if (persistent.exists()) return persistent
+        // One-time migration from builds that treated the home feed as disposable data.
+        return File(context.cacheDir, name).takeIf(File::exists)
+    }
+
     fun save(context: Context, sections: List<HomeSection>) {
         if (sections.isEmpty()) return
+        memorySections = sections
         try {
             // Most cards in a shelf point at the same 30-50 track mix. Writing that identical ID
             // list into every card grew the cache past a megabyte and made its main-thread cold
@@ -62,16 +81,15 @@ object HomeFeedCache {
                 put("mediaSets", mediaSetsArray)
                 put("sections", jsonArray)
             }
-            val file = File(context.cacheDir, CACHE_FILE_NAME)
-            file.writeText(root.toString())
+            persistentFile(context, CACHE_FILE_NAME).writeText(root.toString())
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save home feed cache", e)
         }
     }
 
     fun load(context: Context): List<HomeSection>? {
-        val file = File(context.cacheDir, CACHE_FILE_NAME)
-        if (!file.exists()) return null
+        memorySections?.let { return it }
+        val file = readableFile(context, CACHE_FILE_NAME) ?: return null
         return try {
             val text = file.readText()
             if (text.isBlank()) return null
@@ -151,7 +169,7 @@ object HomeFeedCache {
                 }
             }
 
-            sections.ifEmpty { null }
+            sections.ifEmpty { null }?.also { memorySections = it }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load home feed cache", e)
             null
@@ -160,6 +178,7 @@ object HomeFeedCache {
 
     fun saveBanners(context: Context, banners: List<BannerItem>) {
         if (banners.isEmpty()) return
+        memoryBanners = banners
         try {
             val array = JSONArray()
             banners.forEach { banner ->
@@ -176,15 +195,15 @@ object HomeFeedCache {
                 put("version", 2)
                 put("banners", array)
             }
-            File(context.cacheDir, BANNER_CACHE_FILE_NAME).writeText(root.toString())
+            persistentFile(context, BANNER_CACHE_FILE_NAME).writeText(root.toString())
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save home banner cache", e)
         }
     }
 
     fun loadBanners(context: Context): List<BannerItem>? {
-        val file = File(context.cacheDir, BANNER_CACHE_FILE_NAME)
-        if (!file.exists()) return null
+        memoryBanners?.let { return it }
+        val file = readableFile(context, BANNER_CACHE_FILE_NAME) ?: return null
         return try {
             val cachedText = file.readText()
             // Version 1 stored the banner list as a bare array. Treat it as a cache miss
@@ -209,7 +228,7 @@ object HomeFeedCache {
                         cachedMediaIds = item.optJSONArray("mediaIds").toStringList()
                     ))
                 }
-            }.ifEmpty { null }
+            }.ifEmpty { null }?.also { memoryBanners = it }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load home banner cache", e)
             null

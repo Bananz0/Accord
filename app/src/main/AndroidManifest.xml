@@ -17,6 +17,10 @@
     <!-- PlatformScheduler requires this to re-register its jobs after a reboot -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Requested lazily from the quality sheet, solely to read the negotiated A2DP codec. -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_CONNECT"
+        android:usesPermissionFlags="neverForLocation" />
 
     <!--
         No media permissions. The library is the Jellyfin server and nothing else, so there is

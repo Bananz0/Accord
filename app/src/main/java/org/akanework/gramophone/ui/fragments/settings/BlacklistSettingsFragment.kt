@@ -55,6 +55,8 @@ class BlacklistSettingsFragment : BaseFragment() {
     ): View? {
         val rootView = inflater.inflate(R.layout.fragment_blacklist_settings, container, false)
         val navigationBar = rootView.findViewById<NavigationBar>(R.id.navigation_bar)
+        navigationBar.setHasReturnButton(true)
+        navigationBar.setReturnButtonText(getString(R.string.settings))
         ViewCompat.setOnApplyWindowInsetsListener(navigationBar) { v, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             val cutout = insets.getInsets(WindowInsetsCompat.Type.displayCutout())

@@ -6,6 +6,7 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
 import org.akanework.gramophone.logic.data.db.entity.CACHED_SONG_TABLE_NAME
+import org.akanework.gramophone.logic.data.db.entity.JELLYFIN_ID_TABLE_NAME
 import org.akanework.gramophone.logic.data.db.entity.LYRICS_INDEX_TABLE_NAME
 import org.akanework.gramophone.logic.data.db.entity.LYRICS_STATE_TABLE_NAME
 import org.akanework.gramophone.logic.data.db.entity.LyricsIndex
@@ -48,12 +49,19 @@ interface LyricsDao {
     )
     fun search(query: String, limit: Int): List<String>
 
-    /** The matching lines themselves, for showing why a song matched. */
+    /**
+     * A short fragment around each match, for showing why a song matched.
+     *
+     * Returning the complete lyrics for every hit made a search copy hundreds of kilobytes out of
+     * SQLite before the UI threw nearly all of it away. FTS already knows where the matching terms
+     * are, so let its snippet function do that work inside the database.
+     */
     @Query(
-        "SELECT songs.localId AS localId, lyrics.text AS text " +
+        "SELECT ids.localId AS localId, " +
+            "snippet($LYRICS_INDEX_TABLE_NAME, '', '', '…', 1, 24) AS text " +
             "FROM $LYRICS_INDEX_TABLE_NAME AS lyrics " +
-            "INNER JOIN $CACHED_SONG_TABLE_NAME AS songs " +
-            "ON songs.jellyfinId = lyrics.jellyfinId " +
+            "INNER JOIN $JELLYFIN_ID_TABLE_NAME AS ids " +
+            "ON ids.jellyfinId = lyrics.jellyfinId " +
             "WHERE $LYRICS_INDEX_TABLE_NAME MATCH :query LIMIT :limit"
     )
     fun searchWithText(query: String, limit: Int): List<LyricMatch>

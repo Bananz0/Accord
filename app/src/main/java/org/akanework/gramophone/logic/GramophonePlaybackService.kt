@@ -20,6 +20,8 @@ package org.akanework.gramophone.logic
 
 import android.annotation.SuppressLint
 import android.app.PendingIntent
+import android.bluetooth.BluetoothCodecConfig
+import android.bluetooth.BluetoothCodecStatus
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -30,14 +32,19 @@ import android.media.AudioManager
 import android.media.audiofx.AudioEffect
 import android.net.Uri
 import android.os.Bundle
+import android.os.Build
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
+import android.os.Process
+import android.os.Parcelable
 import android.util.Log
 import androidx.concurrent.futures.CallbackToFutureAdapter
 import androidx.core.app.NotificationChannelCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.IntentCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.Format
@@ -82,6 +89,7 @@ import uk.akane.accord.BuildConfig
 import uk.akane.accord.R
 import org.akanework.gramophone.logic.utils.CircularShuffleOrder
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinRemoteControl
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinRemoteTargets
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinItemResolver
 import org.akanework.gramophone.logic.data.library.songListSnapshot
 import uk.akane.accord.Accord
@@ -103,6 +111,8 @@ import org.akanework.gramophone.logic.utils.exoplayer.GramophoneRenderFactory
 import uk.akane.accord.ui.MainActivity
 import kotlin.random.Random
 import org.akanework.gramophone.logic.data.jellyfin.QueuePrefetcher
+import uk.akane.accord.logic.player.AfFormatTracker
+import uk.akane.accord.logic.player.BtCodecInfo
 import uk.akane.accord.logic.player.UsbHiFiManager
 
 
@@ -142,6 +152,9 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
     }
 
     private var lastSessionId = 0
+    /** Owns Media3's internal playback loop so AudioFlinger inspection runs on the same thread. */
+    private val internalPlaybackThread =
+        HandlerThread("ExoPlayer:Playback", Process.THREAD_PRIORITY_AUDIO)
     private var mediaSession: MediaLibrarySession? = null
     val endedWorkaroundPlayer
         get() = mediaSession?.player as EndedWorkaroundPlayer?
@@ -152,6 +165,9 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
             ((Int) -> ((CircularShuffleOrder) -> Unit) -> CircularShuffleOrder)? = null
     private lateinit var customCommands: List<CommandButton>
     private lateinit var handler: Handler
+    private lateinit var playbackHandler: Handler
+    private lateinit var afFormatTracker: AfFormatTracker
+    private var btCodecInfo: BtCodecInfo? = null
     private lateinit var nm: NotificationManagerCompat
     private lateinit var lastPlayedManager: LastPlayedManager
     private val lyricsLock = Semaphore(1)
@@ -206,6 +222,36 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         }
     }
 
+    private val btCodecReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action != "android.bluetooth.a2dp.profile.action.CODEC_CONFIG_CHANGED" ||
+                Build.VERSION.SDK_INT < Build.VERSION_CODES.O
+            ) return
+            val codecConfig = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                IntentCompat.getParcelableExtra(
+                    intent,
+                    "android.bluetooth.extra.CODEC_STATUS",
+                    BluetoothCodecStatus::class.java,
+                )?.codecConfig
+            } else {
+                // BluetoothCodecStatus was hidden from the public SDK until API 33 even though
+                // Samsung broadcasts it on Android 12. Avoid resolving the class on 31/32 and
+                // read its stable getCodecConfig method reflectively there.
+                @Suppress("DEPRECATION")
+                val status = intent.getParcelableExtra<Parcelable>(
+                    "android.bluetooth.extra.CODEC_STATUS"
+                )
+                runCatching {
+                    status?.javaClass?.getMethod("getCodecConfig")?.invoke(status)
+                        as? BluetoothCodecConfig
+                }.getOrNull()
+            }
+            btCodecInfo = BtCodecInfo.fromCodecConfig(codecConfig)
+            Log.d(TAG, "Bluetooth codec changed to $btCodecInfo")
+            broadcastAudioFormat()
+        }
+    }
+
     override fun onCreate() {
         instanceForWidgetAndLyricsOnly = this
         handler = Handler(Looper.getMainLooper())
@@ -215,6 +261,8 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         // alive again rather than waiting for the next track to finish.
         scrobbler.flushAsync()
         super.onCreate()
+        internalPlaybackThread.start()
+        playbackHandler = Handler(internalPlaybackThread.looper)
         nm = NotificationManagerCompat.from(this)
         prefs = PreferenceManager.getDefaultSharedPreferences(this)
         prefs.registerOnSharedPreferenceChangeListener(this)
@@ -223,6 +271,11 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
             enabled = { prefs.getBoolean("usb_hifi", true) },
             onChanged = { broadcastAudioFormat() },
         )
+        afFormatTracker = AfFormatTracker(this, playbackHandler, handler).apply {
+            // The tracker reports after AudioTrack is created and whenever its real route changes.
+            // Marshal back to the session thread before notifying connected controllers.
+            formatChangedCallback = { _, _ -> handler.post(::broadcastAudioFormat) }
+        }
         setListener(this)
         setMediaNotificationProvider(
             DefaultMediaNotificationProvider.Builder(this).build().apply {
@@ -292,14 +345,15 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
                 GramophoneRenderFactory(
                     this,
                     configurationListener = ::onAudioSinkInputFormatChanged,
+                    audioSinkListener = afFormatTracker::setAudioSink,
                 )
                     .setEnableAudioFloatOutput(
-                        // Media3 otherwise truncates 24/32-bit PCM to 16-bit. IEEE float carries
-                        // every 24-bit PCM value exactly and is the released library's supported
-                        // high-resolution path; the USB manager then asks Android for that exact
-                        // format rather than pretending the decoder input reached AudioTrack.
-                        prefs.getBoolean("usb_hifi", true) ||
-                            prefs.getBooleanStrict("floatoutput", false)
+                        // Float remains an explicit advanced option. Enabling USB Hi-Fi used to
+                        // force float on every route, including Samsung's built-in speaker path;
+                        // its clock then jumped ~209 ms per buffer and Media3 emitted continuous
+                        // UnexpectedDiscontinuity errors, heard as severe distortion. The USB
+                        // manager can still negotiate an exact mixer mode for the safe PCM format.
+                        prefs.getBooleanStrict("floatoutput", false)
                     )
                     .setEnableDecoderFallback(true)
                     .setEnableAudioTrackPlaybackParams( // hardware/system-accelerated playback speed
@@ -324,8 +378,10 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
                         .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
                         .build(), true
                 )
+                .setPlaybackLooper(internalPlaybackThread.looper)
                 .build()
         )
+        player.exoPlayer.addAnalyticsListener(afFormatTracker)
         if (BuildConfig.DEBUG) {
             player.exoPlayer.addAnalyticsListener(EventLogger())
         }
@@ -424,7 +480,9 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
             context = this,
             player = { controller },
             resolve = ::resolveRemoteIds,
-        ).also { it.start() }
+        ).also {
+            if (JellyfinRemoteTargets.isEnabled(this)) it.start()
+        }
 
         onShuffleModeEnabledChanged(controller!!.shuffleModeEnabled) // refresh custom commands
         controller!!.addListener(this)
@@ -432,6 +490,16 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
             headSetReceiver,
             IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
         )
+        val initialCodecIntent = ContextCompat.registerReceiver(
+            this,
+            btCodecReceiver,
+            IntentFilter("android.bluetooth.a2dp.profile.action.CODEC_CONFIG_CHANGED"),
+            ContextCompat.RECEIVER_EXPORTED,
+        )
+        // Some Android builds retain the latest codec broadcast. Use it when available; otherwise
+        // the next route/codec change supplies the value. The direct BluetoothA2dp query is not a
+        // third-party API on current Android and throws without a Companion Device association.
+        initialCodecIntent?.let { btCodecReceiver.onReceive(this, it) }
     }
 
     // When destroying, we should release server side player
@@ -482,13 +550,25 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         mediaSession!!.release()
         mediaSession!!.player.release()
         mediaSession = null
+        internalPlaybackThread.quitSafely()
         lyrics = null
         unregisterReceiver(headSetReceiver)
+        unregisterReceiver(btCodecReceiver)
         super.onDestroy()
     }
 
     override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
-        if (key == "usb_hifi") usbHiFiManager.refreshRoute()
+        when (key) {
+            "usb_hifi" -> usbHiFiManager.refreshRoute()
+            JellyfinRemoteTargets.PREF_FINNECT_ENABLED -> {
+                if (JellyfinRemoteTargets.isEnabled(this)) {
+                    remoteControl?.start()
+                } else {
+                    remoteControl?.stop()
+                    JellyfinRemoteTargets.disable()
+                }
+            }
+        }
     }
 
     // This onGetSession is a necessary method override needed by
@@ -608,6 +688,10 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
                 SessionResult(SessionResult.RESULT_SUCCESS).also {
                     it.extras.putBundle("sink_format", audioSinkInputFormat?.toBundle())
                     it.extras.putParcelable("usb_hifi", usbHiFiManager.status)
+                    // Unlike sink_format, this is what AudioFlinger and the HAL actually granted
+                    // after routing, resampling, offload decisions and device selection.
+                    it.extras.putParcelable("hal_format", afFormatTracker.format)
+                    it.extras.putParcelable("bt_codec", btCodecInfo)
                 }
             }
 

@@ -19,6 +19,7 @@ package org.akanework.gramophone.ui.fragments
 
 
 import android.content.SharedPreferences
+import android.annotation.SuppressLint
 import android.graphics.Color
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -130,6 +131,7 @@ abstract class BasePreferenceFragment : PreferenceFragmentCompat(),
         private val radius = 14.dpToPx(requireContext()).toFloat()
         private val dividerInset = 14.dpToPx(requireContext()).toFloat()
 
+        @SuppressLint("RestrictedApi")
         override fun onDraw(canvas: Canvas, parent: RecyclerView, state: RecyclerView.State) {
             val adapter = parent.adapter as? PreferenceGroupAdapter ?: return
             val rows = (0 until parent.childCount).mapNotNull { index ->

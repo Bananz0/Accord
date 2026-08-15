@@ -31,6 +31,9 @@ data class CachedSong(
     /** Every track artist from Jellyfin, separated by an ASCII unit separator. */
     @ColumnInfo(name = "trackArtists")
     val trackArtists: String?,
+    /** Local Jellyfin artist IDs aligned one-for-one with [trackArtists]. */
+    @ColumnInfo(name = "trackArtistIds")
+    val trackArtistIds: String?,
     @ColumnInfo(name = "artistId")
     val artistId: Long?,
     @ColumnInfo(name = "album")
@@ -39,6 +42,12 @@ data class CachedSong(
     val albumId: Long?,
     @ColumnInfo(name = "albumArtist")
     val albumArtist: String?,
+    /** Structured album artists; [albumArtist] remains the server's display string. */
+    @ColumnInfo(name = "albumArtists")
+    val albumArtists: String?,
+    /** Local Jellyfin artist IDs aligned one-for-one with [albumArtists]. */
+    @ColumnInfo(name = "albumArtistIds")
+    val albumArtistIds: String?,
     @ColumnInfo(name = "genre")
     val genre: String?,
     @ColumnInfo(name = "genreId")

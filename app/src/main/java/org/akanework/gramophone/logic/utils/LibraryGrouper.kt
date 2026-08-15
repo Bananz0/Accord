@@ -43,6 +43,9 @@ import java.util.PriorityQueue
  */
 object LibraryGrouper {
 
+    /** A Jellyfin credit whose stable identity must not be inferred from its display name. */
+    data class ArtistCredit(val id: Long?, val name: String)
+
     /** Two weeks, matching the window [MediaStoreUtils] used for "recently added". */
     const val DEFAULT_RECENTLY_ADDED_WINDOW_SECONDS = 2L * 7 * 24 * 60 * 60
 
@@ -66,6 +69,12 @@ object LibraryGrouper {
         val addDate: Long?,
         /** Absolute path including the file name, or null for sources without a file layout. */
         val path: String?,
+        /** Structured track credits, in Jellyfin's order. */
+        val trackArtists: List<ArtistCredit> = listOfNotNull(
+            artist?.takeIf(String::isNotBlank)?.let { ArtistCredit(artistId, it) }
+        ),
+        /** Structured release owners, in Jellyfin's order. */
+        val albumArtists: List<ArtistCredit> = emptyList(),
     )
 
     /**
@@ -90,6 +99,9 @@ object LibraryGrouper {
         val albumMap = hashMapOf<Long?, AlbumImpl>()
         val artistMap = hashMapOf<Long?, Artist>()
         val artistCacheMap = hashMapOf<String?, Long?>()
+        val allCreditArtists = linkedMapOf<ArtistKey, Artist>()
+        val primaryArtists = linkedMapOf<ArtistKey, Artist>()
+        val featuredArtists = linkedMapOf<ArtistKey, Artist>()
         val albumArtistMap = hashMapOf<String?, Pair<MutableList<Album>, MutableList<MediaItem>>>()
         // Note: it has been observed on a user's Pixel(!) that MediaStore assigned 3 different IDs
         // for "Unknown genre" (null genre tag), hence we practically ignore genre IDs as key
@@ -117,6 +129,23 @@ object LibraryGrouper {
                 Artist(entry.artistId, entry.artist, mutableListOf(), mutableListOf())
             }.songList.add(song)
             artistCacheMap.putIfAbsentSupport(entry.artist, entry.artistId)
+
+            val trackCredits = entry.trackArtists.distinctCredits()
+            val albumCredits = entry.albumArtists.distinctCredits()
+            val primary = albumCredits.firstOrNull() ?: trackCredits.firstOrNull()
+                ?: entry.artist?.takeIf(String::isNotBlank)?.let {
+                    ArtistCredit(entry.artistId, it)
+                }
+
+            // Build these once with the library. Browse, search and artist details then consume a
+            // few hundred Artist objects instead of reparsing every one of thousands of songs.
+            (trackCredits + albumCredits).distinctCredits().forEach { credit ->
+                allCreditArtists.addSong(credit, song)
+            }
+            primary?.let { primaryArtists.addSong(it, song) }
+            (albumCredits.drop(1) + trackCredits.filterNot { it.sameArtist(primary) })
+                .distinctCredits()
+                .forEach { credit -> featuredArtists.addSong(credit, song) }
             albumMap.getOrPut(entry.albumId) {
                 val artistStr = entry.albumArtist ?: entry.artist
                 val likelyArtist = entry.albumId
@@ -183,7 +212,10 @@ object LibraryGrouper {
             }
             artistMap[it.artistId]?.albumList?.add(it)
         }.toMutableList<Album>()
-        val artistList = artistMap.values.toMutableList()
+        // Structured credits are authoritative for Jellyfin. MediaStore entries do not carry
+        // them, so retain the legacy grouping as a compatibility fallback.
+        val artistList = (allCreditArtists.values.takeIf { it.isNotEmpty() }
+            ?: artistMap.values).toMutableList()
         val albumArtistList = albumArtistMap.entries.map { (artist, albumsAndSongs) ->
             Artist(artistCacheMap[artist], artist, albumsAndSongs.second, albumsAndSongs.first)
         }.toMutableList()
@@ -207,8 +239,36 @@ object LibraryGrouper {
             playlistsFinal,
             root,
             shallowRoot,
-            folders
+            folders,
+            primaryArtists.values.toMutableList().ifEmpty { artistList },
+            featuredArtists.values.toMutableList(),
         )
+    }
+
+    private data class ArtistKey(val id: Long?, val name: String)
+
+    private fun ArtistCredit.key(): ArtistKey =
+        ArtistKey(id, if (id == null) name.trim().lowercase() else "")
+
+    private fun ArtistCredit.sameArtist(other: ArtistCredit?): Boolean {
+        if (other == null) return false
+        return if (id != null && other.id != null) id == other.id
+        else name.equals(other.name, ignoreCase = true)
+    }
+
+    private fun Iterable<ArtistCredit>.distinctCredits(): List<ArtistCredit> =
+        distinctBy { credit -> credit.key() }
+
+    private fun MutableMap<ArtistKey, Artist>.addSong(
+        credit: ArtistCredit,
+        song: MediaItem,
+    ) {
+        val artist = getOrPut(credit.key()) {
+            Artist(credit.id, credit.name, mutableListOf(), mutableListOf())
+        }
+        // Credits were de-duplicated for this song before reaching the map, and each SongEntry is
+        // visited once. A linear duplicate scan here made grouping a prolific artist quadratic.
+        artist.songList.add(song)
     }
 }
 

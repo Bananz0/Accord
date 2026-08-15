@@ -14,7 +14,7 @@
  *     You should have received a copy of the GNU General Public License
  *     along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-@file:OptIn(androidx.media3.common.util.UnstableApi::class)
+@file:androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 
 package org.akanework.gramophone.logic
 
@@ -47,7 +47,6 @@ import android.view.View
 import android.view.ViewGroup.MarginLayoutParams
 import android.view.WindowInsets
 import android.widget.TextView
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge

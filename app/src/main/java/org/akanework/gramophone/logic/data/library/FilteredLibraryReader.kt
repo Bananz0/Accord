@@ -2,6 +2,7 @@ package org.akanework.gramophone.logic.data.library
 
 import android.net.Uri
 import androidx.media3.common.MediaItem
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinLibraryLoader
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import uk.akane.libphonograph.items.Album
@@ -44,6 +45,10 @@ class FilteredLibraryReader(
 
     override val albumArtistListFlow: Flow<List<Artist>> = delegate.albumArtistListFlow.artists()
     override val artistListFlow: Flow<List<Artist>> = delegate.artistListFlow.artists()
+    override val primaryArtistListFlow: Flow<List<Artist>> =
+        delegate.primaryArtistListFlow.artists()
+    override val featuredArtistListFlow: Flow<List<Artist>> =
+        delegate.featuredArtistListFlow.artists()
 
     override val genreListFlow: Flow<List<Genre>> =
         delegate.genreListFlow.filtered { genres, artists, ids ->
@@ -85,10 +90,15 @@ class FilteredLibraryReader(
     private fun MediaItem.isBlocked(artists: Set<String>, songs: Set<String>): Boolean {
         if (mediaId in songs) return true
         if (artists.isEmpty()) return false
-        val credits = listOfNotNull(
-            mediaMetadata.artist?.toString(),
-            mediaMetadata.albumArtist?.toString(),
-        )
+        val extras = mediaMetadata.extras
+        val credits = buildList {
+            addAll(extras?.getStringArrayList(JellyfinLibraryLoader.EXTRA_TRACK_ARTISTS).orEmpty())
+            addAll(extras?.getStringArrayList(JellyfinLibraryLoader.EXTRA_ALBUM_ARTISTS).orEmpty())
+            if (isEmpty()) {
+                mediaMetadata.artist?.toString()?.let(::add)
+                mediaMetadata.albumArtist?.toString()?.let(::add)
+            }
+        }
         return credits.any { BlacklistStore.normaliseArtist(it) in artists }
     }
 

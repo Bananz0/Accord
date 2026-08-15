@@ -1,9 +1,12 @@
 package uk.akane.accord.ui
 
+import android.Manifest
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.content.res.Resources
 import android.graphics.Color
 import android.os.Bundle
+import android.os.Build
 import android.view.RoundedCorner
 import android.view.View
 import android.view.ViewGroup
@@ -12,6 +15,7 @@ import android.widget.FrameLayout
 import androidx.activity.BackEventCompat
 import androidx.activity.viewModels
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.ViewCompat
@@ -39,6 +43,7 @@ import uk.akane.accord.logic.utils.UiUtils
 import uk.akane.accord.setupwizard.fragments.SetupWizardFragment
 import uk.akane.accord.ui.components.player.FloatingPanelLayout
 import uk.akane.accord.ui.components.GlobalTapHaptics
+import uk.akane.accord.ui.components.NoToast
 import uk.akane.accord.ui.components.performPressHaptic
 import uk.akane.accord.ui.fragments.BrowseFragment
 import uk.akane.accord.ui.fragments.HomeFragment
@@ -79,6 +84,25 @@ class MainActivity : AppCompatActivity() {
     }
 
     private lateinit var bottomNavigationView: BottomNavigationView
+    private var bluetoothCodecPermissionCallback: ((Boolean) -> Unit)? = null
+    private val bluetoothCodecPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        bluetoothCodecPermissionCallback?.invoke(granted)
+        bluetoothCodecPermissionCallback = null
+    }
+
+    fun requestBluetoothCodecPermission(callback: (Boolean) -> Unit) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            callback(true)
+            return
+        }
+        bluetoothCodecPermissionCallback = callback
+        bluetoothCodecPermissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
+    }
     private lateinit var floatingPanelLayout: FloatingPanelLayout
     private lateinit var shrinkContainerLayout: MaterialCardView
     /**
@@ -282,15 +306,30 @@ class MainActivity : AppCompatActivity() {
                     R.id.search -> 3
                     else -> throw IllegalArgumentException("Invalid itemId!")
                 }
-            fragmentSwitcherView.switchBaseFragment(target)
-            if (item.itemId == R.id.home) unwindCurrentStackTo(0)
+            // FragmentSwitcher alternates two physical containers for pushed pages. Switching a
+            // base while an even-depth page is occupying the base container can therefore leave
+            // the destination hidden behind an empty append container. Unwind the page we are
+            // leaving first, then switch, then clear any detail stack remembered by the target.
+            // All three operations stay on the switcher's own Cupertino transition path.
+            unwindCurrentStackTo(0) {
+                fragmentSwitcherView.postDelayed(
+                    {
+                        fragmentSwitcherView.switchBaseFragment(target)
+                        fragmentSwitcherView.postDelayed(
+                            { returnToDestinationRoot() },
+                            AnimationUtils.FAST_DURATION,
+                        )
+                    },
+                    32L,
+                )
+            }
             true
         }
         bottomNavigationView.setOnItemReselectedListener { item ->
             if (bottomNavigationHapticsReady) bottomNavigationView.performPressHaptic()
             when (item.itemId) {
-                R.id.home -> unwindCurrentStackTo(0)
-                R.id.search -> searchFragment.focusSearch()
+                R.id.search -> returnToSearchRoot(searchFragment)
+                else -> returnToDestinationRoot()
             }
         }
         // Listener setup can select the initial Home item; startup should never buzz by itself.
@@ -513,11 +552,50 @@ class MainActivity : AppCompatActivity() {
     }
 
     private var stackUnwindTarget: Int? = null
+    private var stackUnwindComplete: (() -> Unit)? = null
 
     /** Pops a detail stack one animated page at a time; used by Home and duplicate Settings taps. */
-    private fun unwindCurrentStackTo(size: Int) {
+    private fun unwindCurrentStackTo(size: Int, onComplete: (() -> Unit)? = null) {
         stackUnwindTarget = size.coerceAtLeast(0)
+        stackUnwindComplete = onComplete
         continueStackUnwind()
+    }
+
+    /** A bottom-nav item names its root, not whichever detail was left on that tab's stack. */
+    private fun returnToDestinationRoot(onComplete: (() -> Unit)? = null) {
+        if (fragmentSwitcherView.isNavigationInProgress) {
+            fragmentSwitcherView.postDelayed({ returnToDestinationRoot(onComplete) }, 32L)
+            return
+        }
+        unwindCurrentStackTo(0, onComplete)
+    }
+
+    /**
+     * A result page can be visible for a frame before FragmentSwitcher records it in its stack.
+     * Stack size alone therefore is not a safe signal that Search is ready to receive focus: the
+     * old implementation could open the keyboard over an album.  Finish only when the actual root
+     * is visible, and re-run the normal Cupertino pop if the late page registration appears.
+     */
+    private fun returnToSearchRoot(searchFragment: SearchFragment, attempt: Int = 0) {
+        if (searchFragment.isVisible && !searchFragment.isHidden) {
+            searchFragment.focusSearch()
+            return
+        }
+        if (attempt >= 80) return
+        if (!fragmentSwitcherView.isNavigationInProgress &&
+            fragmentSwitcherView.currentStackSize > 0
+        ) {
+            returnToDestinationRoot {
+                fragmentSwitcherView.post {
+                    returnToSearchRoot(searchFragment, attempt + 1)
+                }
+            }
+            return
+        }
+        fragmentSwitcherView.postDelayed(
+            { returnToSearchRoot(searchFragment, attempt + 1) },
+            32L,
+        )
     }
 
     private fun continueStackUnwind() {
@@ -528,6 +606,9 @@ class MainActivity : AppCompatActivity() {
         }
         if (fragmentSwitcherView.currentStackSize <= target) {
             stackUnwindTarget = null
+            val complete = stackUnwindComplete
+            stackUnwindComplete = null
+            complete?.invoke()
             return
         }
         if (!fragmentSwitcherView.popBackTopFragmentIfExists()) {
@@ -574,10 +655,10 @@ class MainActivity : AppCompatActivity() {
                 )
             }
             if (tracks.isEmpty()) {
-                android.widget.Toast.makeText(
+                NoToast.makeText(
                     this@MainActivity,
                     R.string.station_no_similar_tracks,
-                    android.widget.Toast.LENGTH_SHORT,
+                    NoToast.LENGTH_SHORT,
                 ).show()
                 return@launch
             }

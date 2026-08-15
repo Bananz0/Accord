@@ -38,6 +38,8 @@ class LidarrClient(
         val coverUrl: String?,
         /** True when Lidarr already tracks this album, so requesting it again is pointless. */
         val alreadyAdded: Boolean,
+        /** Complete resource returned by Lidarr; POST /album requires its metadata and images. */
+        val lidarrJson: String,
     )
 
     data class RootFolder(val path: String, val freeSpaceBytes: Long?)
@@ -67,34 +69,50 @@ class LidarrClient(
             Profile(it.optInt("id"), it.optString("name"))
         }
 
-    /**
-     * Searches Lidarr's metadata source for an album.
-     *
-     * [term] is matched loosely by Lidarr itself, so "artist - album" works about as well as a bare
-     * title and gives it more to disambiguate with.
-     */
+    /** Searches Lidarr's unified artist/album index and returns the album rows in useful order. */
     suspend fun searchAlbums(term: String): List<AlbumResult> {
         if (term.isBlank()) return emptyList()
-        val results = getArray("/api/v1/album/lookup", mapOf("term" to term))
-        return results.mapNotNull { item ->
-            val foreignAlbumId = item.optString("foreignAlbumId").takeIf { it.isNotBlank() }
-                ?: return@mapNotNull null
-            val artist = item.optJSONObject("artist")
-            AlbumResult(
-                foreignAlbumId = foreignAlbumId,
-                title = item.optString("title").ifBlank { "Untitled" },
-                artistName = artist?.optString("artistName").orEmpty(),
-                foreignArtistId = artist?.optString("foreignArtistId").orEmpty(),
-                year = item.optString("releaseDate").take(4).toIntOrNull(),
-                coverUrl = item.optJSONArray("images")?.let { images ->
-                    (0 until images.length())
-                        .mapNotNull { images.optJSONObject(it)?.optString("remoteUrl") }
-                        .firstOrNull { it.isNotBlank() }
-                },
-                // Lidarr gives an album an internal id once it is tracked; zero means it is not.
-                alreadyAdded = item.optInt("id", 0) > 0,
-            )
+        val searchRows = getArray("/api/v1/search", mapOf("term" to term))
+        val albums = searchRows.mapNotNull { it.optJSONObject("album") }.toMutableList()
+
+        // A bare artist search otherwise returns only the handful of albums that happen to rank in
+        // the server's mixed top 20. If the exact artist is already known locally, include their
+        // complete album list before ranking it against the query.
+        val needle = term.normaliseForMatch()
+        val exactArtistId = searchRows.asSequence()
+            .mapNotNull { it.optJSONObject("artist") }
+            .firstOrNull { it.optString("artistName").normaliseForMatch() == needle }
+            ?.optInt("id", 0)
+            ?.takeIf { it > 0 }
+        if (exactArtistId != null) {
+            albums += getArray("/api/v1/album", mapOf("artistId" to exactArtistId.toString()))
         }
+
+        return rankAlbums(
+            term,
+            albums.mapNotNull(::albumResult).distinctBy(AlbumResult::foreignAlbumId),
+        )
+    }
+
+    private fun albumResult(item: JSONObject): AlbumResult? {
+        val foreignAlbumId = item.optString("foreignAlbumId").takeIf { it.isNotBlank() }
+            ?: return null
+        val artist = item.optJSONObject("artist")
+        return AlbumResult(
+            foreignAlbumId = foreignAlbumId,
+            title = item.optString("title").ifBlank { "Untitled" },
+            artistName = artist?.optString("artistName").orEmpty(),
+            foreignArtistId = artist?.optString("foreignArtistId").orEmpty(),
+            year = item.optString("releaseDate").take(4).toIntOrNull(),
+            coverUrl = item.optJSONArray("images")?.let { images ->
+                (0 until images.length())
+                    .mapNotNull { images.optJSONObject(it)?.optString("remoteUrl") }
+                    .firstOrNull { it.isNotBlank() }
+            },
+            // Lidarr gives an album an internal id once it is tracked; zero means it is not.
+            alreadyAdded = item.optInt("id", 0) > 0,
+            lidarrJson = item.toString(),
+        )
     }
 
     /**
@@ -106,14 +124,18 @@ class LidarrClient(
      * is what a request from a playlist means.
      */
     suspend fun addAlbum(album: AlbumResult): Boolean {
+        if (album.alreadyAdded) return true
         val rootFolder = store.rootFolderPath
             ?: throw LidarrException("No root folder chosen")
-        val payload = JSONObject().apply {
-            put("foreignAlbumId", album.foreignAlbumId)
+        val payload = JSONObject(album.lidarrJson).apply {
+            // A lookup result can carry a zero placeholder, but POST treats a real id as an update.
+            remove("id")
             put("monitored", true)
             put("addOptions", JSONObject().put("searchForNewAlbum", true))
-            put("artist", JSONObject().apply {
+            val artist = optJSONObject("artist") ?: JSONObject().apply {
                 put("foreignArtistId", album.foreignArtistId)
+            }
+            put("artist", artist.apply {
                 put("qualityProfileId", store.qualityProfileId)
                 put("metadataProfileId", store.metadataProfileId)
                 put("rootFolderPath", rootFolder)
@@ -228,5 +250,48 @@ class LidarrClient(
     companion object {
         private const val TAG = "LidarrClient"
         private val JSON = "application/json; charset=utf-8".toMediaType()
+
+        internal fun rankAlbums(term: String, albums: List<AlbumResult>): List<AlbumResult> {
+            val needle = term.normaliseForMatch()
+            val familyNeedle = term.editionFamilyForMatch()
+            val terms = term.split(NON_WORD)
+                .map { it.normaliseForMatch() }
+                .filter(String::isNotBlank)
+            return albums.sortedWith(compareBy<AlbumResult> { album ->
+                val title = album.title.normaliseForMatch()
+                val artist = album.artistName.normaliseForMatch()
+                val combined = "$artist$title"
+                val familyTitle = album.title.editionFamilyForMatch()
+                val familyCombined = "$artist$familyTitle"
+                when {
+                    needle == combined || needle == "$title$artist" ||
+                        familyNeedle == familyCombined || familyNeedle == "$familyTitle$artist" -> 0
+                    needle == artist -> 1
+                    needle == title -> 2
+                    title.startsWith(needle) -> 3
+                    artist.startsWith(needle) -> 4
+                    title.contains(needle) -> 5
+                    artist.contains(needle) -> 6
+                    terms.isNotEmpty() && terms.all(combined::contains) -> 7
+                    else -> 8
+                }
+            }.thenBy { if (it.title.contains(PREFERRED_EDITION)) 0 else 1 }
+                .thenByDescending(AlbumResult::year))
+        }
+
+        internal fun String.normaliseForMatch(): String = lowercase().filter(Char::isLetterOrDigit)
+
+        private fun String.editionFamilyForMatch(): String =
+            replace(EDITION_MARKER, "").normaliseForMatch()
+
+        private val NON_WORD = Regex("[^\\p{L}\\p{N}]+")
+        private val EDITION_MARKER = Regex(
+            """\b(deluxe|expanded|anniversary|special|complete|bonus(?:\s+track)?|platinum)\s*(edition|version)?\b""",
+            RegexOption.IGNORE_CASE,
+        )
+        private val PREFERRED_EDITION = Regex(
+            """\b(deluxe|expanded|anniversary|special edition|complete edition|bonus track|platinum)\b""",
+            RegexOption.IGNORE_CASE,
+        )
     }
 }

@@ -60,9 +60,10 @@ class PlayCountMatcher private constructor(
                 val artist = song.artist ?: song.albumArtist ?: ""
                 val id = song.jellyfinId
 
-                // The exact map may overwrite: two library rows with the same artist and title are
-                // duplicates of one recording, and either is a correct answer.
-                exact[TrackKey.exact(artist, title)] = id
+                // Standard, deluxe, live and remastered editions can share an artist/title pair.
+                // Treat that as ambiguous too: silently letting the last row win transfers plays
+                // and favourites to an arbitrary Jellyfin item, which then contaminates mixes.
+                exact.claim(TrackKey.exact(artist, title), id)
                 loose.claim(TrackKey.loose(artist, title), id)
                 titleOnly.claim(TrackKey.titleOnly(title), id)
                 song.album?.takeIf { it.isNotBlank() }?.let {

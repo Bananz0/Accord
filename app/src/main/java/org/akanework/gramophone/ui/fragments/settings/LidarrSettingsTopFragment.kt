@@ -4,7 +4,7 @@ package org.akanework.gramophone.ui.fragments.settings
 import android.os.Bundle
 import android.view.View
 import android.widget.TextView
-import android.widget.Toast
+import uk.akane.accord.ui.components.NoToast as Toast
 import androidx.lifecycle.lifecycleScope
 import androidx.preference.Preference
 import com.google.android.material.dialog.MaterialAlertDialogBuilder

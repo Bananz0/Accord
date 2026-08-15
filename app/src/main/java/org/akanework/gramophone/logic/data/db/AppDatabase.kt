@@ -51,7 +51,7 @@ const val APP_DATABASE_FILE_NAME = "app.db"
         LyricsIndex::class,
         LyricsState::class,
     ],
-    version = 9,
+    version = 10,
 )
 abstract class AppDatabase : RoomDatabase() {
 
@@ -197,6 +197,19 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** Preserves Jellyfin artist identity instead of reconstructing credits from display text. */
+        private val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `$CACHED_SONG_TABLE_NAME` ADD COLUMN `trackArtistIds` TEXT")
+                db.execSQL("ALTER TABLE `$CACHED_SONG_TABLE_NAME` ADD COLUMN `albumArtists` TEXT")
+                db.execSQL("ALTER TABLE `$CACHED_SONG_TABLE_NAME` ADD COLUMN `albumArtistIds` TEXT")
+                // The old cache cannot manufacture the missing GUIDs from display strings. Mark
+                // the derived album probe stale so the next requested sync repopulates every row
+                // from Jellyfin instead of declaring the legacy rows up to date forever.
+                db.execSQL("DELETE FROM `$ALBUM_SYNC_STATE_TABLE_NAME`")
+            }
+        }
+
         /**
          * The virtual table Room generates for an @Fts4 entity. Written out by hand here because a
          * migration runs raw SQL, and it has to match what Room expects byte for byte or the
@@ -258,7 +271,11 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     APP_DATABASE_FILE_NAME
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
+                    .addMigrations(
+                        MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
+                        MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
+                        MIGRATION_9_10,
+                    )
                     .build()
                     .apply { instance = this }
             }

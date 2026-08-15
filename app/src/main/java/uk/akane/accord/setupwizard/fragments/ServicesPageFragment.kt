@@ -7,7 +7,7 @@ import android.view.ViewGroup
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
-import android.widget.Toast
+import uk.akane.accord.ui.components.NoToast as Toast
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.button.MaterialButton

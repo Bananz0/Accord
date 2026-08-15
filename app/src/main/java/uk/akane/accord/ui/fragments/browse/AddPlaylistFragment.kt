@@ -11,7 +11,7 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.TextView
-import android.widget.Toast
+import uk.akane.accord.ui.components.NoToast as Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.isVisible

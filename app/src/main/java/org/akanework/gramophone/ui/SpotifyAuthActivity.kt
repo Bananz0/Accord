@@ -2,7 +2,7 @@ package org.akanework.gramophone.ui
 
 
 import android.os.Bundle
-import android.widget.Toast
+import uk.akane.accord.ui.components.NoToast as Toast
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers

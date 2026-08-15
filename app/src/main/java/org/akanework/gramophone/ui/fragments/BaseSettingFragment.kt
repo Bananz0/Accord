@@ -47,11 +47,16 @@ abstract class BaseSettingFragment(
             }
         }
 
-        childFragmentManager
-            .beginTransaction()
-            .addToBackStack(System.currentTimeMillis().toString())
-            .add(R.id.settings, fragmentCreator())
-            .commit()
+        // The child FragmentManager restores this page across activity recreation. Adding a new
+        // preference fragment every time onCreateView runs leaves two full settings surfaces in
+        // the same container (and two scroll listeners driving the title), which is the overlap
+        // seen after returning from the background or changing theme.
+        if (childFragmentManager.findFragmentById(R.id.settings) == null) {
+            childFragmentManager
+                .beginTransaction()
+                .replace(R.id.settings, fragmentCreator())
+                .commit()
+        }
 
         return rootView
     }

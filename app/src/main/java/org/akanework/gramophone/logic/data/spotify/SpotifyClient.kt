@@ -39,8 +39,25 @@ class SpotifyClient(
         val imageUrl: String?,
     )
 
-    /** A track as Spotify describes it. Matched against the local library by name. */
-    data class Track(val title: String, val artist: String, val album: String?)
+    /**
+     * A track as Spotify describes it.
+     *
+     * The extra release fields are identity evidence, not decoration. Artist and title alone are
+     * ambiguous as soon as the library contains standard, deluxe, remastered or live editions.
+     */
+    data class Track(
+        val title: String,
+        val artist: String,
+        val album: String?,
+        val spotifyId: String? = null,
+        val isrc: String? = null,
+        val durationMs: Long? = null,
+        val albumReleaseYear: Int? = null,
+        val discNumber: Int? = null,
+        val trackNumber: Int? = null,
+        val albumTotalTracks: Int? = null,
+        val albumType: String? = null,
+    )
 
     /**
      * Builds the URL to send the user to, and stores the PKCE verifier the callback will need.
@@ -156,7 +173,9 @@ class SpotifyClient(
         val token = validAccessToken(context, nowMillis)
         val result = mutableListOf<Track>()
         var url: String? = "$API_ROOT/playlists/$playlistId/tracks" +
-                "?limit=100&fields=next,items(track(name,album(name),artists(name)))"
+                "?limit=100&fields=next,items(track(id,name,duration_ms,disc_number," +
+                "track_number,external_ids(isrc),album(id,name,album_type,release_date," +
+                "total_tracks),artists(name)))"
         while (url != null) {
             val json = get(url, token)
             val items = json.optJSONArray("items") ?: break
@@ -166,10 +185,21 @@ class SpotifyClient(
                 val title = track.optString("name").takeIf { it.isNotBlank() } ?: continue
                 val artist = track.optJSONArray("artists")
                     ?.optJSONObject(0)?.optString("name").orEmpty()
+                val album = track.optJSONObject("album")
                 result += Track(
                     title = title,
                     artist = artist,
-                    album = track.optJSONObject("album")?.optString("name"),
+                    album = album?.optString("name")?.takeIf { it.isNotBlank() },
+                    spotifyId = track.optString("id").takeIf { it.isNotBlank() },
+                    isrc = track.optJSONObject("external_ids")?.optString("isrc")
+                        ?.takeIf { it.isNotBlank() },
+                    durationMs = track.optLong("duration_ms").takeIf { it > 0L },
+                    albumReleaseYear = album?.optString("release_date")
+                        ?.take(4)?.toIntOrNull(),
+                    discNumber = track.optInt("disc_number").takeIf { it > 0 },
+                    trackNumber = track.optInt("track_number").takeIf { it > 0 },
+                    albumTotalTracks = album?.optInt("total_tracks")?.takeIf { it > 0 },
+                    albumType = album?.optString("album_type")?.takeIf { it.isNotBlank() },
                 )
             }
             url = json.optString("next").takeIf { it.isNotBlank() && it != "null" }

@@ -30,7 +30,7 @@ import android.os.Bundle
 import android.os.Parcelable
 import android.provider.MediaStore
 import android.util.Log
-import android.widget.Toast
+import uk.akane.accord.ui.components.NoToast as Toast
 import androidx.core.database.getIntOrNull
 import androidx.core.database.getLongOrNull
 import androidx.core.database.getStringOrNull
@@ -207,7 +207,11 @@ object MediaStoreUtils {
         val playlistList: MutableList<Playlist>,
         val folderStructure: FileNode,
         val shallowFolder: FileNode,
-        val folders: Set<String>
+        val folders: Set<String>,
+        /** Release owners, already indexed while the flat library is grouped. */
+        val primaryArtistList: MutableList<Artist> = artistList,
+        /** Per-track guests, kept separate from release ownership. */
+        val featuredArtistList: MutableList<Artist> = mutableListOf(),
     )
 
     class FileNode(

@@ -12,8 +12,10 @@ import android.os.Looper
 import android.os.Parcelable
 import android.util.Log
 import androidx.annotation.RequiresApi
+import androidx.annotation.OptIn
 import androidx.media3.common.C
 import androidx.media3.common.Format
+import androidx.media3.common.util.UnstableApi
 import kotlinx.parcelize.Parcelize
 
 /** What Android accepted for the currently selected USB output. */
@@ -34,6 +36,7 @@ data class UsbHiFiStatus(
  * that mixer behaviour optional, so this class never claims it unless the HAL advertised it and
  * [AudioManager.setPreferredMixerAttributes] accepted it.
  */
+@OptIn(UnstableApi::class)
 class UsbHiFiManager(
     context: Context,
     private val enabled: () -> Boolean,

@@ -25,6 +25,7 @@ import uk.akane.accord.logic.dp
 import uk.akane.accord.ui.components.QueueBlendView
 import uk.akane.accord.ui.components.ResistiveSwipeHaptics
 import uk.akane.accord.ui.components.resistedSwipeDistance
+import uk.akane.cupertino.utils.AnimationUtils
 import uk.akane.cupertino.utils.AnimationUtils.FASTEST_DURATION
 import java.util.Collections
 import kotlinx.coroutines.*
@@ -304,6 +305,7 @@ class QueueItemTouchHelperCallback(
                         .scaleX(1.0f)
                         .scaleY(1.0f)
                         .setDuration(FASTEST_DURATION)
+                        .setInterpolator(AnimationUtils.easingStandardInterpolator)
                         .start()
                 }
             }

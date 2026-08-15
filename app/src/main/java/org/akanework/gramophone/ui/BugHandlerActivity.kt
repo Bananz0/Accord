@@ -26,7 +26,7 @@ import android.os.Bundle
 import android.util.Log
 import android.view.View
 import android.widget.TextView
-import android.widget.Toast
+import uk.akane.accord.ui.components.NoToast as Toast
 import androidx.activity.addCallback
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity

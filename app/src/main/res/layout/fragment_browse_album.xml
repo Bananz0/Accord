@@ -68,8 +68,7 @@
                         android:textAlignment="center"
                         android:textColor="@android:color/white"
                         android:textSize="24sp"
-                        android:textStyle="bold"
-                        android:fontFamily="sans-serif-medium" />
+                        android:fontFamily="@font/sf_pro_bold" />
 
                     <TextView
                         android:id="@+id/tvAlbumArtist"
@@ -81,7 +80,8 @@
                         android:text="Pearl Jam"
                         android:textAlignment="center"
                         android:textColor="@color/accentColor"
-                        android:textSize="16sp" />
+                        android:textSize="16sp"
+                        android:fontFamily="@font/sf_pro_semibold" />
 
                     <TextView
                         android:id="@+id/tvMeta"
@@ -94,7 +94,7 @@
                         android:textAlignment="center"
                         android:textColor="#99FFFFFF"
                         android:textSize="12sp"
-                        android:fontFamily="sans-serif-medium" />
+                        android:fontFamily="@font/sf_pro_semibold" />
 
                     <LinearLayout
                         android:id="@+id/rowButtons"
@@ -144,6 +144,7 @@
                         android:textAlignment="viewStart"
                         android:textColor="#B3FFFFFF"
                         android:textSize="14sp"
+                        android:fontFamily="@font/sf_pro_regular"
                         android:lineSpacingExtra="3dp" />
 
                 </LinearLayout>

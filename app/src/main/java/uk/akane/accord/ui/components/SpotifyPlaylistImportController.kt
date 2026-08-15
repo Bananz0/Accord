@@ -1,12 +1,13 @@
 package uk.akane.accord.ui.components
 
-import android.widget.Toast
+import uk.akane.accord.ui.components.NoToast as Toast
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.akanework.gramophone.logic.data.lidarr.LidarrRequester
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinPlaylists
 import org.akanework.gramophone.logic.data.spotify.SpotifyClient
 import org.akanework.gramophone.logic.data.spotify.SpotifyCredentialStore
 import org.akanework.gramophone.logic.data.spotify.SpotifyPlaylistImporter
@@ -50,13 +51,43 @@ class SpotifyPlaylistImportController(
                 .setNegativeButton(android.R.string.cancel, null)
                 .setPositiveButton(R.string.spotify_import_action) { _, _ ->
                     val selected = playlists.filterIndexed { index, _ -> checked[index] }
-                    if (selected.isNotEmpty()) import(selected)
+                    if (selected.isNotEmpty()) confirmAndImport(selected)
                 }
                 .show()
         }
     }
 
-    private fun import(selected: List<SpotifyClient.Playlist>) {
+    private fun confirmAndImport(selected: List<SpotifyClient.Playlist>) {
+        fragment.viewLifecycleOwner.lifecycleScope.launch {
+            val existingNames = withContext(Dispatchers.IO) {
+                JellyfinPlaylists.list(context).mapTo(HashSet()) { it.name.lowercase() }
+            }
+            if (!fragment.isAdded) return@launch
+            val conflicts = selected.count { it.name.lowercase() in existingNames }
+            if (conflicts == 0) {
+                import(selected, replaceExisting = false)
+                return@launch
+            }
+            MaterialAlertDialogBuilder(context)
+                .setTitle(R.string.spotify_import_existing_title)
+                .setMessage(
+                    context.resources.getQuantityString(
+                        R.plurals.spotify_import_existing_message,
+                        conflicts,
+                        conflicts,
+                    )
+                )
+                .setNegativeButton(R.string.spotify_import_keep) { _, _ ->
+                    import(selected, replaceExisting = false)
+                }
+                .setPositiveButton(R.string.spotify_import_replace) { _, _ ->
+                    import(selected, replaceExisting = true)
+                }
+                .show()
+        }
+    }
+
+    private fun import(selected: List<SpotifyClient.Playlist>, replaceExisting: Boolean) {
         Toast.makeText(context, R.string.spotify_importing, Toast.LENGTH_SHORT).show()
         fragment.viewLifecycleOwner.lifecycleScope.launch {
             val library = activity.reader.songListSnapshot()
@@ -68,7 +99,13 @@ class SpotifyPlaylistImportController(
                         val tracks = client.playlistTracks(
                             context, playlist.id, System.currentTimeMillis()
                         )
-                        SpotifyPlaylistImporter.import(context, playlist.name, tracks, library)
+                        SpotifyPlaylistImporter.import(
+                            context,
+                            playlist.name,
+                            tracks,
+                            library,
+                            replaceExisting,
+                        )
                     }.getOrNull()
                 }
             }

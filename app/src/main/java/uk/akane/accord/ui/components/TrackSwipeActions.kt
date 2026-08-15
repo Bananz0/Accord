@@ -5,7 +5,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
-import android.widget.Toast
+import uk.akane.accord.ui.components.NoToast as Toast
 import androidx.core.content.res.ResourcesCompat
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem

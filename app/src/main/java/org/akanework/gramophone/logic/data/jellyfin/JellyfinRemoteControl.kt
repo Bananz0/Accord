@@ -45,6 +45,7 @@ class JellyfinRemoteControl(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var socketJob: Job? = null
+    private var advertiseJob: Job? = null
 
     /**
      * Announces this client and starts listening.
@@ -54,9 +55,10 @@ class JellyfinRemoteControl(
      */
     fun start() {
         if (socketJob?.isActive == true) return
+        advertiseJob?.cancel()
+        advertiseJob = scope.launch(Dispatchers.IO) { advertise(enabled = true) }
         socketJob = scope.launch {
             val api = withContext(Dispatchers.IO) { JellyfinClientHolder.api() } ?: return@launch
-            withContext(Dispatchers.IO) { advertise() }
 
             // Three independent streams rather than one switch. They arrive on different message
             // types and a failure to parse one should not take the others down with it.
@@ -69,6 +71,8 @@ class JellyfinRemoteControl(
     fun stop() {
         socketJob?.cancel()
         socketJob = null
+        advertiseJob?.cancel()
+        advertiseJob = scope.launch(Dispatchers.IO) { advertise(enabled = false) }
     }
 
     /**
@@ -78,18 +82,18 @@ class JellyfinRemoteControl(
      * the command list is what they grey out. Only audio is claimed, because that is all this app
      * can play - offering video would make it a target for something it would then refuse.
      */
-    private suspend fun advertise() {
+    private suspend fun advertise(enabled: Boolean) {
         val api = JellyfinClientHolder.api() ?: return
         try {
             api.sessionApi.postFullCapabilities(
                 data = ClientCapabilitiesDto(
                     playableMediaTypes = listOf(MediaType.AUDIO),
-                    supportedCommands = SUPPORTED_COMMANDS,
-                    supportsMediaControl = true,
+                    supportedCommands = if (enabled) SUPPORTED_COMMANDS else emptyList(),
+                    supportsMediaControl = enabled,
                     supportsPersistentIdentifier = true,
                 )
             )
-            Log.d(TAG, "Advertised remote-control capabilities")
+            Log.d(TAG, "Advertised remote-control capabilities: enabled=$enabled")
         } catch (e: Exception) {
             // Not fatal: the app still plays, it simply will not appear as a target.
             Log.w(TAG, "Could not advertise capabilities", e)

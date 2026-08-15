@@ -3,7 +3,7 @@ package org.akanework.gramophone.ui.fragments.settings
 
 import android.content.Intent
 import android.os.Bundle
-import android.widget.Toast
+import uk.akane.accord.ui.components.NoToast as Toast
 import androidx.core.net.toUri
 import androidx.lifecycle.lifecycleScope
 import androidx.preference.Preference

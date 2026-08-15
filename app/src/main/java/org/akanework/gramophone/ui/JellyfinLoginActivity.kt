@@ -1,18 +1,26 @@
 package org.akanework.gramophone.ui
 
 
-import android.content.Intent
+import android.app.Activity
+import android.view.KeyEvent
 import android.os.Bundle
 import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
+import android.widget.ProgressBar
+import android.widget.ScrollView
 import android.widget.TextView
+import android.view.inputmethod.EditorInfo
+import android.view.autofill.AutofillManager
 import androidx.appcompat.app.AppCompatActivity
+import androidx.activity.OnBackPressedCallback
+import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.view.updatePadding
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -23,8 +31,7 @@ import coil3.load
 import coil3.request.transformations
 import coil3.transform.CircleCropTransformation
 import com.google.android.material.button.MaterialButton
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
-import com.google.android.material.progressindicator.CircularProgressIndicator
+import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.progressindicator.LinearProgressIndicator
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
@@ -37,7 +44,9 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import uk.akane.accord.R
+import uk.akane.accord.logic.enableEdgeToEdgeProperly
 import uk.akane.accord.ui.components.enablePasteInto
+import uk.akane.cupertino.utils.AnimationUtils
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinClientHolder
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinPlugins
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinUserImage
@@ -71,7 +80,7 @@ class JellyfinLoginActivity : AppCompatActivity() {
 
     private lateinit var discoveryEmpty: TextView
     private lateinit var discoveredList: RecyclerView
-    private lateinit var discoveryProgress: CircularProgressIndicator
+    private lateinit var discoveryProgress: ProgressBar
     private lateinit var serverUrlField: TextInputEditText
     private lateinit var connectButton: MaterialButton
     private lateinit var serverProgress: LinearProgressIndicator
@@ -80,6 +89,7 @@ class JellyfinLoginActivity : AppCompatActivity() {
     private lateinit var serverNameLabel: TextView
     private lateinit var usersLabel: TextView
     private lateinit var userList: RecyclerView
+    private lateinit var userScroll: ScrollView
     private lateinit var usernameLayout: TextInputLayout
     private lateinit var usernameField: TextInputEditText
     private lateinit var passwordField: TextInputEditText
@@ -91,15 +101,27 @@ class JellyfinLoginActivity : AppCompatActivity() {
     /** Set once a server has been resolved; every step-two action needs it. */
     private var serverUrl: String? = null
     private var quickConnectJob: Job? = null
+    private var showingUserStep = false
+    private var stepAnimator: android.animation.ValueAnimator? = null
 
     private val discoveredAdapter = ServerAdapter { connectTo(it.address) }
     private val userAdapter = UserAdapter { user ->
         usernameField.setText(user.name)
+        usernameField.setSelection(usernameField.text?.length ?: 0)
         passwordField.requestFocus()
+        userScroll.post {
+            signInButton.requestRectangleOnScreen(
+                android.graphics.Rect(0, 0, signInButton.width, signInButton.height),
+                true,
+            )
+            WindowInsetsControllerCompat(window, passwordField)
+                .show(WindowInsetsCompat.Type.ime())
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdgeProperly()
         setContentView(R.layout.activity_jellyfin_login)
         bindViews()
         applyWindowInsets()
@@ -116,12 +138,60 @@ class JellyfinLoginActivity : AppCompatActivity() {
         quickConnectButton.setOnClickListener { startQuickConnect() }
         findViewById<TextView>(R.id.change_server).setOnClickListener { showServerStep() }
 
+        serverUrlField.setOnEditorActionListener { _, actionId, event ->
+            if (actionId == EditorInfo.IME_ACTION_DONE ||
+                event?.keyCode == KeyEvent.KEYCODE_ENTER
+            ) {
+                connectButton.performClick()
+                true
+            } else false
+        }
+        usernameField.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_NEXT) {
+                passwordField.requestFocus()
+                true
+            } else false
+        }
+        passwordField.setOnEditorActionListener { _, actionId, event ->
+            if (actionId == EditorInfo.IME_ACTION_DONE ||
+                event?.keyCode == KeyEvent.KEYCODE_ENTER
+            ) {
+                signInButton.performClick()
+                true
+            } else false
+        }
+        passwordField.setOnFocusChangeListener { _, hasFocus ->
+            if (hasFocus) userScroll.post {
+                signInButton.requestRectangleOnScreen(
+                    android.graphics.Rect(0, 0, signInButton.width, signInButton.height),
+                    true,
+                )
+            }
+        }
+
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                when {
+                    showingUserStep -> showServerStep()
+                    else -> finish()
+                }
+            }
+        })
+
+        val restoredServer = savedInstanceState?.getString(STATE_SERVER_URL)
+        val rememberedServer = JellyfinClientHolder.credentials.serverUrl
+        serverUrlField.setText(restoredServer ?: rememberedServer.orEmpty())
+
         startDiscovery()
+        if (savedInstanceState?.getBoolean(STATE_USER_STEP) == true && !restoredServer.isNullOrBlank()) {
+            connectTo(restoredServer)
+        }
     }
 
     private fun bindViews() {
         stepServer = findViewById(R.id.step_server)
         stepUser = findViewById(R.id.step_user)
+        userScroll = stepUser as ScrollView
         discoveryEmpty = findViewById(R.id.discovery_empty)
         discoveredList = findViewById(R.id.discovered_servers)
         discoveryProgress = findViewById(R.id.discovery_progress)
@@ -181,6 +251,7 @@ class JellyfinLoginActivity : AppCompatActivity() {
             showServerError(getString(R.string.jellyfin_error_no_server))
             return
         }
+        hideKeyboard()
         setServerBusy(true)
         serverStatus.visibility = View.VISIBLE
         serverStatus.setText(R.string.jellyfin_finding_server)
@@ -206,20 +277,47 @@ class JellyfinLoginActivity : AppCompatActivity() {
             usersLabel.visibility = if (users.isEmpty()) View.GONE else View.VISIBLE
             quickConnectButton.visibility =
                 if (quickConnectAvailable) View.VISIBLE else View.GONE
-            showUserStep()
+            showUserStep(animate = true)
         }
     }
 
     private fun showServerStep() {
         quickConnectJob?.cancel()
-        stepUser.visibility = View.GONE
-        stepServer.visibility = View.VISIBLE
+        hideKeyboard(clearFocus = true)
+        if (!showingUserStep) return
+        showingUserStep = false
+        animateStep(stepUser, stepServer)
         status.visibility = View.GONE
     }
 
-    private fun showUserStep() {
-        stepServer.visibility = View.GONE
-        stepUser.visibility = View.VISIBLE
+    private fun showUserStep(animate: Boolean) {
+        if (showingUserStep) return
+        showingUserStep = true
+        userScroll.requestFocus()
+        if (animate) animateStep(stepServer, stepUser) else {
+            stepServer.visibility = View.GONE
+            stepUser.visibility = View.VISIBLE
+        }
+    }
+
+    /** Uses the same Cupertino scale swap utility as the rest of Accord's content changes. */
+    private fun animateStep(outgoing: View, incoming: View) {
+        stepAnimator?.cancel()
+        incoming.visibility = View.VISIBLE
+        stepAnimator = AnimationUtils.createScaleSwapAnimator(
+            outView = outgoing,
+            inView = incoming,
+            doOnEnd = {
+                outgoing.visibility = View.GONE
+                outgoing.alpha = 1f
+                outgoing.scaleX = 1f
+                outgoing.scaleY = 1f
+                incoming.alpha = 1f
+                incoming.scaleX = 1f
+                incoming.scaleY = 1f
+                stepAnimator = null
+            },
+        )
     }
 
     /**
@@ -263,8 +361,12 @@ class JellyfinLoginActivity : AppCompatActivity() {
         val password = passwordField.text?.toString().orEmpty()
         if (username.isEmpty()) {
             showError(getString(R.string.jellyfin_error_no_username))
+            usernameField.requestFocus()
+            WindowInsetsControllerCompat(window, usernameField)
+                .show(WindowInsetsCompat.Type.ime())
             return
         }
+        hideKeyboard()
         setBusy(true)
         status.visibility = View.VISIBLE
         status.setText(R.string.jellyfin_signing_in)
@@ -306,12 +408,21 @@ class JellyfinLoginActivity : AppCompatActivity() {
                 return@launch
             }
 
-            val dialog = MaterialAlertDialogBuilder(this@JellyfinLoginActivity)
-                .setTitle(R.string.jellyfin_quick_connect)
-                .setView(buildCodeView(code))
-                .setNegativeButton(android.R.string.cancel) { _, _ -> quickConnectJob?.cancel() }
-                .setCancelable(false)
-                .show()
+            val dialog = BottomSheetDialog(
+                this@JellyfinLoginActivity,
+                R.style.Theme_Accord_OutputPicker,
+            ).apply {
+                val content = buildCodeView(code)
+                setContentView(content)
+                setCancelable(true)
+                setCanceledOnTouchOutside(true)
+                setOnCancelListener { quickConnectJob?.cancel() }
+                content.findViewById<View>(R.id.quick_connect_cancel).setOnClickListener {
+                    quickConnectJob?.cancel()
+                    dismiss()
+                }
+                show()
+            }
 
             try {
                 while (true) {
@@ -385,20 +496,49 @@ class JellyfinLoginActivity : AppCompatActivity() {
                 top = bars.top,
                 bottom = maxOf(bars.bottom, ime.bottom),
             )
+            if (ime.bottom > 0 && ::passwordField.isInitialized && passwordField.hasFocus()) {
+                userScroll.post {
+                    signInButton.requestRectangleOnScreen(
+                        android.graphics.Rect(0, 0, signInButton.width, signInButton.height),
+                        true,
+                    )
+                }
+            }
             insets
         }
     }
 
     private fun finishAuthentication(result: LoginResult) = when (result) {
         is LoginResult.Success -> {
-            startActivity(Intent(this, uk.akane.accord.ui.MainActivity::class.java))
+            ContextCompat.getSystemService(this, AutofillManager::class.java)?.commit()
+            setResult(Activity.RESULT_OK)
             finish()
         }
 
         is LoginResult.Failure -> {
             setBusy(false)
             showError(result.message)
+            passwordField.requestFocus()
+            passwordField.selectAll()
         }
+    }
+
+    private fun hideKeyboard(clearFocus: Boolean = false) {
+        WindowInsetsControllerCompat(window, currentFocus ?: findViewById(R.id.login_root))
+            .hide(WindowInsetsCompat.Type.ime())
+        if (clearFocus) currentFocus?.clearFocus()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putString(STATE_SERVER_URL, serverUrl ?: serverUrlField.text?.toString())
+        outState.putBoolean(STATE_USER_STEP, showingUserStep)
+        super.onSaveInstanceState(outState)
+    }
+
+    override fun onDestroy() {
+        stepAnimator?.cancel()
+        quickConnectJob?.cancel()
+        super.onDestroy()
     }
 
     /**
@@ -535,12 +675,16 @@ class JellyfinLoginActivity : AppCompatActivity() {
         class Holder(view: View) : RecyclerView.ViewHolder(view) {
             val avatar: ImageView = view.findViewById(R.id.avatar)
             val name: TextView = view.findViewById(R.id.name)
+            val selected: ImageView = view.findViewById(R.id.selected)
         }
+
+        private var selectedPosition = RecyclerView.NO_POSITION
 
         fun submit(newUsers: List<UserDto>, server: String) {
             users.clear()
             users.addAll(newUsers)
             serverUrl = server
+            selectedPosition = RecyclerView.NO_POSITION
             notifyDataSetChanged()
         }
 
@@ -554,6 +698,8 @@ class JellyfinLoginActivity : AppCompatActivity() {
         override fun onBindViewHolder(holder: Holder, position: Int) {
             val user = users[position]
             holder.name.text = user.name
+            holder.selected.visibility =
+                if (position == selectedPosition) View.VISIBLE else View.INVISIBLE
             val tag = user.primaryImageTag
             // Both branches set every property they depend on. Rows are recycled, so anything left
             // over from the previous user - a photo behind a glyph, a glyph stretched edge to edge -
@@ -582,7 +728,13 @@ class JellyfinLoginActivity : AppCompatActivity() {
                 holder.avatar.scaleType = ImageView.ScaleType.FIT_CENTER
                 holder.avatar.setPadding(inset, inset, inset, inset)
             }
-            holder.itemView.setOnClickListener { onClick(user) }
+            holder.itemView.setOnClickListener {
+                val old = selectedPosition
+                selectedPosition = holder.bindingAdapterPosition
+                if (old != RecyclerView.NO_POSITION) notifyItemChanged(old)
+                if (selectedPosition != RecyclerView.NO_POSITION) notifyItemChanged(selectedPosition)
+                onClick(user)
+            }
         }
     }
 
@@ -594,5 +746,7 @@ class JellyfinLoginActivity : AppCompatActivity() {
 
         /** Jellyfin's own clients poll Quick Connect at about this rate. */
         private const val QUICK_CONNECT_POLL_MS = 2_000L
+        private const val STATE_SERVER_URL = "server_url"
+        private const val STATE_USER_STEP = "user_step"
     }
 }

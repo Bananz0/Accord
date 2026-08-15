@@ -87,6 +87,9 @@ data class BtCodecInfo(
                         BluetoothCodecConfig.BITS_PER_SAMPLE_16 -> 16
                         BluetoothCodecConfig.BITS_PER_SAMPLE_24 -> 24
                         BluetoothCodecConfig.BITS_PER_SAMPLE_32 -> 32
+                        // Samsung's SSC UHQ stack reports its 24-bit-in-32-bit container as 0x8
+                        // ("8_24") rather than Android's public BITS_PER_SAMPLE_24 flag.
+                        0x8 -> 24
                         else -> {
                             Log.e(
                                 TAG, "unknown bit per sample flag " +

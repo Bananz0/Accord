@@ -231,10 +231,9 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach 
         "uk/akane/accord/logic/player/AudioFormatDetector.kt",
         "uk/akane/accord/logic/player/PostAmpAudioSink.kt",
         "uk/akane/accord/logic/player/exoplayer/GramophoneRenderFactory.kt",
-        // These two only fall out of the above: AfFormatTracker reads AudioFormatDetector, and
-        // MediaButtonReceiver reads PlaybackService's notification constants. Both come back when
-        // the Accord UI is pointed at this app's playback service.
-        "uk/akane/accord/logic/player/AfFormatTracker.kt",
+        // MediaButtonReceiver reads PlaybackService's notification constants. It comes back when
+        // the Accord UI is pointed at that legacy playback service. AfFormatTracker is active: its
+        // format mapping is now self-contained and the current service uses its AudioFlinger data.
         "uk/akane/accord/logic/utils/MediaButtonReceiver.kt",
     )
 }
@@ -297,7 +296,7 @@ dependencies {
     // ALAC playback renderer, wired up by Accord's GramophoneRenderFactory.
     implementation(projects.misc.alacdecoder)
     // Accord's output switcher reads the active route through MediaRouter.
-    implementation("androidx.mediarouter:mediarouter:1.8.1")
+    implementation("androidx.mediarouter:mediarouter:1.9.0-alpha01")
     implementation(libs.hiddenapibypass)
     // Spring physics for the iOS-style rubber-band overscroll.
     implementation("androidx.dynamicanimation:dynamicanimation:1.0.0")

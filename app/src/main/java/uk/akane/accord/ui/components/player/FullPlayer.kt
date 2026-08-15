@@ -1,17 +1,22 @@
 package uk.akane.accord.ui.components.player
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.pm.PackageManager
 import android.graphics.RectF
 import android.graphics.Rect
+import android.graphics.RenderEffect
+import android.graphics.Shader
+import android.graphics.drawable.Drawable
 import android.animation.ValueAnimator
 import android.content.BroadcastReceiver
 import android.content.Intent
 import android.content.IntentFilter
-import android.content.pm.ApplicationInfo
-import android.content.pm.ResolveInfo
 import android.media.AudioManager
+import android.media.MediaRoute2Info
 import android.media.MediaRouter2
+import android.net.Uri
 import android.os.Build
 import android.util.AttributeSet
 import android.util.Log
@@ -19,7 +24,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowInsets
 import android.widget.Button
-import android.widget.Toast
+import uk.akane.accord.ui.components.NoToast as Toast
 import androidx.appcompat.content.res.AppCompatResources
 import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.core.content.ContextCompat
@@ -40,8 +45,13 @@ import androidx.media3.session.MediaController
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import androidx.mediarouter.app.SystemOutputSwitcherDialogController
+import androidx.mediarouter.media.MediaControlIntent
+import androidx.mediarouter.media.MediaRouteSelector
+import androidx.mediarouter.media.MediaRouter
 import coil3.asDrawable
 import coil3.imageLoader
+import coil3.load
 import coil3.request.Disposable
 import coil3.request.ImageRequest
 import coil3.request.allowHardware
@@ -55,6 +65,8 @@ import androidx.lifecycle.lifecycleScope
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinItemResolver
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinRemoteTargets
 import org.jellyfin.sdk.model.api.PlaystateCommand
+import org.jellyfin.sdk.model.api.PlaybackOrder
+import org.jellyfin.sdk.model.api.RepeatMode
 import android.view.LayoutInflater
 import android.widget.LinearLayout
 import com.google.android.material.bottomsheet.BottomSheetDialog
@@ -62,6 +74,8 @@ import org.akanework.gramophone.logic.data.jellyfin.JellyfinLibraryLoader.Compan
 import org.akanework.gramophone.logic.data.jellyfin.StreamQuality
 import org.akanework.gramophone.logic.utils.AudioQuality
 import androidx.media3.session.SessionResult
+import androidx.media3.session.SessionError
+import androidx.media3.common.util.UnstableApi
 import com.google.common.util.concurrent.Futures
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -78,7 +92,6 @@ import org.akanework.gramophone.logic.utils.MediaStoreUtils
 import android.media.AudioDeviceCallback
 import android.view.ViewConfiguration
 import android.view.animation.AccelerateInterpolator
-import android.view.animation.DecelerateInterpolator
 import android.view.animation.LinearInterpolator
 import android.widget.ImageView
 import org.akanework.gramophone.logic.utils.AudioOutput
@@ -129,7 +142,10 @@ import androidx.preference.PreferenceManager
 import org.akanework.gramophone.logic.data.library.songListSnapshot
 import org.akanework.gramophone.logic.data.AutoplayQueue
 import uk.akane.accord.logic.player.UsbHiFiStatus
+import uk.akane.accord.logic.player.AfFormatInfo
+import uk.akane.accord.logic.player.BtCodecInfo
 
+@androidx.annotation.OptIn(UnstableApi::class)
 class FullPlayer @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
@@ -170,10 +186,38 @@ class FullPlayer @JvmOverloads constructor(
     private var qualityAvailableHint: TextView
     private var currentQualityDetails: AudioQuality.Details? = null
     private var currentUsbHiFiStatus: UsbHiFiStatus? = null
+    private var currentAfFormatInfo: AfFormatInfo? = null
+    private var currentBtCodecInfo: BtCodecInfo? = null
+    /** Rebinds an open Play on sheet when the service reports a new codec/HAL route. */
+    private var outputPickerFormatChanged: (() -> Unit)? = null
+    private var outputPickerDialog: BottomSheetDialog? = null
+    private var outputPickerOpening = false
     private var outputDeviceIcon: ImageView
     private var outputDeviceName: TextView
     private var remoteTargetJob: kotlinx.coroutines.Job? = null
+    private var remotePlaybackJob: kotlinx.coroutines.Job? = null
+    private var remoteTargetsWarmupJob: kotlinx.coroutines.Job? = null
     private var audioDeviceCallback: AudioDeviceCallback? = null
+    private val outputRouteSelector = MediaRouteSelector.Builder()
+        .addControlCategory(MediaControlIntent.CATEGORY_LIVE_AUDIO)
+        .build()
+    private val outputMediaRouter by lazy(LazyThreadSafetyMode.NONE) {
+        MediaRouter.getInstance(context)
+    }
+    private var outputRouteCallbackRegistered = false
+    private val outputRouteCallback = object : MediaRouter.Callback() {
+        override fun onRouteSelected(router: MediaRouter, route: MediaRouter.RouteInfo) {
+            refreshOutputDevice()
+        }
+
+        override fun onRouteUnselected(router: MediaRouter, route: MediaRouter.RouteInfo) {
+            refreshOutputDevice()
+        }
+
+        override fun onRouteChanged(router: MediaRouter, route: MediaRouter.RouteInfo) {
+            if (route.isSelected) refreshOutputDevice()
+        }
+    }
 
     private var fullPlayerToolbar: FullPlayerToolbar
     private var queueContainer: View
@@ -240,6 +284,8 @@ class FullPlayer @JvmOverloads constructor(
     private var coverSlideInFlight = false
     private var coverSlideOutDone = false
     private var coverSlideArtReady = false
+    /** Last artwork applied, also used to seed the transition layer created on first layout. */
+    private var appliedCoverBitmap: android.graphics.Bitmap? = null
     /**
      * The incoming artwork, held back until the outgoing cover has left.
      *
@@ -316,10 +362,12 @@ class FullPlayer @JvmOverloads constructor(
         }
         outputDeviceIcon = findViewById(R.id.output_device_icon)
         outputDeviceName = findViewById(R.id.output_device_name)
-        outputDeviceIcon.setOnClickListener {
+        val openOutputPicker = View.OnClickListener {
             it.performPressHaptic()
-            startSystemMediaControl()
+            showOutputPicker()
         }
+        outputDeviceIcon.setOnClickListener(openOutputPicker)
+        outputDeviceName.setOnClickListener(openOutputPicker)
         controllerButton = findViewById(R.id.main_control_btn)
         previousButton = findViewById(R.id.backward_btn)
         nextButton = findViewById(R.id.forward_btn)
@@ -338,8 +386,14 @@ class FullPlayer @JvmOverloads constructor(
                 instance?.moveMediaItem(from, to)
             },
             { index ->
-                instance?.seekTo(index, C.TIME_UNSET)
-                instance?.play()
+                if (JellyfinRemoteTargets.active.value != null) {
+                    findViewTreeLifecycleOwner()?.lifecycleScope?.launch {
+                        JellyfinRemoteTargets.playQueueIndex(index)
+                    }
+                } else {
+                    instance?.seekTo(index, C.TIME_UNSET)
+                    instance?.play()
+                }
             },
             object : QueuePreviewAdapter.DragStartListener {
                 override fun onStartDrag(viewHolder: RecyclerView.ViewHolder) {
@@ -395,9 +449,17 @@ class FullPlayer @JvmOverloads constructor(
         queueContainer.visibility = INVISIBLE
         lyricsViewModel = LyricsViewModel(
             context,
-            positionProvider = { instance?.currentPosition ?: 0L },
+            positionProvider = {
+                JellyfinRemoteTargets.playbackState.value?.projectedPositionMs()
+                    ?: instance?.currentPosition
+                    ?: 0L
+            },
             // Tapping a lyric jumps to it, which is the whole reason the timestamps are there.
-            onSeek = { timestamp -> instance?.seekTo(timestamp) },
+            onSeek = { timestamp ->
+                if (!sendRemoteTransport(PlaystateCommand.SEEK, timestamp)) {
+                    instance?.seekTo(timestamp)
+                }
+            },
         )
 
         // The hidden button belongs to the pre-rewrite lyrics prototype. The three bottom buttons
@@ -482,7 +544,9 @@ class FullPlayer @JvmOverloads constructor(
                 val duration = resolveDurationMs()
                 if (duration != null) {
                     val position = slider.value.toLong().coerceIn(0L, duration)
-                    instance?.seekTo(position)
+                    if (!sendRemoteTransport(PlaystateCommand.SEEK, position)) {
+                        instance?.seekTo(position)
+                    }
                     updateProgressTexts(position, duration)
                 }
                 isUserScrubbing = false
@@ -501,7 +565,14 @@ class FullPlayer @JvmOverloads constructor(
                 coverSimpleImageView.height,
                 coverSimpleImageView.left,
                 coverSimpleImageView.top,
-                AppCompatResources.getDrawable(context, R.drawable.default_cover)!!.toBitmap()
+                // The controller can restore the current item (and Coil can satisfy its artwork
+                // request from memory) before this first layout pass. Initialising the transition
+                // layer with the placeholder then puts a blank cover over the real one for the
+                // lifetime of the view, because there is no second media-item transition to
+                // refresh it. Seed it from the cover that is actually on screen instead.
+                appliedCoverBitmap ?: AppCompatResources
+                    .getDrawable(context, R.drawable.default_cover)!!
+                    .toBitmap()
             )
 
             updateTransitionTargetForContentType(contentType)
@@ -515,6 +586,14 @@ class FullPlayer @JvmOverloads constructor(
         queueShuffleButton.setOnClickListener {
             val controller = instance ?: return@setOnClickListener
             it.performPressHaptic()
+            JellyfinRemoteTargets.playbackState.value?.let { remote ->
+                val enabled = remote.playbackOrder != PlaybackOrder.SHUFFLE
+                findViewTreeLifecycleOwner()?.lifecycleScope?.launch {
+                    JellyfinRemoteTargets.sendShuffle(enabled)
+                }
+                queueShuffleButton.isChecked = enabled
+                return@setOnClickListener
+            }
             controller.shuffleModeEnabled = !controller.shuffleModeEnabled
             queueShuffleButton.isChecked = controller.shuffleModeEnabled
         }
@@ -539,6 +618,18 @@ class FullPlayer @JvmOverloads constructor(
         queueRepeatButton.setOnClickListener {
             val controller = instance ?: return@setOnClickListener
             it.performPressHaptic()
+            JellyfinRemoteTargets.playbackState.value?.let { remote ->
+                val next = when (remote.repeatMode) {
+                    RepeatMode.REPEAT_NONE -> RepeatMode.REPEAT_ALL
+                    RepeatMode.REPEAT_ALL -> RepeatMode.REPEAT_ONE
+                    RepeatMode.REPEAT_ONE -> RepeatMode.REPEAT_NONE
+                }
+                findViewTreeLifecycleOwner()?.lifecycleScope?.launch {
+                    JellyfinRemoteTargets.sendRepeat(next)
+                }
+                updateRepeatButton(next.toPlayerRepeatMode())
+                return@setOnClickListener
+            }
             val nextRepeatMode = when (controller.repeatMode) {
                 Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
                 Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
@@ -573,7 +664,7 @@ class FullPlayer @JvmOverloads constructor(
                 // The dispatcher walks listeners until one claims the command, so anything not
                 // handled here has to decline rather than swallow it.
                     Futures.immediateFuture(
-                        SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED)
+                        SessionResult(SessionError.ERROR_NOT_SUPPORTED)
                     )
                 }
             }
@@ -602,18 +693,20 @@ class FullPlayer @JvmOverloads constructor(
 
         controllerButton.setOnClickListener {
             it.performPressHaptic()
-            instance?.playOrPause()
+            if (!sendRemoteTransport(PlaystateCommand.PLAY_PAUSE)) instance?.playOrPause()
         }
 
         previousButton.setOnClickListener {
             it.performPressHaptic()
             pendingCoverSlide = SLIDE_PREVIOUS
-            instance?.seekToPrevious()
+            if (!sendRemoteTransport(PlaystateCommand.PREVIOUS_TRACK)) {
+                instance?.seekToPrevious()
+            }
         }
         nextButton.setOnClickListener {
             it.performPressHaptic()
             pendingCoverSlide = SLIDE_NEXT
-            instance?.seekToNext()
+            if (!sendRemoteTransport(PlaystateCommand.NEXT_TRACK)) instance?.seekToNext()
         }
 
         doOnLayout {
@@ -622,102 +715,346 @@ class FullPlayer @JvmOverloads constructor(
 
             finalTranslationX = 32.dp.px - coverSimpleImageView.left
             finalTranslationY = (20 - 18).dp.px
-            finalScale = 74.dp.px / coverSimpleImageView.height
+            // A rapid content-mode tap can arrive during the transient layout where the artwork
+            // is present but has a zero height. Dividing here produced Infinity; lerping from it
+            // at fraction zero then produced NaN and Android rejected scaleX. Keep the neutral
+            // scale until the next real layout instead.
+            finalScale = coverSimpleImageView.height.takeIf { it > 0 }
+                ?.let { 74.dp.px / it }
+                ?.takeIf { it.isFinite() }
+                ?: 1F
         }
 
         updateVolumeSlider()
     }
 
-    /**
-     * Where the sound comes out: this phone, another Jellyfin client, or a Bluetooth device.
-     *
-     * Android's own output switcher cannot be extended, so the Jellyfin devices could not simply be
-     * added to it. This sheet lists what the app knows about and keeps a way through to the system
-     * one, rather than replacing a picker people already know with a worse copy of it - the
-     * headphones in your pocket still belong to Android.
-     *
-     * Built from the grouped card the settings screens use, not a Material dialog. A stock dialog
-     * with radio buttons and a shouting CANCEL reads as a system prompt dropped on top of the app;
-     * this is meant to read as part of it.
-     */
+    /** Accord's unified output picker: live Android routes plus live Finnect clients. */
     private fun showOutputPicker() {
+        if (outputPickerOpening || outputPickerDialog?.isShowing == true) return
         val owner = findViewTreeLifecycleOwner() ?: return
+        outputPickerOpening = true
         owner.lifecycleScope.launch {
-            val targets = JellyfinRemoteTargets.available()
-            val active = JellyfinRemoteTargets.active.value
-
+            try {
+            val finnectEnabled = JellyfinRemoteTargets.isEnabled(context)
+            var targets = if (finnectEnabled) JellyfinRemoteTargets.cachedAvailable() else emptyList()
             val sheet = BottomSheetDialog(context, R.style.Theme_Accord_OutputPicker)
-            val root = LayoutInflater.from(context)
-                .inflate(R.layout.layout_output_picker, null, false)
+            outputPickerDialog = sheet
+            val root = LayoutInflater.from(context).inflate(
+                R.layout.layout_output_picker,
+                null,
+                false,
+            )
+            appliedCoverBitmap?.let { artwork ->
+                root.findViewById<ImageView>(R.id.output_picker_artwork).apply {
+                    visibility = VISIBLE
+                    setImageBitmap(artwork)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        setRenderEffect(
+                            RenderEffect.createBlurEffect(
+                                OUTPUT_PICKER_BLUR_RADIUS,
+                                OUTPUT_PICKER_BLUR_RADIUS,
+                                Shader.TileMode.MIRROR,
+                            )
+                        )
+                    }
+                }
+                root.findViewById<View>(R.id.output_picker_blend_scrim).visibility = VISIBLE
+            }
             val rows = root.findViewById<LinearLayout>(R.id.output_picker_rows)
+            sheet.setContentView(root)
 
-            val entries = buildList {
-                add(
-                    OutputEntry(
-                        icon = R.drawable.ic_output_phone,
-                        title = context.getString(R.string.output_this_phone),
-                        subtitle = null,
-                        selected = active == null,
-                    ) { handBackToThisPhone() }
-                )
-                targets.forEach { target ->
+            fun renderRows(animateHeight: Boolean = false) {
+                val oldTop = IntArray(2)
+                if (animateHeight && root.isLaidOut) {
+                    root.getLocationOnScreen(oldTop)
+                    root.addOnLayoutChangeListener(object : View.OnLayoutChangeListener {
+                        override fun onLayoutChange(
+                            view: View,
+                            left: Int,
+                            top: Int,
+                            right: Int,
+                            bottom: Int,
+                            oldLeft: Int,
+                            oldTopValue: Int,
+                            oldRight: Int,
+                            oldBottom: Int,
+                        ) {
+                            view.removeOnLayoutChangeListener(this)
+                            val newPosition = IntArray(2)
+                            view.getLocationOnScreen(newPosition)
+                            val offset = (oldTop[1] - newPosition[1]).toFloat()
+                            if (kotlin.math.abs(offset) > 1F) {
+                                view.animate().cancel()
+                                view.translationY = offset
+                                view.animate()
+                                    .translationY(0F)
+                                    .setDuration(OUTPUT_PICKER_RESIZE_MS)
+                                    .setInterpolator(AnimationUtils.easingStandardInterpolator)
+                                    .start()
+                            }
+                        }
+                    })
+                }
+                val activeRemote = JellyfinRemoteTargets.active.value
+                val selectedRoute = outputMediaRouter.selectedRoute
+                val defaultRoute = outputMediaRouter.defaultRoute
+                val localRoutes = outputMediaRouter.routes
+                    .asSequence()
+                    .filter { it.isSystemRoute && it.isEnabled && it.id != defaultRoute.id }
+                    .distinctBy { it.id }
+                    .sortedWith(
+                        compareByDescending<MediaRouter.RouteInfo> { it.isSelected }
+                            .thenBy { it.name.toString().lowercase() }
+                    )
+                    .toList()
+
+                val localSection = context.getString(R.string.output_section_local)
+                val finnectSection = context.getString(R.string.output_section_finnect)
+                val entries = buildList {
                     add(
                         OutputEntry(
-                            icon = clientIconFor(target.client),
-                            title = target.deviceName.ifBlank { target.client },
-                            // What is already playing there, when there is something - it is the
-                            // difference between "a device" and "the device with the album on it".
-                            subtitle = target.nowPlaying?.let {
-                                context.getString(R.string.output_playing_now, it)
-                            } ?: target.client,
-                            selected = active?.sessionId == target.sessionId,
-                        ) { handOverTo(target) }
+                            section = localSection,
+                            icon = R.drawable.ic_output_phone,
+                            iconUri = defaultRoute.iconUri,
+                            title = context.getString(R.string.output_this_phone),
+                            subtitle = null,
+                            selected = activeRemote == null && selectedRoute.id == defaultRoute.id,
+                            localRoute = defaultRoute,
+                        ) { selectLocalRoute(defaultRoute) }
                     )
+                    localRoutes.forEach { route ->
+                        add(
+                            OutputEntry(
+                                section = localSection,
+                                icon = routeIconFor(route),
+                                iconUri = route.iconUri,
+                                title = route.name.toString(),
+                                subtitle = routeSubtitle(route),
+                                selected = activeRemote == null && route.isSelected,
+                                localRoute = route,
+                            ) { selectLocalRoute(route) }
+                        )
+                    }
+                    add(
+                        OutputEntry(
+                            section = localSection,
+                            icon = R.drawable.ic_plus_circle,
+                            iconUri = null,
+                            title = context.getString(R.string.output_system_switcher),
+                            subtitle = context.getString(R.string.output_system_switcher_subtitle),
+                            selected = false,
+                        ) { startSystemMediaControl() }
+                    )
+                    targets.forEach { target ->
+                        add(
+                            OutputEntry(
+                                section = finnectSection,
+                                icon = clientIconFor(target.client),
+                                iconUri = null,
+                                title = target.deviceName.ifBlank { target.client },
+                                subtitle = target.nowPlaying?.let {
+                                    context.getString(R.string.output_playing_now, it)
+                                } ?: target.client,
+                                selected = activeRemote?.sessionId == target.sessionId,
+                            ) { handOverTo(target) }
+                        )
+                    }
                 }
-                add(
-                    OutputEntry(
-                        icon = R.drawable.ic_airplay_radio,
-                        title = context.getString(R.string.output_system_switcher),
-                        subtitle = null,
-                        selected = false,
-                    ) { startSystemMediaControl() }
-                )
+
+                rows.removeAllViews()
+                entries.forEachIndexed { index, entry ->
+                    val previousSection = entries.getOrNull(index - 1)?.section
+                    if (entry.section != previousSection) {
+                        val section = LayoutInflater.from(context)
+                            .inflate(R.layout.layout_output_picker_section, rows, false) as TextView
+                        section.text = entry.section
+                        rows.addView(section)
+                    }
+                    val row = LayoutInflater.from(context)
+                        .inflate(R.layout.layout_output_picker_row, rows, false)
+                    bindOutputIcon(
+                        row.findViewById(R.id.output_row_icon),
+                        entry.icon,
+                        entry.iconUri,
+                        entry.localRoute,
+                    )
+                    row.findViewById<TextView>(R.id.output_row_title).text = entry.title
+                    row.findViewById<TextView>(R.id.output_row_subtitle).apply {
+                        text = entry.subtitle
+                        visibility = if (entry.subtitle == null) GONE else VISIBLE
+                    }
+                    row.findViewById<TextView>(R.id.output_row_signal_badge).apply {
+                        val signal = if (entry.selected && entry.localRoute != null) {
+                            currentOutputSignalLabel()
+                        } else null
+                        text = signal
+                        visibility = if (signal == null) GONE else VISIBLE
+                    }
+                    row.findViewById<ImageView>(R.id.output_row_check).visibility =
+                        if (entry.selected) VISIBLE else GONE
+                    row.findViewById<View>(R.id.output_row_divider).visibility =
+                        if (entries.getOrNull(index + 1)?.section == entry.section) VISIBLE else GONE
+                    row.findViewById<View>(R.id.output_row_click_target).setOnClickListener {
+                        Haptics.press(it)
+                        sheet.dismiss()
+                        entry.onSelect()
+                    }
+                    rows.addView(row)
+                }
             }
 
-            entries.forEachIndexed { index, entry ->
-                val row = LayoutInflater.from(context)
-                    .inflate(R.layout.layout_output_picker_row, rows, false)
-                row.findViewById<ImageView>(R.id.output_row_icon).setImageResource(entry.icon)
-                row.findViewById<TextView>(R.id.output_row_title).text = entry.title
-                row.findViewById<TextView>(R.id.output_row_subtitle).apply {
-                    text = entry.subtitle
-                    visibility = if (entry.subtitle == null) GONE else VISIBLE
-                }
-                row.findViewById<ImageView>(R.id.output_row_check).visibility =
-                    if (entry.selected) VISIBLE else GONE
-                // The last row has nothing under it to be separated from.
-                row.findViewById<View>(R.id.output_row_divider).visibility =
-                    if (index == entries.lastIndex) GONE else VISIBLE
-                row.setOnClickListener {
-                    Haptics.press(it)
-                    sheet.dismiss()
-                    entry.onSelect()
-                }
-                rows.addView(row)
-            }
+            // Codec and AudioFlinger changes arrive through the media session, independently of
+            // MediaRouter. Keep the visible sheet subscribed too, so switching SSC/UHQ changes the
+            // pill in place rather than requiring the sheet to be reopened.
+            val sheetRenderer = { renderRows() }
+            outputPickerFormatChanged = sheetRenderer
 
-            sheet.setContentView(root)
+            val sheetRouteCallback = object : MediaRouter.Callback() {
+                override fun onRouteAdded(router: MediaRouter, route: MediaRouter.RouteInfo) {
+                    renderRows()
+                }
+
+                override fun onRouteRemoved(router: MediaRouter, route: MediaRouter.RouteInfo) {
+                    renderRows()
+                }
+
+                override fun onRouteChanged(router: MediaRouter, route: MediaRouter.RouteInfo) {
+                    renderRows()
+                }
+
+                override fun onRouteSelected(router: MediaRouter, route: MediaRouter.RouteInfo) {
+                    renderRows()
+                }
+
+                override fun onRouteUnselected(router: MediaRouter, route: MediaRouter.RouteInfo) {
+                    renderRows()
+                }
+            }
+            sheet.setOnDismissListener {
+                outputMediaRouter.removeCallback(sheetRouteCallback)
+                if (outputPickerFormatChanged === sheetRenderer) {
+                    outputPickerFormatChanged = null
+                }
+                if (outputPickerDialog === sheet) outputPickerDialog = null
+            }
+            renderRows()
+            refreshAudioOutputStatus()
+            outputMediaRouter.addCallback(
+                outputRouteSelector,
+                sheetRouteCallback,
+                MediaRouter.CALLBACK_FLAG_REQUEST_DISCOVERY,
+            )
             sheet.show()
+            // The local picker is useful without Jellyfin and should never wait for the network.
+            // Remote clients join the already-visible sheet when the server answers.
+            outputPickerOpening = false
+            val refreshedTargets = if (finnectEnabled) {
+                JellyfinRemoteTargets.available()
+            } else emptyList()
+            if (sheet.isShowing && refreshedTargets != targets) {
+                targets = refreshedTargets
+                renderRows(animateHeight = true)
+            }
+            } finally {
+                outputPickerOpening = false
+            }
         }
     }
 
     private class OutputEntry(
+        val section: String,
         @DrawableRes val icon: Int,
+        val iconUri: Uri?,
         val title: String,
         val subtitle: String?,
         val selected: Boolean,
+        val localRoute: MediaRouter.RouteInfo? = null,
         val onSelect: () -> Unit,
     )
+
+    private fun selectLocalRoute(route: MediaRouter.RouteInfo) {
+        val owner = findViewTreeLifecycleOwner() ?: return
+        val player = instance ?: return
+        owner.lifecycleScope.launch {
+            val returningFromRemote = JellyfinRemoteTargets.active.value != null
+            val remoteState = if (returningFromRemote) {
+                JellyfinRemoteTargets.refreshActiveState()
+                    ?: JellyfinRemoteTargets.playbackState.value
+            } else null
+            val currentItems = (0 until player.mediaItemCount).map(player::getMediaItemAt)
+            val restoredQueue = remoteState?.let { resolveRemoteQueue(it, currentItems) }
+            runCatching { outputMediaRouter.selectRoute(route) }
+                .onFailure {
+                    Toast.makeText(context, R.string.media_control_text_error, Toast.LENGTH_SHORT)
+                        .show()
+                    return@launch
+                }
+            if (returningFromRemote) {
+                val shouldPlay = remoteState?.isPaused != true
+                val resumePosition = remoteState?.projectedPositionMs() ?: player.currentPosition
+                JellyfinRemoteTargets.sendTransport(PlaystateCommand.STOP)
+                JellyfinRemoteTargets.playLocally()
+                if (restoredQueue != null && restoredQueue.items.isNotEmpty()) {
+                    player.setMediaItems(
+                        restoredQueue.items,
+                        restoredQueue.currentIndex,
+                        resumePosition,
+                    )
+                    player.prepare()
+                } else {
+                    val index = remoteState?.queueIds
+                        ?.indexOf(remoteState.itemId?.replace("-", "")?.lowercase())
+                        ?.takeIf { it in 0 until player.mediaItemCount }
+                        ?: player.currentMediaItemIndex
+                    player.seekTo(index, resumePosition)
+                }
+                if (shouldPlay) player.play() else player.pause()
+            }
+        }
+    }
+
+    private data class ResolvedRemoteQueue(
+        val items: List<MediaItem>,
+        val currentIndex: Int,
+    )
+
+    /** Resolves the server's queue back into this device's library without losing its order. */
+    private suspend fun resolveRemoteQueue(
+        state: JellyfinRemoteTargets.RemotePlaybackState,
+        currentItems: List<MediaItem>,
+    ): ResolvedRemoteQueue? = withContext(Dispatchers.IO) {
+        val normalize: (String) -> String = { it.replace("-", "").lowercase() }
+        val byRemote = LinkedHashMap<String, MediaItem>()
+        suspend fun index(items: List<MediaItem>) {
+            items.forEach { item ->
+                JellyfinItemResolver.remoteIdForMediaId(context, item.mediaId)?.let {
+                    byRemote.putIfAbsent(normalize(it), item)
+                }
+            }
+        }
+        index(currentItems)
+        val wanted = state.queueIds.map(normalize)
+        if (wanted.any { it !in byRemote }) index(activity.reader.songListSnapshot())
+        val orderedIds = wanted.ifEmpty { byRemote.keys.toList() }
+        val resolved = orderedIds.mapNotNull { id -> byRemote[id]?.let { id to it } }
+        if (resolved.isEmpty()) return@withContext null
+        val currentId = state.itemId?.let(normalize)
+        val currentIndex = resolved.indexOfFirst { it.first == currentId }.coerceAtLeast(0)
+        ResolvedRemoteQueue(resolved.map { it.second }, currentIndex)
+    }
+
+    /** Returns true when Finnect owns transport, so callers do not also touch the local player. */
+    private fun sendRemoteTransport(
+        command: PlaystateCommand,
+        seekPositionMs: Long? = null,
+    ): Boolean {
+        if (JellyfinRemoteTargets.active.value == null) return false
+        val owner = findViewTreeLifecycleOwner() ?: return false
+        owner.lifecycleScope.launch {
+            JellyfinRemoteTargets.sendTransport(command, seekPositionMs)
+        }
+        return true
+    }
 
     /**
      * Hands the queue to another client and stops playing it here.
@@ -735,20 +1072,31 @@ class FullPlayer @JvmOverloads constructor(
             player.getMediaItemAt(it).mediaId
         }
         owner.lifecycleScope.launch {
-            val remoteIds = withContext(Dispatchers.IO) {
-                localIds.mapNotNull {
-                    JellyfinItemResolver.remoteIdForMediaId(context, it)
+            val mappedQueue = withContext(Dispatchers.IO) {
+                localIds.mapNotNull { localId ->
+                    JellyfinItemResolver.remoteIdForMediaId(context, localId)
+                        ?.let { remoteId -> localId to remoteId }
                 }
             }
-            if (remoteIds.isEmpty()) {
+            if (mappedQueue.isEmpty()) {
                 Toast.makeText(context, R.string.output_nothing_to_send, Toast.LENGTH_SHORT).show()
                 return@launch
             }
+            // A queue can contain a local-only item. Removing that item changes the index, so the
+            // original Media3 index cannot be sent to Jellyfin unchanged. Preserve the current
+            // track when it is mapped; otherwise begin at the first playable server item.
+            val currentLocalId = localIds.getOrNull(startIndex)
+            val remoteStartIndex = mappedQueue.indexOfFirst { it.first == currentLocalId }
+                .takeIf { it >= 0 }
+                ?: 0
+            val remoteIds = mappedQueue.map { it.second }
             val sent = JellyfinRemoteTargets.playOn(
                 target = target,
                 remoteIds = remoteIds,
-                startIndex = startIndex,
-                startPositionMs = positionMs,
+                startIndex = remoteStartIndex,
+                startPositionMs = if (mappedQueue[remoteStartIndex].first == currentLocalId) {
+                    positionMs
+                } else 0L,
             )
             if (sent) {
                 player.pause()
@@ -764,49 +1112,10 @@ class FullPlayer @JvmOverloads constructor(
      * Stops the other device first, or two things are playing at once - which is what the user was
      * trying to avoid by moving it in the first place.
      */
-    private fun handBackToThisPhone() {
-        val owner = findViewTreeLifecycleOwner() ?: return
-        owner.lifecycleScope.launch {
-            JellyfinRemoteTargets.sendTransport(PlaystateCommand.STOP)
-            JellyfinRemoteTargets.playLocally()
-            instance?.play()
-        }
-    }
-
     private fun startSystemMediaControl() {
-        if (Build.VERSION.SDK_INT >= 34) {
-            val mediaRouter2 = MediaRouter2.getInstance(context)
-            val tag = mediaRouter2.showSystemOutputSwitcher()
-            if (!tag) {
-                Toast.makeText(context, R.string.media_control_text_error, Toast.LENGTH_SHORT)
-                    .show()
-            }
-        } else {
-            val intent = Intent().apply {
-                action = "com.android.systemui.action.LAUNCH_MEDIA_OUTPUT_DIALOG"
-                setPackage("com.android.systemui")
-                putExtra("package_name", context.packageName)
-            }
-            val tag = startNativeMediaDialog(intent)
-            if (!tag) {
-                Toast.makeText(context, R.string.media_control_text_error, Toast.LENGTH_SHORT)
-                    .show()
-            }
+        if (!SystemOutputSwitcherDialogController.showDialog(context)) {
+            Toast.makeText(context, R.string.media_control_text_error, Toast.LENGTH_SHORT).show()
         }
-    }
-
-    private fun startNativeMediaDialog(intent: Intent): Boolean {
-        val resolveInfoList: List<ResolveInfo> =
-            context.packageManager.queryIntentActivities(intent, 0)
-        for (resolveInfo in resolveInfoList) {
-            val activityInfo = resolveInfo.activityInfo
-            val applicationInfo: ApplicationInfo? = activityInfo?.applicationInfo
-            if (applicationInfo != null && (applicationInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0) {
-                context.startActivity(intent)
-                return true
-            }
-        }
-        return false
     }
 
     private var finalTranslationX = 0F
@@ -901,6 +1210,7 @@ class FullPlayer @JvmOverloads constructor(
     }
 
     private fun resolveDurationMs(): Long? {
+        JellyfinRemoteTargets.playbackState.value?.durationMs?.let { return it }
         val duration = instance?.contentDuration
         if (duration != null && duration != C.TIME_UNSET) {
             return duration
@@ -909,6 +1219,7 @@ class FullPlayer @JvmOverloads constructor(
     }
 
     private fun resolveMaxDeviceVolume(): Int {
+        if (JellyfinRemoteTargets.active.value != null) return 100
         if (maxDeviceVolume <= 0) {
             maxDeviceVolume = audioManager?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) ?: 0
         }
@@ -916,6 +1227,7 @@ class FullPlayer @JvmOverloads constructor(
     }
 
     private fun resolveDeviceVolume(): Int {
+        JellyfinRemoteTargets.playbackState.value?.volumePercent?.let { return it }
         val controller = instance
         return if (controller != null && controller.isCommandAvailable(Player.COMMAND_GET_DEVICE_VOLUME)) {
             controller.deviceVolume
@@ -939,6 +1251,12 @@ class FullPlayer @JvmOverloads constructor(
         val maxVolume = resolveMaxDeviceVolume()
         if (maxVolume <= 0) return
         val boundedVolume = volume.coerceIn(0, maxVolume)
+        if (JellyfinRemoteTargets.active.value != null) {
+            findViewTreeLifecycleOwner()?.lifecycleScope?.launch {
+                JellyfinRemoteTargets.sendVolume(boundedVolume)
+            }
+            return
+        }
         val controller = instance
         if (controller != null && controller.isCommandAvailable(Player.COMMAND_SET_DEVICE_VOLUME_WITH_FLAGS )) {
             controller.setDeviceVolume(boundedVolume, 0)
@@ -974,7 +1292,9 @@ class FullPlayer @JvmOverloads constructor(
 
     private fun updateProgressDisplay() {
         val mediaDuration = resolveDurationMs()
-        val currentPosition = instance?.currentPosition ?: 0L
+        val currentPosition = JellyfinRemoteTargets.playbackState.value?.projectedPositionMs()
+            ?: instance?.currentPosition
+            ?: 0L
         if (mediaDuration == null || instance?.mediaItemCount == 0) {
             val placeholder = context.getString(R.string.default_duration)
             currentTimestampTextView.text = placeholder
@@ -1639,6 +1959,12 @@ class FullPlayer @JvmOverloads constructor(
         refreshAudioOutputStatus()
     }
 
+    private fun RepeatMode.toPlayerRepeatMode(): Int = when (this) {
+        RepeatMode.REPEAT_NONE -> Player.REPEAT_MODE_OFF
+        RepeatMode.REPEAT_ALL -> Player.REPEAT_MODE_ALL
+        RepeatMode.REPEAT_ONE -> Player.REPEAT_MODE_ONE
+    }
+
     /** Reads the exact USB mixer mode that Android accepted for this stream. */
     private fun refreshAudioOutputStatus() {
         val controller = instance ?: return
@@ -1659,7 +1985,18 @@ class FullPlayer @JvmOverloads constructor(
                 "usb_hifi",
                 UsbHiFiStatus::class.java,
             )
+            currentAfFormatInfo = BundleCompat.getParcelable(
+                extras,
+                "hal_format",
+                AfFormatInfo::class.java,
+            )
+            currentBtCodecInfo = BundleCompat.getParcelable(
+                extras,
+                "bt_codec",
+                BtCodecInfo::class.java,
+            )
             updateQualityBadgeText()
+            outputPickerFormatChanged?.invoke()
         }
     }
 
@@ -1727,8 +2064,20 @@ class FullPlayer @JvmOverloads constructor(
      * Names the format behind the badge - "FLAC 24-bit/96 kHz" - which is the one thing the badge
      * itself cannot say, since 24/48 and 24/192 both read "Hi-Res Lossless".
      */
-    private fun showQualityDetails() {
+    private fun showQualityDetails(requestCodecPermission: Boolean = true) {
         val details = currentQualityDetails ?: return
+        if (requestCodecPermission &&
+            currentAfFormatInfo?.routedDeviceType == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            activity.requestBluetoothCodecPermission { granted ->
+                if (granted) refreshAudioOutputStatus()
+                postDelayed({ showQualityDetails(requestCodecPermission = false) }, 700L)
+            }
+            return
+        }
         val parts = buildList {
             val source = buildList {
                 details.codec?.let { add(it) }
@@ -1756,6 +2105,39 @@ class FullPlayer @JvmOverloads constructor(
                     )
                 )
             }
+
+            val bluetoothSignal = bluetoothOutputSignalLabel(includeQuality = true)
+            bluetoothSignal?.let { signal ->
+                add(context.getString(R.string.music_quality_bluetooth_codec, signal))
+                if (signal.startsWith("SSC UHQ")) {
+                    add(context.getString(R.string.music_quality_ssc_uhq_detail))
+                }
+            }
+
+            currentAfFormatInfo?.let { hal ->
+                hal.routedDeviceName?.takeIf { it.isNotBlank() && it != "null" }?.let {
+                    add(context.getString(R.string.music_quality_output_device, it))
+                }
+                val actual = buildList {
+                    hal.audioFormat?.let { add(it.audioFormatLabel()) }
+                    hal.sampleRateHz?.toInt()?.takeIf { it > 0 }?.let {
+                        add("${it.khz()} kHz")
+                    }
+                    hal.channelCount?.takeIf { it > 0 }?.let {
+                        add(context.resources.getQuantityString(
+                            R.plurals.music_quality_channels,
+                            it,
+                            it,
+                        ))
+                    }
+                }.joinToString(" · ")
+                if (actual.isNotEmpty()) {
+                    add(context.getString(R.string.music_quality_hal_output, actual))
+                }
+                if (hal.isBluetoothOffload == true) {
+                    add(context.getString(R.string.music_quality_bluetooth_offload))
+                }
+            }
         }
         val sheet = BottomSheetDialog(context, R.style.Theme_Accord_OutputPicker)
         val root = LayoutInflater.from(context)
@@ -1778,6 +2160,105 @@ class FullPlayer @JvmOverloads constructor(
 
     /** 44100 reads as "44.1", 48000 as "48" - trailing zeroes here are noise. */
     private fun Int.khz(): String = "%.1f".format(this / 1000f).removeSuffix(".0")
+
+    /** Turns AudioFlinger's constant-like spelling into a compact listener-facing label. */
+    private fun String.audioFormatLabel(): String = removePrefix("AUDIO_FORMAT_")
+        .replace("PCM_", "PCM ")
+        .replace("_BIT", "-bit")
+        .replace('_', ' ')
+        .lowercase()
+        .replaceFirstChar(Char::uppercase)
+
+    /**
+     * The compact signal-path label shown under the active device in Play on.
+     *
+     * Prefer the negotiated Bluetooth codec. AudioFlinger's mixer format fills any fields the
+     * protected Bluetooth API did not expose, and is also the truthful label for wired/USB/local
+     * PCM routes. This describes the output path, not whether the source file itself is lossless.
+     */
+    private fun currentOutputSignalLabel(): String? {
+        val hal = currentAfFormatInfo
+        val halRate = hal?.sampleRateHz?.toInt()?.takeIf { it > 0 }
+        val halDepth = hal?.audioFormat?.audioFormatBitDepth()
+
+        bluetoothOutputSignalLabel()?.let { return it }
+
+        currentUsbHiFiStatus?.let { usb ->
+            return buildSignalLabel(
+                codec = "PCM",
+                bitDepth = usb.encoding.bitDepthName()?.removeSuffix("-bit")?.toIntOrNull(),
+                sampleRate = usb.sampleRateHz,
+            )
+        }
+
+        return buildSignalLabel(
+            codec = hal?.audioFormat?.let { "PCM" },
+            bitDepth = halDepth,
+            sampleRate = halRate,
+        )
+    }
+
+    /**
+     * Reconciles Android's codec broadcast with the stream route AudioFlinger is using now.
+     *
+     * Samsung can retain an SSC 24/48 codec broadcast after switching its UHQ mixer to 24/96.
+     * For a recognized Galaxy Buds route that exact 24/96 HAL signature is the newer observation,
+     * so it wins. The cached broadcast is otherwise only used while the live route is A2DP; this
+     * prevents a disconnected headset's codec from appearing below the phone speaker or a DAC.
+     */
+    private fun bluetoothOutputSignalLabel(includeQuality: Boolean = false): String? {
+        val hal = currentAfFormatInfo ?: return null
+        if (hal.routedDeviceType != android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP) return null
+
+        inferredSamsungUhqSignal()?.let { return it }
+
+        val bluetooth = currentBtCodecInfo ?: return null
+        val sampleRate = bluetooth.sampleRateHz
+            ?: hal.sampleRateHz?.toInt()?.takeIf { it > 0 }
+        val bitDepth = bluetooth.bitsPerSample ?: hal.audioFormat?.audioFormatBitDepth()
+        val codec = bluetooth.codec?.let {
+            if (it.equals("SSC", ignoreCase = true) && (sampleRate ?: 0) >= 96_000) {
+                "SSC UHQ"
+            } else it
+        }
+        val base = buildSignalLabel(codec, bitDepth, sampleRate) ?: return null
+        return if (includeQuality && !bluetooth.quality.isNullOrBlank()) {
+            "$base · ${bluetooth.quality}"
+        } else base
+    }
+
+    private fun buildSignalLabel(codec: String?, bitDepth: Int?, sampleRate: Int?): String? {
+        val parts = buildList {
+            codec?.takeIf { it.isNotBlank() }?.let(::add)
+            bitDepth?.let { add("$it-bit") }
+            sampleRate?.let { add("${it.khz()} kHz") }
+        }
+        return parts.takeIf { it.isNotEmpty() }?.joinToString(" · ")
+    }
+
+    private fun String.audioFormatBitDepth(): Int? = when {
+        contains("8_24_BIT") || contains("24_BIT") -> 24
+        contains("32_BIT") || contains("FLOAT") -> 32
+        contains("16_BIT") -> 16
+        contains("8_BIT") -> 8
+        else -> null
+    }
+
+    /**
+     * One UI does not allow an ordinary app to synchronously query BluetoothCodecStatus unless it
+     * owns a CompanionDeviceManager association. Its actual 24/96 A2DP mixer route is still
+     * visible through AudioFlinger. Restrict this inference to Galaxy Buds whose model glyph we
+     * recognize; 24/96 on an arbitrary headset might be LDAC or another codec.
+     */
+    private fun inferredSamsungUhqSignal(): String? {
+        val hal = currentAfFormatInfo ?: return null
+        val name = hal.routedDeviceName?.takeIf { it.isNotBlank() && it != "null" } ?: return null
+        if (hal.routedDeviceType != android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP) return null
+        if (samsungBudsIconForName(name.lowercase()) == null) return null
+        if ((hal.sampleRateHz?.toInt() ?: 0) < 96_000) return null
+        if (hal.audioFormat?.contains("24_BIT") != true) return null
+        return "SSC UHQ · 24-bit · ${hal.sampleRateHz!!.toInt().khz()} kHz"
+    }
 
     private fun Int.bitDepthName(): String? = when (this) {
         android.media.AudioFormat.ENCODING_PCM_8BIT -> "8-bit"
@@ -1817,10 +2298,14 @@ class FullPlayer @JvmOverloads constructor(
         coverSlideAnimator?.cancel()
         coverSlideAnimator = null
         val player = instance
+        val remote = JellyfinRemoteTargets.playbackState.value
+        val remoteIndex = remote?.queueIds?.indexOf(remote.itemId)
         val actionAvailable = if (dx < 0F) {
-            player?.hasNextMediaItem() == true
+            if (remote != null) remoteIndex != null && remoteIndex in 0 until remote.queueIds.lastIndex
+            else player?.hasNextMediaItem() == true
         } else {
-            player?.hasPreviousMediaItem() == true || (player?.currentPosition ?: 0L) > 0L
+            if (remote != null) (remoteIndex ?: -1) > 0 || remote.projectedPositionMs() > 0L
+            else player?.hasPreviousMediaItem() == true || (player?.currentPosition ?: 0L) > 0L
         }
         coverSwipeHaptics.update(
             coverSimpleImageView,
@@ -1850,16 +2335,25 @@ class FullPlayer @JvmOverloads constructor(
             val forwards = releaseDirection < 0F
             // At the end of the queue seekToNext does nothing, so no track change arrives and
             // nothing would ever bring the cover back - it sat where the finger left it.
+            val remote = JellyfinRemoteTargets.playbackState.value
+            val remoteIndex = remote?.queueIds?.indexOf(remote.itemId)
             val willMove = if (forwards) {
-                player?.hasNextMediaItem() == true
+                if (remote != null) remoteIndex != null && remoteIndex in 0 until remote.queueIds.lastIndex
+                else player?.hasNextMediaItem() == true
             } else {
-                player?.hasPreviousMediaItem() == true || (player?.currentPosition ?: 0L) > 0L
+                if (remote != null) (remoteIndex ?: -1) > 0 || remote.projectedPositionMs() > 0L
+                else player?.hasPreviousMediaItem() == true || (player?.currentPosition ?: 0L) > 0L
             }
             if (willMove) {
                 coverSwipeHaptics.commit(coverSimpleImageView)
                 pendingCoverReleaseVelocity = velocityX
                 pendingCoverSlide = if (forwards) SLIDE_NEXT else SLIDE_PREVIOUS
-                if (forwards) player?.seekToNext() else player?.seekToPrevious()
+                if (remote != null) {
+                    sendRemoteTransport(
+                        if (forwards) PlaystateCommand.NEXT_TRACK
+                        else PlaystateCommand.PREVIOUS_TRACK
+                    )
+                } else if (forwards) player?.seekToNext() else player?.seekToPrevious()
                 // A backstop for the cases the check above cannot see - a repeat mode changing
                 // under us, or a queue emptied while the finger was down.
                 postDelayed(coverSlideBackstop, COVER_SLIDE_BACKSTOP_MS)
@@ -1888,36 +2382,180 @@ class FullPlayer @JvmOverloads constructor(
         }
     }
 
-    /**
-     * Shows what is actually connected in place of the fixed AirPlay glyph, with its name beneath.
-     * On the phone's own speaker there is nothing worth naming, so the AirPlay button stays as it
-     * was - a way into the system output picker.
-     */
+    /** Shows the route actually selected for playback, never merely a connected device. */
     private fun refreshOutputDevice() {
-        // A device being played to outranks a device plugged in. If sound is coming out of a
-        // computer across the house, the headphones in this phone are not what is playing.
         JellyfinRemoteTargets.active.value?.let { target ->
             showOutput(clientIconFor(target.client), target.deviceName.ifBlank { target.client })
             return
         }
-        val device = AudioOutput.current(context)
-        if (!device.isExternal || device.name == null) {
+        val route = outputMediaRouter.selectedRoute
+        if (route.id == outputMediaRouter.defaultRoute.id) {
             outputDeviceIcon.visibility = GONE
             outputDeviceName.visibility = GONE
             airplayOverlayButton.visibility = VISIBLE
             return
         }
-        showOutput(device.icon, device.name)
+        showOutput(routeIconFor(route), route.name.toString(), route.iconUri, route)
     }
 
-    private fun showOutput(@DrawableRes icon: Int, name: String) {
-        outputDeviceIcon.setImageResource(icon)
+    private fun showOutput(
+        @DrawableRes icon: Int,
+        name: String,
+        iconUri: Uri? = null,
+        localRoute: MediaRouter.RouteInfo? = null,
+    ) {
+        bindOutputIcon(outputDeviceIcon, icon, iconUri, localRoute)
         outputDeviceIcon.visibility = VISIBLE
         outputDeviceName.text = name
         outputDeviceName.visibility = VISIBLE
         // Hidden rather than removed: the device icon is constrained to this button's bounds, so it
         // still has to occupy its place in the row.
         airplayOverlayButton.visibility = INVISIBLE
+    }
+
+    private fun bindOutputIcon(
+        view: ImageView,
+        @DrawableRes fallback: Int,
+        iconUri: Uri?,
+        localRoute: MediaRouter.RouteInfo? = null,
+    ) {
+        if (iconUri != null) {
+            // Samsung and other route providers can expose model-specific artwork here (for
+            // example a Buds glyph). Keep Accord's device-class icon as a safe fallback.
+            view.setImageResource(fallback)
+            view.load(iconUri) {
+                listener(onError = { _, _ -> view.setImageResource(fallback) })
+            }
+            return
+        }
+
+        // AndroidX does not populate iconUri for Samsung's built-in LE Audio route. SystemUI still
+        // has the semantic route drawable, so prefer the one from the installed One UI build. A
+        // renamed/missing resource simply falls through to Accord's extracted model fallback.
+        val systemDrawable = localRoute?.let(::systemRouteDrawable)
+        if (systemDrawable != null) view.setImageDrawable(systemDrawable)
+        else view.setImageResource(fallback)
+    }
+
+    @SuppressLint("DiscouragedApi")
+    private fun systemRouteDrawable(route: MediaRouter.RouteInfo): Drawable? {
+        if (platformRouteType(route) != MediaRoute2Info.TYPE_BLE_HEADSET) return null
+        if (samsungBudsIconForName(route.name.toString().lowercase()) == null) return null
+        return runCatching {
+            val systemUi = context.createPackageContext(
+                "com.android.systemui",
+                Context.CONTEXT_IGNORE_SECURITY,
+            )
+            val resources = systemUi.resources
+            val candidates = listOf(
+                // Samsung One UI: the exact glyph shown for an LE Audio/Auracast earbuds route.
+                "list_ic_earbuds_stem_auracast",
+                "ic_bt_le_audio_sharing",
+                "ic_bt_le_audio",
+            )
+            candidates.firstNotNullOfOrNull { name ->
+                resources.getIdentifier(name, "drawable", systemUi.packageName)
+                    .takeIf { it != 0 }
+                    ?.let(systemUi::getDrawable)
+            }
+        }.getOrNull()
+    }
+
+    private fun platformRouteType(route: MediaRouter.RouteInfo): Int? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+        return runCatching {
+            val router = MediaRouter2.getInstance(context)
+            val sameName: (MediaRoute2Info) -> Boolean = {
+                it.name.toString().equals(route.name.toString(), ignoreCase = true)
+            }
+            router.systemController.selectedRoutes.firstOrNull(sameName)?.type
+                ?: router.routes.firstOrNull(sameName)?.type
+        }.getOrNull()
+    }
+
+    @DrawableRes
+    private fun routeIconFor(route: MediaRouter.RouteInfo): Int {
+        val name = route.name.toString().lowercase()
+        when (platformRouteType(route)) {
+            MediaRoute2Info.TYPE_BLE_HEADSET -> return if (samsungBudsIconForName(name) != null) {
+                R.drawable.ic_output_samsung_buds_auracast
+            } else {
+                R.drawable.ic_output_earbuds
+            }
+            MediaRoute2Info.TYPE_USB_DEVICE,
+            MediaRoute2Info.TYPE_USB_ACCESSORY,
+            MediaRoute2Info.TYPE_USB_HEADSET,
+            MediaRoute2Info.TYPE_WIRED_HEADSET,
+            MediaRoute2Info.TYPE_WIRED_HEADPHONES -> return R.drawable.ic_headphones
+            MediaRoute2Info.TYPE_HDMI,
+            MediaRoute2Info.TYPE_HDMI_ARC,
+            MediaRoute2Info.TYPE_HDMI_EARC -> return R.drawable.ic_output_desktop
+        }
+        samsungBudsIconForName(name)?.let { return it }
+        when (platformRouteType(route)) {
+            MediaRoute2Info.TYPE_BLUETOOTH_A2DP,
+            MediaRoute2Info.TYPE_HEARING_AID -> return R.drawable.ic_headphones
+        }
+        return when {
+            "usb" in name || "dac" in name -> R.drawable.ic_headphones
+            "airpods" in name || "earbud" in name ->
+                R.drawable.ic_output_earbuds
+            "headphone" in name || "headset" in name -> R.drawable.ic_headphones
+            "car" in name || "auto" in name -> R.drawable.ic_output_car
+            "tv" in name || "display" in name || "monitor" in name || "chromecast" in name ->
+                R.drawable.ic_output_desktop
+            "phone" in name || "galaxy" in name || "pixel" in name -> R.drawable.ic_output_phone
+            route.isBluetooth -> R.drawable.ic_output_earbuds
+            else -> R.drawable.ic_output_speaker
+        }
+    }
+
+    /** Model glyphs taken from the One UI build on this phone, with generic brands excluded. */
+    @DrawableRes
+    private fun samsungBudsIconForName(name: String): Int? = when {
+        "pixel buds" in name -> null
+        "buds4" in name || "buds 4" in name -> R.drawable.ic_output_buds4
+        "buds3 fe" in name || "buds 3 fe" in name || "buds fe" in name ||
+            "buds core" in name -> R.drawable.ic_output_samsung_buds_fe
+        "buds3" in name || "buds 3" in name -> R.drawable.ic_output_samsung_buds3
+        "buds2" in name || "buds 2" in name -> R.drawable.ic_output_samsung_buds2
+        "buds live" in name -> R.drawable.ic_output_samsung_buds_live
+        "galaxy buds" in name || "buds pro" in name || "buds+" in name ->
+            R.drawable.ic_output_samsung_buds_classic
+        else -> null
+    }
+
+    private fun routeSubtitle(route: MediaRouter.RouteInfo): String {
+        when (platformRouteType(route)) {
+            MediaRoute2Info.TYPE_BLE_HEADSET ->
+                return context.getString(R.string.output_route_le_audio)
+            MediaRoute2Info.TYPE_USB_DEVICE,
+            MediaRoute2Info.TYPE_USB_ACCESSORY,
+            MediaRoute2Info.TYPE_USB_HEADSET ->
+                return context.getString(R.string.output_route_usb)
+            MediaRoute2Info.TYPE_WIRED_HEADSET,
+            MediaRoute2Info.TYPE_WIRED_HEADPHONES ->
+                return context.getString(R.string.output_route_wired)
+            MediaRoute2Info.TYPE_HDMI,
+            MediaRoute2Info.TYPE_HDMI_ARC,
+            MediaRoute2Info.TYPE_HDMI_EARC ->
+                return context.getString(R.string.output_route_display)
+        }
+        val description = route.description?.toString()?.takeIf {
+            it.isNotBlank() && !it.equals(route.name.toString(), ignoreCase = true)
+        }
+        if (description != null) return description
+
+        val name = route.name.toString().lowercase()
+        return when {
+            route.isBluetooth -> context.getString(R.string.output_route_bluetooth)
+            "usb" in name || "dac" in name -> context.getString(R.string.output_route_usb)
+            "wired" in name || "headphone" in name || "headset" in name ->
+                context.getString(R.string.output_route_wired)
+            "tv" in name || "display" in name || "hdmi" in name ->
+                context.getString(R.string.output_route_display)
+            else -> context.getString(R.string.output_route_system)
+        }
     }
 
     /**
@@ -2037,6 +2675,7 @@ class FullPlayer @JvmOverloads constructor(
         drawable: android.graphics.drawable.Drawable?,
         bitmap: android.graphics.Bitmap?
     ) {
+        appliedCoverBitmap = bitmap
         blendView.setImageBitmap(bitmap)
         fullPlayerToolbar.setImageViewCover(drawable)
         floatingPanelLayout.transitionImageView?.setImageDrawable(drawable)
@@ -2180,14 +2819,15 @@ class FullPlayer @JvmOverloads constructor(
 
     override fun onPlaybackStateChanged(playbackState: @Player.State Int) {
         Log.d("FullPlayer", "onPlaybackStateChanged: $playbackState")
-        val isPlaying = instance?.isPlaying == true
+        val remoteState = JellyfinRemoteTargets.playbackState.value
+        val isPlaying = remoteState?.let { !it.isPaused } ?: (instance?.isPlaying == true)
         updateCoverPauseScale(
             isPlaying = isPlaying,
             animate = !firstTime
         )
         if (isPlaying) {
             controllerButton.playAnimation(false)
-        } else if (playbackState != Player.STATE_BUFFERING) {
+        } else if (remoteState != null || playbackState != Player.STATE_BUFFERING) {
             controllerButton.playAnimation(true)
         }
         if (isPlaying) {
@@ -2266,15 +2906,20 @@ class FullPlayer @JvmOverloads constructor(
     private fun applyCoverScale() {
         val queueBlend = transformationFraction.coerceIn(0F, 1F)
         val effectivePauseScale = lerp(coverPauseScale, 1F, queueBlend)
-        val scale = coverBaseScale * effectivePauseScale
+        // Treat an invalid intermediate value as the neutral transform. This is a final safety
+        // boundary: view properties must never receive NaN/Infinity even if layout and playback
+        // callbacks race during activity restoration.
+        val safeBaseScale = coverBaseScale.takeIf { it.isFinite() } ?: 1F
+        val safePauseScale = effectivePauseScale.takeIf { it.isFinite() } ?: 1F
+        val scale = (safeBaseScale * safePauseScale).takeIf { it.isFinite() } ?: 1F
         coverSimpleImageView.pivotX = 0F
         coverSimpleImageView.pivotY = 0F
         coverSimpleImageView.scaleX = scale
         coverSimpleImageView.scaleY = scale
         val pauseOffsetX =
-            coverSimpleImageView.width * coverBaseScale * (1f - effectivePauseScale) / 2f
+            coverSimpleImageView.width * safeBaseScale * (1f - safePauseScale) / 2f
         val pauseOffsetY =
-            coverSimpleImageView.height * coverBaseScale * (1f - effectivePauseScale) / 2f
+            coverSimpleImageView.height * safeBaseScale * (1f - safePauseScale) / 2f
         // The resting position is always recorded, even mid-slide, because that is where the
         // incoming artwork has to come to a stop.
         coverRestingTranslationX = coverBaseTranslationX + pauseOffsetX
@@ -2369,9 +3014,27 @@ class FullPlayer @JvmOverloads constructor(
         return items
     }
 
+    /** Keeps artwork/title/queue selection aligned while audio continues on the remote phone. */
+    private fun syncLocalPlayerToRemoteState(
+        state: JellyfinRemoteTargets.RemotePlaybackState?,
+    ) {
+        state ?: return
+        val itemId = state.itemId ?: return
+        val index = state.queueIds.indexOf(itemId.replace("-", "").lowercase())
+        val player = instance ?: return
+        if (index !in 0 until player.mediaItemCount || index == player.currentMediaItemIndex) return
+        pendingCoverSlide = if (index > player.currentMediaItemIndex) SLIDE_NEXT else SLIDE_PREVIOUS
+        player.seekTo(index, 0L)
+        player.pause()
+    }
+
     override fun onDetachedFromWindow() {
         remoteTargetJob?.cancel()
         remoteTargetJob = null
+        remotePlaybackJob?.cancel()
+        remotePlaybackJob = null
+        remoteTargetsWarmupJob?.cancel()
+        remoteTargetsWarmupJob = null
         stopPositionUpdates()
         removeCallbacks(hideControlsRunnable)
         controlsAnimator?.cancel()
@@ -2397,6 +3060,10 @@ class FullPlayer @JvmOverloads constructor(
             runCatching { AudioOutput.unregister(context, it) }
             audioDeviceCallback = null
         }
+        if (outputRouteCallbackRegistered) {
+            outputMediaRouter.removeCallback(outputRouteCallback)
+            outputRouteCallbackRegistered = false
+        }
         super.onDetachedFromWindow()
     }
 
@@ -2405,12 +3072,38 @@ class FullPlayer @JvmOverloads constructor(
         if (audioDeviceCallback == null) {
             audioDeviceCallback = AudioOutput.register(context) { refreshOutputDevice() }
         }
+        if (!outputRouteCallbackRegistered) {
+            outputMediaRouter.addCallback(outputRouteSelector, outputRouteCallback)
+            outputRouteCallbackRegistered = true
+        }
         // Not in the constructor: there is no lifecycle owner in the view tree until it is
         // attached, so the collector was never started and handing playback over silently left the
         // button showing the wrong thing. The null-safe call is what made it silent.
         if (remoteTargetJob == null) {
             remoteTargetJob = findViewTreeLifecycleOwner()?.lifecycleScope?.launch {
                 JellyfinRemoteTargets.active.collect { refreshOutputDevice() }
+            }
+        }
+        if (remotePlaybackJob == null) {
+            remotePlaybackJob = findViewTreeLifecycleOwner()?.lifecycleScope?.launch {
+                JellyfinRemoteTargets.playbackState.collect { state ->
+                    syncLocalPlayerToRemoteState(state)
+                    onPlaybackStateChanged(instance?.playbackState ?: Player.STATE_IDLE)
+                    state?.let {
+                        queueShuffleButton.isChecked = it.playbackOrder == PlaybackOrder.SHUFFLE
+                        updateRepeatButton(it.repeatMode.toPlayerRepeatMode())
+                    }
+                    updateProgressDisplay()
+                    updateVolumeSlider(state?.volumePercent)
+                }
+            }
+        }
+        // Warm the output picker while the player settles. Opening it then has its final device
+        // count on the first frame; a very early tap still gets local routes immediately and the
+        // same smooth resize used for a device appearing later.
+        if (remoteTargetsWarmupJob == null && JellyfinRemoteTargets.isEnabled(context)) {
+            remoteTargetsWarmupJob = findViewTreeLifecycleOwner()?.lifecycleScope?.launch {
+                JellyfinRemoteTargets.available()
             }
         }
         refreshOutputDevice()
@@ -2484,6 +3177,8 @@ class FullPlayer @JvmOverloads constructor(
         private const val QUALITY_HINT_FADE_MS = 220L
         private const val QUALITY_HINT_HOLD_MS = 3_000L
         private const val PAUSED_COVER_SCALE = 0.84F
+        private const val OUTPUT_PICKER_BLUR_RADIUS = 72F
+        private const val OUTPUT_PICKER_RESIZE_MS = 240L
 
         /** How far the cover follows the finger, and how far it has to go to count as a swipe. */
         private const val COVER_SWIPE_FOLLOW = 0.56F

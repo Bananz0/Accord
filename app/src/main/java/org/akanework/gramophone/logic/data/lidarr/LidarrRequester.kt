@@ -19,6 +19,8 @@ object LidarrRequester {
 
     data class Outcome(val requested: Int, val notFound: Int)
 
+    private data class Lookup(val artist: String, val albumOrTitle: String, val albumKnown: Boolean)
+
     /**
      * Requests the albums behind [wanted]. Blocking network work; call off the main thread.
      *
@@ -32,22 +34,25 @@ object LidarrRequester {
 
         // Collapse to distinct album requests before touching the network.
         val searches = wanted
-            .map { it.artist.trim() to (it.album?.trim().orEmpty().ifBlank { it.title.trim() }) }
-            .filter { it.first.isNotBlank() || it.second.isNotBlank() }
+            .map {
+                val album = it.album?.trim().orEmpty()
+                Lookup(
+                    artist = it.artist.trim(),
+                    albumOrTitle = album.ifBlank { it.title.trim() },
+                    albumKnown = album.isNotBlank(),
+                )
+            }
+            .filter { it.artist.isNotBlank() || it.albumOrTitle.isNotBlank() }
             .distinct()
 
         var requested = 0
         var notFound = 0
         val alreadyRequested = mutableSetOf<String>()
 
-        searches.forEach { (artist, album) ->
+        searches.forEach { (artist, album, albumKnown) ->
             val term = listOf(artist, album).filter { it.isNotBlank() }.joinToString(" ")
             val match = try {
-                client.searchAlbums(term).firstOrNull { candidate ->
-                    // Lidarr ranks by relevance but will still return the wrong artist for a common
-                    // title, so require the artist to agree before adding anything.
-                    artist.isBlank() || candidate.artistName.matchesLoosely(artist)
-                }
+                selectMatch(artist, album, albumKnown, client.searchAlbums(term))
             } catch (e: Exception) {
                 Log.w(TAG, "Lookup failed for $term", e)
                 null
@@ -73,5 +78,27 @@ object LidarrRequester {
         val a = lowercase().filter { it.isLetterOrDigit() }
         val b = other.lowercase().filter { it.isLetterOrDigit() }
         return a.isNotEmpty() && b.isNotEmpty() && (a.contains(b) || b.contains(a))
+    }
+
+    /**
+     * Album names are authoritative when Spotify supplied one. Artist agreement breaks ties, but
+     * is not mandatory because compilations are commonly credited to "Various Artists" in Lidarr.
+     * When Spotify omitted the album, retain the old track-title fallback and trust artist match.
+     */
+    internal fun selectMatch(
+        artist: String,
+        albumOrTitle: String,
+        albumKnown: Boolean,
+        candidates: List<LidarrClient.AlbumResult>,
+    ): LidarrClient.AlbumResult? {
+        if (!albumKnown) {
+            return candidates.firstOrNull {
+                artist.isBlank() || it.artistName.matchesLoosely(artist)
+            }
+        }
+        val titleMatches = candidates.filter { it.title.matchesLoosely(albumOrTitle) }
+        return titleMatches.firstOrNull {
+            artist.isBlank() || it.artistName.matchesLoosely(artist)
+        } ?: titleMatches.firstOrNull()
     }
 }

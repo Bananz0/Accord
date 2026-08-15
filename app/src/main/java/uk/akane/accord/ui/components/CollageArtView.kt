@@ -15,9 +15,15 @@ import coil3.request.SuccessResult
 import coil3.toBitmap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * A mosaic of the covers in a mix, where each cover's tile is sized by how much of the mix it is.
@@ -38,7 +44,7 @@ class CollageArtView @JvmOverloads constructor(
 
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0x33000000.toInt()
+        color = 0x33000000
         strokeWidth = 2f
         style = Paint.Style.STROKE
     }
@@ -53,7 +59,49 @@ class CollageArtView @JvmOverloads constructor(
 
     companion object {
         private const val MAX_SLICES = 6
-        private val cache = android.util.LruCache<Uri, Bitmap>(30)
+        private const val MIN_CACHE_BYTES = 8 * 1024 * 1024
+        private const val MAX_CACHE_BYTES = 32 * 1024 * 1024
+        private val cacheBytes = (Runtime.getRuntime().maxMemory() / 16L)
+            .coerceIn(MIN_CACHE_BYTES.toLong(), MAX_CACHE_BYTES.toLong())
+            .toInt()
+        private val cache = object : android.util.LruCache<Uri, Bitmap>(cacheBytes) {
+            override fun sizeOf(key: Uri, value: Bitmap): Int = value.allocationByteCount
+        }
+        private val imageScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        private val decodeSlots = Semaphore(4)
+        private val inFlight = ConcurrentHashMap<Uri, Deferred<Bitmap?>>()
+
+        /** Starts with the covers nearest the top of Home before RecyclerView asks for them. */
+        fun prefetch(context: Context, uris: Iterable<Uri>, limit: Int = 48) {
+            uris.asSequence().distinct().take(limit).forEach { uri ->
+                if (cache.get(uri) == null) imageScope.launch { loadShared(context, uri) }
+            }
+        }
+
+        /** One decode per URI across every collage currently being laid out. */
+        private suspend fun loadShared(context: Context, uri: Uri): Bitmap? {
+            cache.get(uri)?.let { return it }
+            val candidate = imageScope.async(start = kotlinx.coroutines.CoroutineStart.LAZY) {
+                decodeSlots.withPermit {
+                    val request = ImageRequest.Builder(context.applicationContext)
+                        .data(uri)
+                        .size(256, 256)
+                        .build()
+                    val result = context.applicationContext.imageLoader.execute(request)
+                    if (result is SuccessResult) {
+                        result.image.toBitmap().also { cache.put(uri, it) }
+                    } else null
+                }
+            }
+            val shared = inFlight.putIfAbsent(uri, candidate)
+            if (shared == null) {
+                candidate.invokeOnCompletion { inFlight.remove(uri, candidate) }
+                candidate.start()
+                return candidate.await()
+            }
+            candidate.cancel()
+            return shared.await()
+        }
     }
 
     /**
@@ -77,26 +125,26 @@ class CollageArtView @JvmOverloads constructor(
             .sortedByDescending { it.value }
             .take(MAX_SLICES)
             .map { (uri, count) -> Slice(uri, count, cache.get(uri)) }
-        invalidate()
+        loadMissingSlices()
+    }
 
+    private fun loadMissingSlices() {
+        // A view may detach while its decode is in flight and reattach without another bind.
+        // Pull anything prefetched in the meantime from the shared cache before starting work.
+        slices.forEach { slice ->
+            if (slice.bitmap == null) slice.bitmap = cache.get(slice.uri)
+        }
+        invalidate()
         if (slices.all { it.bitmap != null }) return
 
+        loadJob?.cancel()
         loadJob = scope.launch {
             val pending = slices
-            val fetched = withContext(Dispatchers.IO) {
-                pending.map { slice ->
-                    slice.bitmap ?: run {
-                        val request = ImageRequest.Builder(context)
-                            .data(slice.uri)
-                            .size(256, 256)
-                            .build()
-                        val result = context.imageLoader.execute(request)
-                        if (result is SuccessResult) {
-                            result.image.toBitmap().also { cache.put(slice.uri, it) }
-                        } else null
-                    }
-                }
-            }
+            // A six-cover collage used to await six image requests serially. Coil's disk cache is
+            // still the source of truth, but these independent decodes can finish in parallel.
+            val fetched = pending.map { slice ->
+                async { slice.bitmap ?: loadShared(context, slice.uri) }
+            }.awaitAll()
             // Discard if setCovers ran again while this was in flight.
             if (slices !== pending) return@launch
             pending.forEachIndexed { index, slice -> slice.bitmap = fetched[index] }
@@ -107,6 +155,11 @@ class CollageArtView @JvmOverloads constructor(
     override fun onDetachedFromWindow() {
         loadJob?.cancel()
         super.onDetachedFromWindow()
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        if (currentUris.isNotEmpty() && slices.any { it.bitmap == null }) loadMissingSlices()
     }
 
     override fun onDraw(canvas: Canvas) {

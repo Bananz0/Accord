@@ -38,6 +38,7 @@ object SpotifyPlaylistImporter {
         playlistName: String,
         tracks: List<SpotifyClient.Track>,
         library: List<MediaItem>,
+        replaceExisting: Boolean = false,
     ): Result {
         val index = buildIndex(library)
         val matched = LinkedHashSet<String>()
@@ -59,15 +60,29 @@ object SpotifyPlaylistImporter {
             if (existing == null) {
                 JellyfinPlaylists.create(context, playlistName, mediaIds.toList())
             } else {
-                // Re-importing is an additive sync: newly available tracks appear without creating
-                // another entry point or deleting edits the user made to the Jellyfin playlist.
                 val current = JellyfinPlaylists.items(context, existing.id, library)
-                    .mapTo(HashSet()) { it.mediaId }
-                val additions = mediaIds.filterNot { it in current }
-                if (additions.isNotEmpty() && !JellyfinPlaylists.addTo(context, existing.id, additions)) {
-                    null
-                } else {
+                    .map(MediaItem::mediaId)
+                if (current == mediaIds.toList()) {
                     existing.id
+                } else if (replaceExisting) {
+                    // Exact replacement is user-confirmed in the controller. This is what removes
+                    // stale IDs selected by an older, less precise matcher.
+                    JellyfinPlaylists.replace(
+                        context = context,
+                        playlistId = existing.id,
+                        name = playlistName,
+                        mediaIds = mediaIds.toList(),
+                    )
+                } else {
+                    // Keep the non-destructive option for playlists the user edits in Jellyfin.
+                    val currentIds = current.toHashSet()
+                    val additions = mediaIds.filterNot(currentIds::contains)
+                    if (additions.isEmpty() || JellyfinPlaylists.addTo(
+                            context,
+                            existing.id,
+                            additions,
+                        )
+                    ) existing.id else null
                 }
             }
         }
@@ -80,54 +95,212 @@ object SpotifyPlaylistImporter {
     private fun buildIndex(library: List<MediaItem>) = LibraryIndex(library)
 
     /**
-     * Name-based lookup into the library.
+     * Metadata-based lookup into the library.
      *
-     * Two passes, because exact title-and-artist agreement is the safe match but a real library
-     * disagrees with Spotify constantly - "(Remastered 2011)", "feat." spelled three ways, a
-     * different apostrophe. Title-only is the fallback, and only when it is unambiguous, so a
-     * loose match never silently picks the wrong one of four songs sharing a name.
+     * Jellyfin can legitimately contain the same recording on several releases. Keep all those
+     * candidates and rank them using Spotify's release metadata; a map keyed only by artist/title
+     * silently made whichever edition Jellyfin returned first win every playlist import.
      */
     private class LibraryIndex(library: List<MediaItem>) {
 
-        private val byTitleAndArtist = HashMap<String, String>()
-        private val byTitle = HashMap<String, MutableList<String>>()
+        private val byRecordingTitle: Map<String, List<LibraryTrack>>
 
         init {
-            library.forEach { item ->
-                val id = item.mediaId.takeIf { it.isNotBlank() } ?: return@forEach
-                val title = item.mediaMetadata.title?.toString()?.normalise() ?: return@forEach
-                val artist = item.mediaMetadata.artist?.toString()?.normalise().orEmpty()
-                byTitleAndArtist.putIfAbsent("$title|$artist", id)
-                byTitle.getOrPut(title) { mutableListOf() }.add(id)
-            }
+            val raw = library.mapNotNull(::libraryTrack)
+            val albumSizes = raw.groupingBy(LibraryTrack::albumIdentity).eachCount()
+            byRecordingTitle = raw
+                .map { it.copy(albumTrackCount = albumSizes[it.albumIdentity] ?: 1) }
+                .groupBy { it.title.recordingKey() }
         }
 
-        fun find(track: SpotifyClient.Track): String? {
-            val title = track.title.normalise()
-            val artist = track.artist.normalise()
-            byTitleAndArtist["$title|$artist"]?.let { return it }
+        fun find(track: SpotifyClient.Track): String? = selectMatch(
+            track,
+            byRecordingTitle[track.title.recordingKey()].orEmpty(),
+        )
 
-            // Spotify credits every featured artist on the track; the file often credits one. Try
-            // the primary artist against a library artist string that merely contains it.
-            byTitleAndArtist.entries.firstOrNull { (key, _) ->
-                val (keyTitle, keyArtist) = key.split('|', limit = 2).let { it[0] to it.getOrElse(1) { "" } }
-                keyTitle == title && artist.isNotEmpty() &&
-                        (keyArtist.contains(artist) || artist.contains(keyArtist))
-            }?.let { return it.value }
-
-            return byTitle[title]?.singleOrNull()
-        }
-
-        /**
-         * Strips everything the two sources disagree about: case, punctuation, spacing, and the
-         * bracketed suffixes labels attach to reissues.
-         */
-        private fun String.normalise(): String = lowercase()
-            .replace(BRACKETED, "")
-            .filter { it.isLetterOrDigit() }
-
-        private companion object {
-            val BRACKETED = Regex("[(\\[].*?[)\\]]")
+        private fun libraryTrack(item: MediaItem): LibraryTrack? {
+            val metadata = item.mediaMetadata
+            val id = item.mediaId.takeIf(String::isNotBlank) ?: return null
+            val title = metadata.title?.toString()?.takeIf(String::isNotBlank) ?: return null
+            val artist = metadata.artist?.toString().orEmpty()
+            val album = metadata.albumTitle?.toString()
+            val extras = metadata.extras
+            val albumId = extras?.getLong("AlbumId", Long.MIN_VALUE)
+                ?.takeIf { it != Long.MIN_VALUE }
+            val albumIdentity = albumId?.let { "id:$it" } ?: listOf(
+                album.orEmpty().strictKey(),
+                metadata.albumArtist?.toString().orEmpty().strictKey(),
+                metadata.releaseYear?.toString().orEmpty(),
+            ).joinToString("|")
+            return LibraryTrack(
+                mediaId = id,
+                title = title,
+                artist = artist,
+                album = album,
+                releaseYear = metadata.releaseYear,
+                discNumber = metadata.discNumber,
+                trackNumber = metadata.trackNumber,
+                durationMs = extras?.getLong("Duration", -1L)?.takeIf { it > 0L },
+                albumIdentity = albumIdentity,
+            )
         }
     }
+
+    internal data class LibraryTrack(
+        val mediaId: String,
+        val title: String,
+        val artist: String,
+        val album: String?,
+        val releaseYear: Int? = null,
+        val discNumber: Int? = null,
+        val trackNumber: Int? = null,
+        val durationMs: Long? = null,
+        val albumIdentity: String = album.orEmpty(),
+        val albumTrackCount: Int = 1,
+    )
+
+    /** Chooses a release deterministically, or refuses to guess when the best evidence is tied. */
+    internal fun selectMatch(
+        track: SpotifyClient.Track,
+        candidates: List<LibraryTrack>,
+    ): String? {
+        if (candidates.isEmpty()) return null
+        val sourceArtist = track.artist.strictKey()
+        val artistMatches = candidates.filter { candidate ->
+            val artist = candidate.artist.strictKey()
+            sourceArtist.isNotEmpty() && artist.isNotEmpty() &&
+                (artist == sourceArtist || artist.contains(sourceArtist) || sourceArtist.contains(artist))
+        }
+        val pool = artistMatches.ifEmpty {
+            // A compilation can disagree on artist credit, but title alone is only safe when album
+            // and duration both agree. Never resurrect the old arbitrary title-only fallback.
+            candidates.filter { candidate ->
+                albumScore(track.album, candidate.album) <= 1 &&
+                    durationScore(track.durationMs, candidate.durationMs) <= 1
+            }
+        }
+        if (pool.isEmpty()) return null
+
+        val ranked = pool.map { it to score(track, it) }.sortedBy { it.second }
+        val best = ranked.first()
+        if (ranked.getOrNull(1)?.second == best.second) return null
+        return best.first.mediaId
+    }
+
+    private fun score(track: SpotifyClient.Track, candidate: LibraryTrack) = MatchScore(
+        title = if (track.title.strictKey() == candidate.title.strictKey()) 0 else 1,
+        artist = artistScore(track.artist, candidate.artist),
+        album = albumScore(track.album, candidate.album),
+        duration = durationScore(track.durationMs, candidate.durationMs),
+        // Explicit deluxe/expanded labels win first. When Jellyfin's MusicBrainz metadata gives
+        // both editions the same title, the release with more tracks is the best available signal.
+        edition = if (candidate.album.isPreferredEdition()) 0 else 1,
+        albumSize = -candidate.albumTrackCount,
+        position = positionScore(track, candidate),
+        releaseYear = releaseYearScore(track.albumReleaseYear, candidate.releaseYear),
+        newestRelease = -(candidate.releaseYear ?: 0),
+    )
+
+    private data class MatchScore(
+        val title: Int,
+        val artist: Int,
+        val album: Int,
+        val duration: Int,
+        val edition: Int,
+        val albumSize: Int,
+        val position: Int,
+        val releaseYear: Int,
+        val newestRelease: Int,
+    ) : Comparable<MatchScore> {
+        override fun compareTo(other: MatchScore): Int = compareValuesBy(
+            this,
+            other,
+            MatchScore::title,
+            MatchScore::artist,
+            MatchScore::album,
+            MatchScore::duration,
+            MatchScore::edition,
+            MatchScore::albumSize,
+            MatchScore::position,
+            MatchScore::releaseYear,
+            MatchScore::newestRelease,
+        )
+    }
+
+    private fun artistScore(source: String, candidate: String): Int {
+        val a = source.strictKey()
+        val b = candidate.strictKey()
+        return when {
+            a.isNotEmpty() && a == b -> 0
+            a.isNotEmpty() && b.isNotEmpty() && (a.contains(b) || b.contains(a)) -> 1
+            else -> 2
+        }
+    }
+
+    private fun albumScore(source: String?, candidate: String?): Int {
+        if (source.isNullOrBlank()) return 2
+        if (candidate.isNullOrBlank()) return 3
+        return when {
+            source.strictKey() == candidate.strictKey() ||
+                source.albumFamilyKey() == candidate.albumFamilyKey() -> 0
+            else -> 3
+        }
+    }
+
+    private fun durationScore(source: Long?, candidate: Long?): Int {
+        if (source == null || candidate == null) return 2
+        val difference = kotlin.math.abs(source - candidate)
+        return when {
+            difference <= 1_500L -> 0
+            difference <= 5_000L -> 1
+            else -> 4
+        }
+    }
+
+    private fun positionScore(track: SpotifyClient.Track, candidate: LibraryTrack): Int {
+        val trackMatches = track.trackNumber != null && track.trackNumber == candidate.trackNumber
+        val discMatches = track.discNumber != null && track.discNumber == candidate.discNumber
+        return when {
+            trackMatches && discMatches -> 0
+            trackMatches -> 1
+            track.trackNumber == null || candidate.trackNumber == null -> 2
+            else -> 3
+        }
+    }
+
+    private fun releaseYearScore(source: Int?, candidate: Int?): Int = when {
+        source == null || candidate == null -> 2
+        source == candidate -> 0
+        kotlin.math.abs(source - candidate) <= 1 -> 1
+        else -> 3
+    }
+
+    /** Only remove spelling/credit noise; live, acoustic and remix markers identify real versions. */
+    private fun String.recordingKey(): String = lowercase()
+        .replace(FEATURE_CREDIT, "")
+        .replace(REMASTER_CREDIT, "")
+        .strictKey()
+
+    private fun String.albumFamilyKey(): String = lowercase()
+        .replace(EDITION_CREDIT, "")
+        .strictKey()
+
+    private fun String?.isPreferredEdition(): Boolean =
+        this?.contains(PREFERRED_EDITION) == true
+
+    private fun String.strictKey(): String = lowercase().filter(Char::isLetterOrDigit)
+
+    private val FEATURE_CREDIT = Regex(
+        """(?i)\s*(?:\(|\[|-)?\s*(?:feat\.?|ft\.?|featuring)\s+.*?(?:\)|\]|$)"""
+    )
+    private val REMASTER_CREDIT = Regex(
+        """(?i)\s*(?:\(|\[|-)?\s*(?:(?:19|20)\d{2}\s+)?remaster(?:ed)?(?:\s+(?:19|20)\d{2})?\s*(?:\)|\])?"""
+    )
+    private val EDITION_CREDIT = Regex(
+        """(?i)\s*(?:\(|\[|-)?\s*(?:deluxe|expanded|anniversary|special|complete|bonus(?:\s+track)?|platinum)\s*(?:edition|version)?\s*(?:\)|\])?"""
+    )
+    private val PREFERRED_EDITION = Regex(
+        """\b(deluxe|expanded|anniversary|special edition|complete edition|bonus track|platinum)\b""",
+        RegexOption.IGNORE_CASE,
+    )
 }

@@ -23,6 +23,10 @@ interface LibraryReader {
     val albumListFlow: Flow<List<Album>>
     val albumArtistListFlow: Flow<List<Artist>>
     val artistListFlow: Flow<List<Artist>>
+    /** Release owners derived from structured Jellyfin album-artist credits. */
+    val primaryArtistListFlow: Flow<List<Artist>>
+    /** Guests derived from structured per-track credits. */
+    val featuredArtistListFlow: Flow<List<Artist>>
     val genreListFlow: Flow<List<Genre>>
     val dateListFlow: Flow<List<Date>>
     val playlistListFlow: Flow<List<Playlist>>
@@ -42,4 +46,3 @@ suspend fun LibraryReader.songListSnapshot(timeoutMillis: Long = 2_000L): List<M
     withTimeoutOrNull(timeoutMillis) {
         songListFlow.first { it.isNotEmpty() }
     }.orEmpty()
-

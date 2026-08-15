@@ -491,19 +491,10 @@ class FloatingPanelLayout @JvmOverloads constructor(
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (popupHelper.transformFraction == 1F &&
             !popupHelper.isInsidePopupMenu(event.x, event.y)) {
-            popupHelper.callUpPopup(
-                true,
-                null,
-                invalidate = {
-                    invalidate()
-                },
-                doOnStart = {
-                    fullScreenView.freeze()
-                },
-                doOnEnd = {
-                    fullScreenView.unfreeze()
-                }
-            )
+            // Through dismissPopupMenu, not the helper directly: tapping outside used to retract the
+            // menu while leaving popupEntryClickListener set, and this layout outlives the bar that
+            // opened it, so the listener kept the whole departed screen alive.
+            dismissPopupMenu()
             return true
         }
         // A touch inside an open popup used to be swallowed by the guard below, so every entry in
@@ -1233,6 +1224,13 @@ class FloatingPanelLayout @JvmOverloads constructor(
         dismissAction: (() -> Unit)? = null,
         entryClickListener: ((PopupHelper.PopupEntry) -> Unit)? = null
     ) {
+        // The helper drops requests that arrive mid-animation, telling the caller by way of the
+        // dismiss action. Take the same exit before storing the listener, or one for a popup that
+        // never opened would sit here holding its owner until some later popup replaced it.
+        if (popupHelper.transformFraction != 0F && popupHelper.transformFraction != 1F) {
+            dismissAction?.invoke()
+            return
+        }
         popupEntryClickListener = entryClickListener
         val backgroundRenderNode = backgroundView?.let { recordPopupBackground(it) }
         popupHelper.callUpPopup(

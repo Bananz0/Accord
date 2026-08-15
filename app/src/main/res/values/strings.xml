@@ -170,7 +170,18 @@ Jellyfin is a Free Software Media System and is not affiliated with Accord.</str
     <string name="output_this_phone">This phone</string>
     <string name="output_picker_subtitle">Choose where the music plays</string>
     <string name="output_playing_now">Playing %1$s</string>
-    <string name="output_system_switcher">Bluetooth &amp; speakers…</string>
+    <string name="output_system_switcher">Connect another device…</string>
+    <string name="output_system_switcher_subtitle">Bluetooth, speakers &amp; TVs</string>
+    <string name="output_section_local">Audio Outputs</string>
+    <string name="output_section_finnect">Finnect</string>
+    <string name="settings_finnect">Finnect</string>
+    <string name="settings_finnect_summary">Play on and control Accord across your Jellyfin devices</string>
+    <string name="output_route_bluetooth">Bluetooth</string>
+    <string name="output_route_le_audio">LE Audio · Auracast</string>
+    <string name="output_route_wired">Wired audio</string>
+    <string name="output_route_usb">USB audio</string>
+    <string name="output_route_display">TV &amp; display</string>
+    <string name="output_route_system">Audio output</string>
     <string name="output_nothing_to_send">Nothing in the queue to hand over</string>
     <string name="output_handover_failed">Could not reach that device</string>
     <string name="category_lyrics">Lyrics</string>
@@ -346,6 +357,15 @@ This happens on its own while charging on Wi‑Fi, so it costs no battery or dat
     <string name="music_quality_source">Source: %1$s</string>
     <string name="music_quality_output">Output: %1$s</string>
     <string name="music_quality_usb_device">DAC: %1$s</string>
+    <string name="music_quality_output_device">Output device: %1$s</string>
+    <string name="music_quality_hal_output">Audio HAL: %1$s</string>
+    <string name="music_quality_bluetooth_offload">Bluetooth hardware offload is active</string>
+    <string name="music_quality_bluetooth_codec">Bluetooth: %1$s</string>
+    <string name="music_quality_ssc_uhq_detail">SSC UHQ is high-resolution compressed Bluetooth, not lossless or bit-perfect</string>
+    <plurals name="music_quality_channels">
+        <item quantity="one">%1$d channel</item>
+        <item quantity="other">%1$d channels</item>
+    </plurals>
     <string name="music_quality_bit_perfect_detail">Bit-perfect: no system mixing, resampling, volume scaling, or effects</string>
     <string name="music_quality_usb_exact_detail">Exact USB mixer format; the device does not advertise Android’s optional bit-perfect mode</string>
     <string name="music_quality_sheet_subtitle">The signal Accord is sending right now</string>
@@ -528,6 +548,13 @@ This happens on its own while charging on Wi‑Fi, so it costs no battery or dat
     <string name="spotify_import_action">Import</string>
     <string name="spotify_importing">Importing…</string>
     <string name="spotify_import_result">Imported %1$d tracks. %2$d were not in your library.</string>
+    <string name="spotify_import_existing_title">Playlist already exists</string>
+    <plurals name="spotify_import_existing_message">
+        <item quantity="one">One selected playlist already exists in Jellyfin. Replace it with the corrected Spotify matches, or keep its current songs and only add missing ones?</item>
+        <item quantity="other">%d selected playlists already exist in Jellyfin. Replace them with the corrected Spotify matches, or keep their current songs and only add missing ones?</item>
+    </plurals>
+    <string name="spotify_import_keep">Keep and add</string>
+    <string name="spotify_import_replace">Replace</string>
     <string name="spotify_playlist_label">%1$s (%2$d)</string>
     <string name="spotify_no_playlists">No playlists found, or Spotify could not be reached.</string>
     <string name="spotify_link_in_settings">Link Spotify in Settings before importing playlists.</string>

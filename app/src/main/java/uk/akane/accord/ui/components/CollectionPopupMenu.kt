@@ -3,7 +3,7 @@ package uk.akane.accord.ui.components
 import android.content.res.Resources
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
-import android.widget.Toast
+import uk.akane.accord.ui.components.NoToast as Toast
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch

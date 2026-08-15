@@ -5,7 +5,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.TextView
-import android.widget.Toast
+import uk.akane.accord.ui.components.NoToast as Toast
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -16,8 +16,8 @@ import androidx.recyclerview.widget.RecyclerView
 import coil3.load
 import coil3.request.crossfade
 import com.google.android.material.button.MaterialButton
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.collectLatest
@@ -45,6 +45,8 @@ class SongAdapter(
     /** Everything the library holds, before the screen's search box narrows it. */
     private var unfiltered: List<MediaItem> = emptyList()
     private var filter: String = ""
+    private var submitGeneration = 0L
+    private var submitJob: Job? = null
 
     init {
         fragment.viewLifecycleOwner.lifecycleScope.launch {
@@ -52,7 +54,7 @@ class SongAdapter(
                 (fragment.activity as MainActivity).reader.songListFlow.collectLatest { newList ->
                     val transformed = sourceTransform(newList)
                     unfiltered = transformed
-                    submitList(applyFilter(transformed))
+                    submitList(transformed)
                 }
             }
         }
@@ -66,18 +68,7 @@ class SongAdapter(
         val next = query.trim()
         if (next == filter) return
         filter = next
-        submitList(applyFilter(unfiltered))
-    }
-
-    private fun applyFilter(source: List<MediaItem>): List<MediaItem> {
-        if (filter.isEmpty()) return source
-        val needle = filter.normaliseForFilter()
-        return source.filter { item ->
-            val metadata = item.mediaMetadata
-            metadata.title?.toString()?.normaliseForFilter()?.contains(needle) == true ||
-                metadata.artist?.toString()?.normaliseForFilter()?.contains(needle) == true ||
-                metadata.albumTitle?.toString()?.normaliseForFilter()?.contains(needle) == true
-        }
+        submitList(unfiltered)
     }
 
     private fun String.normaliseForFilter(): String =
@@ -208,39 +199,43 @@ class SongAdapter(
     private val submitMutex = Mutex()
 
     private fun submitList(newList: List<MediaItem>) {
-        CoroutineScope(Dispatchers.Default).launch { submitMutex.withLock {
-            val grouped = newList
-                .groupBy { it.mediaMetadata.title?.firstOrNull()?.uppercaseChar() ?: '#' }
-                .toSortedMap()
-
-            val items = mutableListOf<SongListItem>()
-            val newSongList = mutableListOf<MediaItem>()
-
-            items.add(SongListItem.Control)
-            for ((key, tracks) in grouped) {
-                items.add(SongListItem.Header(key.toString()))
-                items.addAll(tracks.map {
-                    newSongList.add(it)
-                    SongListItem.Track(it)
-                })
+        val generation = ++submitGeneration
+        val requestedFilter = filter
+        submitJob?.cancel()
+        submitJob = fragment.viewLifecycleOwner.lifecycleScope.launch(Dispatchers.Default) {
+            submitMutex.withLock {
+            val prepared = BrowseSongIndex.prepare(newList)
+            val rows = if (requestedFilter.isBlank()) prepared.rows else {
+                val needle = requestedFilter.normaliseForFilter()
+                BrowseSongIndex.rows(
+                    prepared.songs.filter { indexed -> indexed.searchText.contains(needle) }
+                        .map(IndexedSong::item)
+                )
             }
 
             // Snapshot on the main thread: copying the live list from here would race the clear
             // below, and diffing against it directly is what crashed.
             val oldSnapshot = withContext(Dispatchers.Main) { list.toList() }
-            val diffResult = DiffUtil.calculateDiff(GenreDiffCallback(oldSnapshot, items))
+            val diffResult = oldSnapshot.takeIf { it.isNotEmpty() }?.let {
+                DiffUtil.calculateDiff(GenreDiffCallback(it, rows.items))
+            }
 
             withContext(Dispatchers.Main) {
+                // A newer keystroke or library emission superseded this work while it was off the
+                // UI thread. Never briefly flash stale results back into the list.
+                if (generation != submitGeneration || newList !== unfiltered) return@withContext
                 list.clear()
-                list.addAll(items)
+                list.addAll(rows.items)
 
                 songList.clear()
-                songList.addAll(newSongList)
+                songList.addAll(rows.orderedSongs)
 
-                diffResult.dispatchUpdatesTo(this@SongAdapter)
+                if (diffResult == null) notifyItemRangeInserted(0, rows.items.size)
+                else diffResult.dispatchUpdatesTo(this@SongAdapter)
                 recyclerView.post { onContentLoaded.invoke() }
             }
-        } }
+            }
+        }
     }
 
     class GenreDiffCallback(
@@ -275,10 +270,67 @@ class SongAdapter(
         data class Track(val mediaItem: MediaItem) : SongListItem()
     }
 
+    private data class IndexedSong(
+        val item: MediaItem,
+        val searchText: String,
+    )
+
+    private data class PreparedSongs(
+        val songs: List<IndexedSong>,
+        val rows: SongRows,
+    )
+
+    private data class SongRows(
+        val items: List<SongListItem>,
+        val orderedSongs: List<MediaItem>,
+    )
+
 
     companion object {
         const val VIEW_TYPE_NORMAL = 0
         const val VIEW_TYPE_CONTROL = 1
         const val VIEW_TYPE_CATEGORY = 2
+
+        /** One immutable alphabetical/search index per current library emission. */
+        private object BrowseSongIndex {
+            private val mutex = Mutex()
+            private var source: List<MediaItem>? = null
+            private var prepared: PreparedSongs? = null
+
+            suspend fun prepare(items: List<MediaItem>): PreparedSongs = mutex.withLock {
+                if (source === items) prepared?.let { return@withLock it }
+                val indexed = items.map { item ->
+                    val metadata = item.mediaMetadata
+                    IndexedSong(
+                        item,
+                        listOf(metadata.title, metadata.artist, metadata.albumTitle)
+                            .joinToString(" ") { it?.toString().orEmpty() }
+                            .lowercase()
+                            .filter { it.isLetterOrDigit() || it.isWhitespace() },
+                    )
+                }
+                PreparedSongs(indexed, rows(items)).also {
+                    source = items
+                    prepared = it
+                }
+            }
+
+            fun rows(songs: List<MediaItem>): SongRows {
+                val grouped = songs.groupBy {
+                    it.mediaMetadata.title?.firstOrNull()?.uppercaseChar() ?: '#'
+                }.toSortedMap()
+                val rows = ArrayList<SongListItem>(songs.size + grouped.size + 1)
+                val ordered = ArrayList<MediaItem>(songs.size)
+                rows.add(SongListItem.Control)
+                grouped.forEach { (key, tracks) ->
+                    rows.add(SongListItem.Header(key.toString()))
+                    tracks.forEach { track ->
+                        rows.add(SongListItem.Track(track))
+                        ordered.add(track)
+                    }
+                }
+                return SongRows(rows, ordered)
+            }
+        }
     }
 }

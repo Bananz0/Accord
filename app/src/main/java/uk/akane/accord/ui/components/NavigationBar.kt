@@ -778,6 +778,22 @@ class NavigationBar @JvmOverloads constructor(
         invalidate()
     }
 
+    /**
+     * Allows programmatically assembled destinations to assert their navigation role.
+     *
+     * Most screens get this from XML.  A fragment-switcher destination can be inflated while the
+     * previous navigation bar is still participating in the transition, though, and relying only
+     * on the styled attribute left Hidden music looking like a root page until its first scroll.
+     * Keeping the state on the bar also makes the measurement change explicit: a return row adds
+     * height, so this cannot be an invalidate-only property.
+     */
+    fun setHasReturnButton(enabled: Boolean) {
+        if (shouldDrawReturnButton == enabled) return
+        shouldDrawReturnButton = enabled
+        requestLayout()
+        invalidate()
+    }
+
     /** The profile control, which upstream draws but never wires to anything. */
     fun setOnAvatarClickListener(listener: (() -> Unit)?) {
         avatarClickListener = listener

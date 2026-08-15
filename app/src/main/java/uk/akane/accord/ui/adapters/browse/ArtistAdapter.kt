@@ -8,13 +8,13 @@ import android.widget.TextView
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import androidx.media3.common.MediaItem
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.RecyclerView
 import coil3.load
 import coil3.request.crossfade
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.collectLatest
@@ -22,9 +22,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import uk.akane.accord.R
 import uk.akane.accord.logic.dp
-import uk.akane.accord.logic.ArtistCredits
 import uk.akane.accord.ui.MainActivity
 import uk.akane.accord.ui.fragments.browse.ArtistDetailFragment
+import uk.akane.libphonograph.items.Artist
 
 class ArtistAdapter(
     private val recyclerView: RecyclerView,
@@ -37,8 +37,9 @@ class ArtistAdapter(
     private val mainActivity
         get() = fragment.activity as MainActivity
 
-    /** Kept so the search box can re-filter without waiting for the library to emit again. */
-    private var latestSongList: List<MediaItem> = emptyList()
+    /** Already grouped by the library layer; opening this screen never scans every song. */
+    private var latestPrimaryArtists: List<Artist> = emptyList()
+    private var latestFeaturedArtists: List<Artist> = emptyList()
     private var displayMode = ArtistKind.PRIMARY
 
     init {
@@ -46,9 +47,14 @@ class ArtistAdapter(
             fragment.viewLifecycleOwner.repeatOnLifecycle(
                 androidx.lifecycle.Lifecycle.State.STARTED
             ) {
-                mainActivity.reader.songListFlow.collectLatest { songs ->
-                    latestSongList = songs
-                    submitFromSongs(songs)
+                combine(
+                    mainActivity.reader.primaryArtistListFlow,
+                    mainActivity.reader.featuredArtistListFlow,
+                ) { primary, featured -> primary to featured }
+                    .collectLatest { (primary, featured) ->
+                    latestPrimaryArtists = primary
+                    latestFeaturedArtists = featured
+                    submitArtists()
                 }
             }
         }
@@ -91,6 +97,7 @@ class ArtistAdapter(
             mainActivity.fragmentSwitcherView.addFragmentToCurrentStack(
                 ArtistDetailFragment.newInstance(
                     artist = item.name,
+                    artistId = item.id,
                     featuredOnly = item.kind == ArtistKind.FEATURED,
                 )
             )
@@ -107,6 +114,7 @@ class ArtistAdapter(
 
     /** See [SongAdapter.submitMutex] - same race, same reason. */
     private val submitMutex = Mutex()
+    private var submitJob: Job? = null
 
 
     /**
@@ -119,13 +127,13 @@ class ArtistAdapter(
         val next = query.trim()
         if (next == filter) return
         filter = next
-        submitFromSongs(latestSongList)
+        submitArtists()
     }
 
     fun setDisplayMode(mode: ArtistKind) {
         if (displayMode == mode) return
         displayMode = mode
-        submitFromSongs(latestSongList)
+        submitArtists()
     }
 
     private fun String?.matchesFilter(): Boolean {
@@ -137,37 +145,28 @@ class ArtistAdapter(
 
     private var filter = ""
 
-    private fun submitFromSongs(songs: List<MediaItem>) {
-        CoroutineScope(Dispatchers.Default).launch { submitMutex.withLock {
-            val primaryArtists = LinkedHashMap<String, MutableList<MediaItem>>()
-            val featuredArtists = LinkedHashMap<String, MutableList<MediaItem>>()
-
-            for (song in songs) {
-                val primary = ArtistCredits.primaryArtist(song)
-                primaryArtists.getOrPut(primary) { mutableListOf() }.add(song)
-                ArtistCredits.featuredArtists(song).forEach { guest ->
-                    featuredArtists.getOrPut(guest) { mutableListOf() }.add(song)
-                }
-            }
-
-            val primaryItems = primaryArtists.entries
-                .filter { (name, _) -> name.matchesFilter() }
-                .map { (name, tracks) ->
+    private fun submitArtists() {
+        submitJob?.cancel()
+        submitJob = fragment.viewLifecycleOwner.lifecycleScope.launch(Dispatchers.Default) {
+            submitMutex.withLock {
+            val primaryItems = latestPrimaryArtists
+                .filter { artist -> artist.title.matchesFilter() }
+                .map { artist ->
                     ArtistListItem.Artist(
-                        name = name,
-                        artworkUri = tracks.firstOrNull()?.mediaMetadata?.artworkUri,
-                        tracks = tracks.toList(),
+                        id = artist.id,
+                        name = artist.title.orEmpty(),
+                        artworkUri = artist.songList.firstOrNull()?.mediaMetadata?.artworkUri,
                         kind = ArtistKind.PRIMARY,
                     )
                 }
                 .sortedBy { it.name.lowercase() }
-            val featuredItems = featuredArtists.entries
-                .filter { (name, _) -> name.matchesFilter() }
-                .map { (name, tracks) ->
+            val featuredItems = latestFeaturedArtists
+                .filter { artist -> artist.title.matchesFilter() }
+                .map { artist ->
                     ArtistListItem.Artist(
-                        name = name,
-                        artworkUri = tracks.firstOrNull()?.mediaMetadata?.artworkUri,
-                        tracks = tracks.distinctBy(MediaItem::mediaId),
+                        id = artist.id,
+                        name = artist.title.orEmpty(),
+                        artworkUri = artist.songList.firstOrNull()?.mediaMetadata?.artworkUri,
                         kind = ArtistKind.FEATURED,
                     )
                 }
@@ -195,7 +194,8 @@ class ArtistAdapter(
                 diff.dispatchUpdatesTo(this@ArtistAdapter)
                 recyclerView.post { onContentLoaded.invoke() }
             }
-        } }
+            }
+        }
     }
 
     class ArtistDiffCallback(
@@ -214,7 +214,8 @@ class ArtistAdapter(
                 oldList[oldPos] is ArtistListItem.Artist && newList[newPos] is ArtistListItem.Artist -> {
                     val old = oldList[oldPos] as ArtistListItem.Artist
                     val new = newList[newPos] as ArtistListItem.Artist
-                    old.name == new.name && old.kind == new.kind
+                    (old.id != null && old.id == new.id || old.name == new.name) &&
+                        old.kind == new.kind
                 }
                 else -> false
             }
@@ -228,9 +229,9 @@ class ArtistAdapter(
     sealed class ArtistListItem {
         data class Header(val title: String) : ArtistListItem()
         data class Artist(
+            val id: Long?,
             val name: String,
             val artworkUri: android.net.Uri?,
-            val tracks: List<MediaItem>,
             val kind: ArtistKind,
         ) : ArtistListItem()
     }

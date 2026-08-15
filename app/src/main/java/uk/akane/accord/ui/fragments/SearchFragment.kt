@@ -10,7 +10,7 @@ import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.TextView
-import android.widget.Toast
+import uk.akane.accord.ui.components.NoToast as Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.core.animation.doOnEnd
 import androidx.core.view.ViewCompat
@@ -45,7 +45,6 @@ import uk.akane.accord.ui.fragments.browse.AlbumDetailFragment
 import uk.akane.accord.ui.fragments.browse.ArtistDetailFragment
 import uk.akane.accord.ui.adapters.SearchAdapter
 import uk.akane.accord.ui.components.NavigationBar
-import uk.akane.cupertino.widget.fadOutAnimation
 import uk.akane.cupertino.utils.AnimationUtils
 import uk.akane.accord.ui.components.TrackSwipeActions
 import androidx.core.view.updatePadding
@@ -69,6 +68,7 @@ class SearchFragment: Fragment() {
     private lateinit var tabLibraryTextView: TextView
     private lateinit var searchInputNav: EditText
     private lateinit var searchInputDetail: EditText
+    private var searchRoot: View? = null
 
     private lateinit var searchResults: RecyclerView
     private lateinit var searchStatus: View
@@ -79,10 +79,15 @@ class SearchFragment: Fragment() {
     private lateinit var resultsAdapter: SearchResultsAdapter
     private lateinit var lidarrResultsAdapter: LidarrSearchResultsAdapter
 
-    /** The library to search. Kept in step with the reader so results follow a sync. */
-    private var library: List<MediaItem> = emptyList()
-    private var albumList: List<Album> = emptyList()
-    private var artistList: List<Artist> = emptyList()
+    /** Immutable, pre-normalised snapshots keep a keystroke from rebuilding 30,000 strings. */
+    @Volatile
+    private var songSearchIndex: List<SongSearchEntry> = emptyList()
+    @Volatile
+    private var libraryById: Map<String, MediaItem> = emptyMap()
+    @Volatile
+    private var albumSearchIndex: List<AlbumSearchEntry> = emptyList()
+    @Volatile
+    private var artistSearchIndex: List<ArtistSearchEntry> = emptyList()
     private var pendingQuery: Job? = null
 
     private var indicatorTitleVisible = true
@@ -98,6 +103,8 @@ class SearchFragment: Fragment() {
         savedInstanceState: Bundle?
     ): View? {
         val rootView = inflater.inflate(R.layout.fragment_search, container, false)
+        searchRoot = rootView
+        setRootOpaque(true)
         navigationBar = rootView.findViewById(R.id.navigation_bar)
         recyclerView = rootView.findViewById(R.id.rv)
         indicatorTitleTextView = rootView.findViewById(R.id.no_track_title)
@@ -111,9 +118,13 @@ class SearchFragment: Fragment() {
         tabLibraryTextView = rootView.findViewById(R.id.tab_library)
         searchInputNav = searchBarNav.findViewById(R.id.search_input)
         searchInputDetail = searchBarDetail.findViewById(R.id.search_input)
+        val statusBarBackdrop = rootView.findViewById<View>(R.id.status_bar_backdrop)
 
         ViewCompat.setOnApplyWindowInsetsListener(navigationBar) { v, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            statusBarBackdrop.layoutParams = statusBarBackdrop.layoutParams.apply {
+                height = systemBars.top
+            }
             v.setPadding(
                 v.paddingLeft,
                 systemBars.top,
@@ -137,8 +148,9 @@ class SearchFragment: Fragment() {
 
         recyclerView.layoutManager = GridLayoutManager(context, 2)
         recyclerView.adapter = SearchAdapter(requireContext(), this) {
-            indicatorSubtitleTextView.fadOutAnimation(interpolator = AnimationUtils.easingStandardInterpolator)
-            indicatorTitleTextView.fadOutAnimation(interpolator = AnimationUtils.easingStandardInterpolator)
+            // Genres are already visible, so this cannot truthfully be an empty library. Do not
+            // rely on a one-shot fade whose end state can be restored with alpha > 0 later.
+            setLandingEmpty(false)
         }
         navigationBar.attach(recyclerView)
 
@@ -175,13 +187,17 @@ class SearchFragment: Fragment() {
             },
             onArtist = { artist ->
                 rememberQuery()
-                push(ArtistDetailFragment.newInstance(artist.title.orEmpty()))
+                push(ArtistDetailFragment.newInstance(artist.title.orEmpty(), artist.id))
             },
             onRecent = { query ->
                 // Fills the field rather than only running the search, so the query can be edited
                 // from where it left off - which is usually why it is being repeated.
                 searchInputDetail.setText(query)
                 searchInputDetail.setSelection(query.length)
+            },
+            onTrackSelected = {
+                hideKeyboard(searchInputDetail)
+                searchInputDetail.clearFocus()
             },
         )
         lidarrResultsAdapter = LidarrSearchResultsAdapter(::requestLidarrAlbum)
@@ -249,7 +265,32 @@ class SearchFragment: Fragment() {
 
     override fun onHiddenChanged(hidden: Boolean) {
         super.onHiddenChanged(hidden)
+        setRootOpaque(!hidden)
         navigationBar.onVisibilityChangedFromFragment(hidden)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        setRootOpaque(true)
+    }
+
+    override fun onPause() {
+        // FragmentSwitcher stages the incoming detail in the container below this root. Leaving a
+        // solid background here covers that page after Search's children animate away.
+        setRootOpaque(false)
+        super.onPause()
+    }
+
+    override fun onDestroyView() {
+        searchRoot = null
+        super.onDestroyView()
+    }
+
+    private fun setRootOpaque(opaque: Boolean) {
+        searchRoot?.setBackgroundColor(
+            if (opaque) requireContext().getColor(R.color.surfaceColor)
+            else android.graphics.Color.TRANSPARENT
+        )
     }
 
     /** A second tap on the already-selected Search destination goes straight to typing. */
@@ -263,10 +304,31 @@ class SearchFragment: Fragment() {
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 reader.songListFlow.collectLatest { songs ->
-                    library = songs
-                    // A sync finishing mid-query should widen the results, not leave them stale.
-                    if (isAppleTabSelected) {
-                        runQuery(searchInputDetail.text?.toString().orEmpty())
+                    setLandingEmpty(songs.isEmpty())
+                    val indexed = withContext(Dispatchers.Default) {
+                        songs.map { item ->
+                            val metadata = item.mediaMetadata
+                            SongSearchEntry(
+                                item = item,
+                                title = metadata.title?.toString().orEmpty().normaliseForSearch(),
+                                artist = metadata.artist?.toString().orEmpty().normaliseForSearch(),
+                                album = metadata.albumTitle?.toString().orEmpty().normaliseForSearch(),
+                            )
+                        }
+                    }
+                    songSearchIndex = indexed
+                    libraryById = indexed.associate { it.item.mediaId to it.item }
+                    // Progressive sync can emit a new library page several times inside the
+                    // typing debounce. Restarting that delay on every page starved the user's
+                    // query until the whole sync ended. Let an active query finish against the
+                    // latest immutable list reference; refresh an idle result immediately.
+                    val currentQuery = searchInputDetail.text?.toString().orEmpty()
+                    if (
+                        isAppleTabSelected &&
+                        currentQuery.isNotBlank() &&
+                        pendingQuery?.isActive != true
+                    ) {
+                        runQuery(currentQuery, debounce = false)
                     }
                 }
             }
@@ -275,14 +337,45 @@ class SearchFragment: Fragment() {
         // hold the results back until the slowest had produced something.
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
-                reader.albumListFlow.collectLatest { albumList = it }
+                reader.albumListFlow.collectLatest { albums ->
+                    albumSearchIndex = withContext(Dispatchers.Default) {
+                        albums.map { album ->
+                            AlbumSearchEntry(
+                                album = album,
+                                title = album.title.orEmpty().normaliseForSearch(),
+                                artist = album.albumArtist.orEmpty().normaliseForSearch(),
+                            )
+                        }
+                    }
+                }
             }
         }
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
-                reader.artistListFlow.collectLatest { artistList = it }
+                reader.artistListFlow.collectLatest { artists ->
+                    artistSearchIndex = withContext(Dispatchers.Default) {
+                        artists.map { artist ->
+                            ArtistSearchEntry(
+                                artist = artist,
+                                title = artist.title.orEmpty().normaliseForSearch(),
+                            )
+                        }
+                    }
+                }
             }
         }
+    }
+
+    private fun setLandingEmpty(empty: Boolean) {
+        val visibility = if (empty) View.VISIBLE else View.GONE
+        indicatorTitleTextView.animate().cancel()
+        indicatorSubtitleTextView.animate().cancel()
+        indicatorTitleTextView.alpha = 1f
+        indicatorSubtitleTextView.alpha = 1f
+        indicatorTitleTextView.visibility = visibility
+        indicatorSubtitleTextView.visibility = visibility
+        indicatorTitleVisible = empty
+        indicatorSubtitleVisible = empty
     }
 
     private fun push(fragment: Fragment) {
@@ -296,7 +389,7 @@ class SearchFragment: Fragment() {
      * Debounced and run off the main thread: this scans the whole library on every keystroke, and
      * that library is thousands of items.
      */
-    private fun runQuery(rawQuery: String) {
+    private fun runQuery(rawQuery: String, debounce: Boolean = true) {
         pendingQuery?.cancel()
         val query = rawQuery.trim().lowercase()
         if (query.isEmpty()) {
@@ -315,7 +408,7 @@ class SearchFragment: Fragment() {
         }
         setRecentsVisible(false)
         pendingQuery = viewLifecycleOwner.lifecycleScope.launch {
-            delay(SEARCH_DEBOUNCE_MS)
+            if (debounce) delay(SEARCH_DEBOUNCE_MS)
             if (isAppleTabSelected) {
                 val rows = withContext(Dispatchers.Default) { buildResults(query) }
                 resultsAdapter.submit(rows)
@@ -363,43 +456,38 @@ class SearchFragment: Fragment() {
     private fun buildResults(query: String): List<SearchResultsAdapter.Row> {
         val needle = query.normaliseForSearch()
         if (needle.isBlank()) return emptyList()
-        pendingNeedle = needle
 
-        val artists = artistList
-            .rankedBy(ARTIST_LIMIT) { it.title }
-            .map(SearchResultsAdapter.Row::ArtistRow)
+        val artists = artistSearchIndex
+            .rankedBy(needle, ARTIST_LIMIT) { it.title }
+            .map { SearchResultsAdapter.Row.ArtistRow(it.artist) }
 
-        val albumsByTitle = albumList.rankedBy(ALBUM_LIMIT) { it.title }
+        val albumsByTitle = albumSearchIndex.rankedBy(needle, ALBUM_LIMIT) { it.title }
         // An artist's records are what someone typing their name is usually after, and matching
         // only album titles meant searching "kendrick" listed the artist and then went straight to
         // loose tracks, with the albums nowhere. Ranked under the title matches, which are still
         // the more literal answer to what was typed.
         val albumsByArtist = if (albumsByTitle.size >= ALBUM_LIMIT) emptyList() else {
-            val alreadyShown = albumsByTitle.mapTo(HashSet()) { it.id }
-            albumList
-                .filter { it.id !in alreadyShown }
-                .rankedBy(ALBUM_LIMIT - albumsByTitle.size) { it.albumArtist }
+            val alreadyShown = albumsByTitle.mapTo(HashSet()) { it.album.id }
+            albumSearchIndex
+                .filter { it.album.id !in alreadyShown }
+                .rankedBy(needle, ALBUM_LIMIT - albumsByTitle.size) { it.artist }
         }
-        val albums = (albumsByTitle + albumsByArtist).map(SearchResultsAdapter.Row::AlbumRow)
+        val albums = (albumsByTitle + albumsByArtist)
+            .map { SearchResultsAdapter.Row.AlbumRow(it.album) }
 
-        val songs = library
-            .rankedBy(SEARCH_RESULT_LIMIT) { it.mediaMetadata.title?.toString() }
-            .map(SearchResultsAdapter.Row::SongRow)
+        val songEntries = songSearchIndex
+            .rankedBy(needle, SEARCH_RESULT_LIMIT) { it.title }
+        val songs = songEntries.map { SearchResultsAdapter.Row.SongRow(it.item) }
 
         // Songs still match on their artist and album, so a track can be found by the record it is
         // on - but only after the ones whose own title matched, which are the better answer.
         val extraSongs = if (songs.size >= SEARCH_RESULT_LIMIT) emptyList() else {
-            val alreadyShown = songs.mapTo(HashSet()) { it.item.mediaId }
-            library.asSequence()
-                .filter { it.mediaId !in alreadyShown }
-                .filter { item ->
-                    val metadata = item.mediaMetadata
-                    metadata.artist?.toString()?.normaliseForSearch()?.contains(needle) == true ||
-                        metadata.albumTitle?.toString()?.normaliseForSearch()
-                            ?.contains(needle) == true
-                }
+            val alreadyShown = songEntries.mapTo(HashSet()) { it.item.mediaId }
+            songSearchIndex.asSequence()
+                .filter { it.item.mediaId !in alreadyShown }
+                .filter { it.artist.contains(needle) || it.album.contains(needle) }
                 .take(SEARCH_RESULT_LIMIT - songs.size)
-                .map(SearchResultsAdapter.Row::SongRow)
+                .map { SearchResultsAdapter.Row.SongRow(it.item) }
                 .toList()
         }
 
@@ -443,7 +531,7 @@ class SearchFragment: Fragment() {
     ): List<SearchResultsAdapter.Row.LyricRow> {
         val phrase = query.filter { it.isLetterOrDigit() || it.isWhitespace() }.trim()
         if (phrase.isBlank()) return emptyList()
-        val byId = library.associateBy { it.mediaId }
+        val byId = libraryById
         return runCatching {
             AppDatabase.getInstance(requireContext().applicationContext)
                 .lyricsDao()
@@ -453,7 +541,10 @@ class SearchFragment: Fragment() {
                 val mediaId = match.localId.toString()
                 if (mediaId in exclude) return@mapNotNull null
                 val item = byId[mediaId] ?: return@mapNotNull null
-                SearchResultsAdapter.Row.LyricRow(item, snippet(match.text, phrase))
+                val context = match.text
+                    .replace(FTS_MATCH_START, "")
+                    .replace(FTS_MATCH_END, "")
+                SearchResultsAdapter.Row.LyricRow(item, snippet(context, phrase))
             }
     }
 
@@ -484,13 +575,13 @@ class SearchFragment: Fragment() {
      * start, then anywhere.
      */
     private inline fun <T> Iterable<T>.rankedBy(
+        needle: String,
         limit: Int,
-        crossinline name: (T) -> String?,
+        crossinline normalisedName: (T) -> String,
     ): List<T> {
-        val needle = pendingNeedle
         return asSequence()
             .mapNotNull { candidate ->
-                val text = name(candidate)?.normaliseForSearch() ?: return@mapNotNull null
+                val text = normalisedName(candidate)
                 val rank = when {
                     text == needle -> 0
                     text.startsWith(needle) -> 1
@@ -508,13 +599,23 @@ class SearchFragment: Fragment() {
             .toList()
     }
 
-    /**
-     * The needle the current ranking pass is using.
-     *
-     * A field rather than a parameter because [rankedBy] is inline and called three times per
-     * query; threading it through would mean normalising the same string on every candidate.
-     */
-    private var pendingNeedle: String = ""
+    private data class SongSearchEntry(
+        val item: MediaItem,
+        val title: String,
+        val artist: String,
+        val album: String,
+    )
+
+    private data class AlbumSearchEntry(
+        val album: Album,
+        val title: String,
+        val artist: String,
+    )
+
+    private data class ArtistSearchEntry(
+        val artist: Artist,
+        val title: String,
+    )
 
     /**
      * Shows the background message, optionally with a tappable line under it.
@@ -875,7 +976,7 @@ class SearchFragment: Fragment() {
 
     private companion object {
         /** Long enough that a fast typist scans the library once, short enough to feel immediate. */
-        const val SEARCH_DEBOUNCE_MS = 180L
+        const val SEARCH_DEBOUNCE_MS = 100L
 
         /** The list is scrolled, not read whole; past this it is cheaper to refine the query. */
         const val SEARCH_RESULT_LIMIT = 200
@@ -893,5 +994,9 @@ class SearchFragment: Fragment() {
 
         /** Characters of context either side of a lyric hit. */
         const val SNIPPET_WINDOW = 42
+
+        /** Private-use markers let FTS choose the matching fragment without leaking markup to UI. */
+        const val FTS_MATCH_START = ""
+        const val FTS_MATCH_END = ""
     }
 }

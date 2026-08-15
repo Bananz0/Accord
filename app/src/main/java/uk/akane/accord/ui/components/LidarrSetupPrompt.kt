@@ -1,7 +1,7 @@
 package uk.akane.accord.ui.components
 
 import android.content.Context
-import android.widget.Toast
+import uk.akane.accord.ui.components.NoToast as Toast
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers

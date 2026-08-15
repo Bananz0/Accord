@@ -73,20 +73,38 @@ class AfFormatTracker(
     } else null
 
     private fun onRoutingChanged(router: AudioTrack) {
-        val audioTrack = (audioSink ?: throw NullPointerException(
-            "audioSink is null in onAudioTrackInitialized"
-        )).getAudioTrack()
+        val audioTrack = audioSink?.getAudioTrack() ?: return
         if (router !== audioTrack) return // stale callback
         // reaching here implies router == lastAudioTrack
         buildFormat(audioTrack, lastPeriodUid)
     }
 
-    // TODO why do we have to reflect on app code, there must be a better solution
+    // Media3 1.9 moved AudioTrack out of DefaultAudioSink and into AudioTrackAudioOutput. Keep the
+    // old direct-field path for earlier Media3 versions, then follow the new AudioOutput wrapper.
+    // Failure here must only disable diagnostics; it must never take down the playback thread.
     private fun DefaultAudioSink.getAudioTrack(): AudioTrack? {
-        val cls = javaClass
-        val field = cls.getDeclaredField("audioTrack")
-        field.isAccessible = true
-        return field.get(this) as AudioTrack?
+        return runCatching {
+            findField(javaClass, "audioTrack")?.let { field ->
+                field.isAccessible = true
+                return@runCatching field.get(this) as? AudioTrack
+            }
+
+            val outputField = findField(javaClass, "audioOutput") ?: return@runCatching null
+            outputField.isAccessible = true
+            val output = outputField.get(this) ?: return@runCatching null
+            output.javaClass.getMethod("getAudioTrack").invoke(output) as? AudioTrack
+        }.onFailure {
+            Log.e(TAG, "Media3 did not expose its AudioTrack; HAL diagnostics are unavailable", it)
+        }.getOrNull()
+    }
+
+    private fun findField(start: Class<*>, name: String): java.lang.reflect.Field? {
+        var type: Class<*>? = start
+        while (type != null) {
+            runCatching { type.getDeclaredField(name) }.getOrNull()?.let { return it }
+            type = type.superclass
+        }
+        return null
     }
 
     private fun runOnPlaybackHandler(action: () -> Unit) {
@@ -112,9 +130,11 @@ class AfFormatTracker(
     ) {
         format = null
         runOnPlaybackHandler {
-            val audioTrack = (audioSink ?: throw NullPointerException(
-                "audioSink is null in onAudioTrackInitialized"
-            )).getAudioTrack()
+            val audioTrack = audioSink?.getAudioTrack()
+            if (audioTrack == null) {
+                Log.w(TAG, "AudioTrack initialized, but its platform track is unavailable")
+                return@runOnPlaybackHandler
+            }
             if (audioTrack != lastAudioTrack) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                     lastAudioTrack?.removeOnRoutingChangedListener(
@@ -242,10 +262,30 @@ class AfFormatTracker(
     }
 
     private fun audioFormatToString(audioFormat: UInt?): String {
-        for (encoding in AudioFormatDetector.Encoding.entries) {
-            if (encoding.isSupportedAsNative && encoding.native == audioFormat)
-                encoding.enc2?.let { return it }
+        // Native audio_format_t values. Keep this local: the old AudioFormatDetector also models
+        // every decoder/header format in Media3 and is intentionally not part of Accord's active
+        // player. AudioFlinger only needs the small set a phone is likely to grant at its output.
+        return when (audioFormat) {
+            0x1U -> "AUDIO_FORMAT_PCM_16_BIT"
+            0x2U -> "AUDIO_FORMAT_PCM_8_BIT"
+            0x3U -> "AUDIO_FORMAT_PCM_32_BIT"
+            0x4U -> "AUDIO_FORMAT_PCM_8_24_BIT"
+            0x5U -> "AUDIO_FORMAT_PCM_FLOAT"
+            0x6U -> "AUDIO_FORMAT_PCM_24_BIT_PACKED"
+            0x01000000U -> "AUDIO_FORMAT_MP3"
+            0x04000000U -> "AUDIO_FORMAT_AAC"
+            0x1B000000U -> "AUDIO_FORMAT_FLAC"
+            0x1C000000U -> "AUDIO_FORMAT_ALAC"
+            0x1F000000U -> "AUDIO_FORMAT_SBC"
+            0x20000000U -> "AUDIO_FORMAT_APTX"
+            0x21000000U -> "AUDIO_FORMAT_APTX_HD"
+            0x23000000U -> "AUDIO_FORMAT_LDAC"
+            0x27000000U -> "AUDIO_FORMAT_APTX_ADAPTIVE"
+            0x28000000U -> "AUDIO_FORMAT_LHDC"
+            0x29000000U -> "AUDIO_FORMAT_LHDC_LL"
+            0x2B000000U -> "AUDIO_FORMAT_LC3"
+            null -> "AUDIO_FORMAT_UNKNOWN"
+            else -> "AUDIO_FORMAT_(0x${audioFormat.toString(16)})"
         }
-        return "AUDIO_FORMAT_($audioFormat)"
     }
 }

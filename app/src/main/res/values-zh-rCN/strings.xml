@@ -201,16 +201,8 @@
     <string name="welcome_page_introduction">在您的安卓设备上无广告播放本地歌曲和播放列表，下载音乐离线收听。通过空间音频，感受环绕音效带来的沉浸式体验。</string>
     <string name="disclaimer">协律是一款自由且脱机使用的应用程序。协律不会将您的任何数据发送至网络，也不会将其用于任何其他用途。协律的源代码已在线发布，并遵循 GPL-3.0 许可证，但某些限制适用。</string>
     <string name="check_source_code"><a href="https://github.com/AkaneFoundation/Accord"><u>检查源代码 …</u></a></string>
-    <string name="need_permissions">需要权限</string>
-    <string name="permission_title_desc">我们先需要这些权限来正常播放您的音乐。请检查各项的描述。</string>
-    <string name="storage">储存</string>
-    <string name="storage_desc">允许我们访问您的全部播放清单和音乐文件</string>
     <string name="music">音乐</string>
     <string name="Album">相册</string>
-    <string name="album_desc">允许我们正确地为您的专辑识别文件封面</string>
-    <string name="album_cover_special_desc">如果没有相册权限，我们只能模糊地读取您的专辑封面。</string>
-    <string name="allow">获取</string>
-    <string name="allowed">已获取</string>
     <string name="popup_view_credits">查看制作人员</string>
     <string name="popup_delete_from_library">从资料库中删除</string>
     <string name="popup_add_to_a_playlist">添加到播放列表…</string>

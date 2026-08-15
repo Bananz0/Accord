@@ -13,6 +13,7 @@
     android:orientation="vertical">
 
     <LinearLayout
+        android:id="@+id/output_row_click_target"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:background="?attr/selectableItemBackground"
@@ -64,6 +65,29 @@
                 android:textSize="13sp"
                 android:visibility="gone"
                 tools:text="Accord"
+                tools:visibility="visible" />
+
+            <!--
+                The format Android is actually sending to the selected local route. It deliberately
+                echoes the player's quality badge without borrowing its lossless glyph: Bluetooth
+                codecs such as SSC UHQ can be high resolution while still being compressed.
+            -->
+            <TextView
+                android:id="@+id/output_row_signal_badge"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="5dp"
+                android:background="@drawable/bg_output_signal_badge"
+                android:ellipsize="end"
+                android:fontFamily="@font/inter_semibold"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:paddingHorizontal="7dp"
+                android:paddingVertical="3dp"
+                android:textColor="@color/onSurfaceColor"
+                android:textSize="11sp"
+                android:visibility="gone"
+                tools:text="SSC UHQ · 24-bit · 96 kHz"
                 tools:visibility="visible" />
 
         </LinearLayout>

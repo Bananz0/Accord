@@ -3,7 +3,7 @@ package uk.akane.accord.ui.components
 import android.content.Context
 import android.content.ContextWrapper
 import android.view.View
-import android.widget.Toast
+import uk.akane.accord.ui.components.NoToast as Toast
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem

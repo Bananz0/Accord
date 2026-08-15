@@ -6,7 +6,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.TextView
-import android.widget.Toast
+import uk.akane.accord.ui.components.NoToast as Toast
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.doOnLayout
@@ -28,7 +28,6 @@ import kotlinx.coroutines.withContext
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinDownloadManager
 import uk.akane.accord.R
 import uk.akane.accord.logic.dp
-import uk.akane.accord.logic.ArtistCredits
 import uk.akane.accord.ui.MainActivity
 import uk.akane.accord.ui.components.NavigationBar
 import uk.akane.accord.ui.components.CollectionPopupMenu
@@ -106,6 +105,8 @@ class ArtistDetailFragment : SwitcherPostponeFragment() {
         }
 
         val artistName = requireArguments().getString(ARG_ARTIST).orEmpty()
+        val artistId = requireArguments().getLong(ARG_ARTIST_ID, Long.MIN_VALUE)
+            .takeUnless { it == Long.MIN_VALUE }
         val featuredOnly = requireArguments().getBoolean(ARG_FEATURED_ONLY, false)
         artistNameView.text = artistName
         navigationBar.setTitle(artistName)
@@ -185,12 +186,17 @@ class ArtistDetailFragment : SwitcherPostponeFragment() {
 
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
-                activity.reader.songListFlow.collectLatest { songs ->
-                    val filtered = songs.filter { song ->
-                        if (featuredOnly) ArtistCredits.isFeaturedArtist(song, artistName)
-                        else ArtistCredits.isPrimaryArtist(song, artistName)
-                    }
-                    val sorted = filtered.sortedWith(
+                val artists = if (featuredOnly) {
+                    activity.reader.featuredArtistListFlow
+                } else {
+                    activity.reader.primaryArtistListFlow
+                }
+                artists.collectLatest { index ->
+                    val tracks = index.firstOrNull { artist ->
+                        if (artistId != null && artist.id != null) artist.id == artistId
+                        else artist.title.equals(artistName, ignoreCase = true)
+                    }?.songList.orEmpty()
+                    val sorted = tracks.sortedWith(
                         compareByDescending<MediaItem> { it.mediaMetadata.addDate ?: 0L }
                             .thenBy { it.mediaMetadata.title?.toString().orEmpty() }
                     )
@@ -425,12 +431,18 @@ class ArtistDetailFragment : SwitcherPostponeFragment() {
 
     companion object {
         private const val ARG_ARTIST = "artist_name"
+        private const val ARG_ARTIST_ID = "artist_id"
         private const val ARG_FEATURED_ONLY = "featured_only"
 
-        fun newInstance(artist: String, featuredOnly: Boolean = false): ArtistDetailFragment {
+        fun newInstance(
+            artist: String,
+            artistId: Long? = null,
+            featuredOnly: Boolean = false,
+        ): ArtistDetailFragment {
             return ArtistDetailFragment().apply {
                 arguments = Bundle().apply {
                     putString(ARG_ARTIST, artist)
+                    artistId?.let { putLong(ARG_ARTIST_ID, it) }
                     putBoolean(ARG_FEATURED_ONLY, featuredOnly)
                 }
             }

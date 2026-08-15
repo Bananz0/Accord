@@ -311,15 +311,31 @@ class JellyfinLibraryLoader(
     private fun toCachedSong(item: BaseItemDto): CachedSong? {
         val songId = idMap.intern(item.id.toString(), JellyfinId.TYPE_AUDIO) ?: return null
 
-        val trackArtists = item.artistItems
-            ?.mapNotNull { it.name?.trim()?.takeIf(String::isNotBlank) }
+        val trackCredits = item.artistItems
+            ?.mapNotNull { artist ->
+                val name = artist.name?.trim()?.takeIf(String::isNotBlank) ?: return@mapNotNull null
+                name to (artist.id?.let {
+                    idMap.intern(it.toString(), JellyfinId.TYPE_ARTIST)
+                } ?: idMap.internName(name, JellyfinId.TYPE_ARTIST))
+            }
             ?.ifEmpty { null }
-            ?: item.artists?.mapNotNull { it.trim().takeIf(String::isNotBlank) }
-            ?: emptyList()
-        val artistItem = item.artistItems?.firstOrNull()
-        val artistName = artistItem?.name ?: item.artists?.firstOrNull()
-        val artistId = artistItem?.id?.let { idMap.intern(it.toString(), JellyfinId.TYPE_ARTIST) }
-            ?: idMap.internName(artistName, JellyfinId.TYPE_ARTIST)
+            ?: item.artists.orEmpty().mapNotNull { raw ->
+                val name = raw.trim().takeIf(String::isNotBlank) ?: return@mapNotNull null
+                name to idMap.internName(name, JellyfinId.TYPE_ARTIST)
+            }
+        val albumCredits = item.albumArtists
+            ?.mapNotNull { artist ->
+                val name = artist.name?.trim()?.takeIf(String::isNotBlank) ?: return@mapNotNull null
+                name to (artist.id?.let {
+                    idMap.intern(it.toString(), JellyfinId.TYPE_ARTIST)
+                } ?: idMap.internName(name, JellyfinId.TYPE_ARTIST))
+            }
+            ?.ifEmpty { null }
+            ?: item.albumArtist?.trim()?.takeIf(String::isNotBlank)?.let { name ->
+                listOf(name to idMap.internName(name, JellyfinId.TYPE_ARTIST))
+            }.orEmpty()
+        val artistName = trackCredits.firstOrNull()?.first
+        val artistId = trackCredits.firstOrNull()?.second
 
         val albumId = item.albumId?.let { idMap.intern(it.toString(), JellyfinId.TYPE_ALBUM) }
 
@@ -335,12 +351,14 @@ class JellyfinLibraryLoader(
             jellyfinId = item.id.toString(),
             title = item.name,
             artist = artistName,
-            trackArtists = trackArtists.distinctBy(String::lowercase).joinToString(TRACK_ARTIST_SEPARATOR)
-                .takeIf(String::isNotBlank),
+            trackArtists = trackCredits.namesForCache(),
+            trackArtistIds = trackCredits.idsForCache(),
             artistId = artistId,
             album = item.album,
             albumId = albumId,
             albumArtist = item.albumArtist,
+            albumArtists = albumCredits.namesForCache(),
+            albumArtistIds = albumCredits.idsForCache(),
             genre = genreName,
             genreId = genreId,
             albumYear = item.productionYear,
@@ -377,9 +395,9 @@ class JellyfinLibraryLoader(
                     .setIsBrowsable(false)
                     .setIsPlayable(true)
                     .setTitle(row.title)
-                    .setArtist(row.artist)
+                    .setArtist(row.trackArtists.displayArtistCredit() ?: row.artist)
                     .setAlbumTitle(row.album)
-                    .setAlbumArtist(row.albumArtist)
+                    .setAlbumArtist(row.albumArtists.displayArtistCredit() ?: row.albumArtist)
                     .setArtworkUri(coverUri)
                     .setTrackNumber(row.trackNumber)
                     .setDiscNumber(row.discNumber)
@@ -409,6 +427,16 @@ class JellyfinLibraryLoader(
                             ?.split(TRACK_ARTIST_SEPARATOR)
                             ?.filter(String::isNotBlank)
                             ?.let { putStringArrayList(EXTRA_TRACK_ARTISTS, ArrayList(it)) }
+                        row.trackArtistIds.parseArtistIds()
+                            .takeIf { it.isNotEmpty() }
+                            ?.let { putLongArray(EXTRA_TRACK_ARTIST_IDS, it.toLongArray()) }
+                        row.albumArtists
+                            ?.split(TRACK_ARTIST_SEPARATOR)
+                            ?.filter(String::isNotBlank)
+                            ?.let { putStringArrayList(EXTRA_ALBUM_ARTISTS, ArrayList(it)) }
+                        row.albumArtistIds.parseArtistIds()
+                            .takeIf { it.isNotEmpty() }
+                            ?.let { putLongArray(EXTRA_ALBUM_ARTIST_IDS, it.toLongArray()) }
                     })
                     .build()
             ).build()
@@ -426,7 +454,59 @@ class JellyfinLibraryLoader(
             cover = coverUri,
             addDate = row.addDate,
             path = row.path,
+            trackArtists = creditsFromCache(
+                names = row.trackArtists,
+                ids = row.trackArtistIds,
+                fallbackName = row.artist,
+                fallbackId = row.artistId,
+            ),
+            albumArtists = creditsFromCache(
+                names = row.albumArtists,
+                ids = row.albumArtistIds,
+                fallbackName = row.albumArtist,
+                fallbackId = null,
+            ),
         )
+    }
+
+    private fun List<Pair<String, Long?>>.namesForCache(): String? =
+        distinctBy { (name, id) -> id?.toString() ?: name.lowercase() }
+            .joinToString(TRACK_ARTIST_SEPARATOR) { it.first }
+            .takeIf(String::isNotBlank)
+
+    private fun List<Pair<String, Long?>>.idsForCache(): String? =
+        distinctBy { (name, id) -> id?.toString() ?: name.lowercase() }
+            .joinToString(TRACK_ARTIST_SEPARATOR) { it.second?.toString().orEmpty() }
+            .takeIf(String::isNotBlank)
+
+    private fun String?.parseArtistIds(): List<Long> =
+        this?.split(TRACK_ARTIST_SEPARATOR)?.mapNotNull(String::toLongOrNull).orEmpty()
+
+    private fun String?.displayArtistCredit(): String? =
+        this?.split(TRACK_ARTIST_SEPARATOR)
+            ?.filter(String::isNotBlank)
+            ?.joinToString(", ")
+            ?.takeIf(String::isNotBlank)
+
+    private fun creditsFromCache(
+        names: String?,
+        ids: String?,
+        fallbackName: String?,
+        fallbackId: Long?,
+    ): List<LibraryGrouper.ArtistCredit> {
+        val parsedNames = names?.split(TRACK_ARTIST_SEPARATOR)
+            ?.map(String::trim)
+            ?.filter(String::isNotBlank)
+            .orEmpty()
+        val parsedIds = ids?.split(TRACK_ARTIST_SEPARATOR).orEmpty()
+        if (parsedNames.isNotEmpty()) {
+            return parsedNames.mapIndexed { index, name ->
+                LibraryGrouper.ArtistCredit(parsedIds.getOrNull(index)?.toLongOrNull(), name)
+            }
+        }
+        return fallbackName?.trim()?.takeIf(String::isNotBlank)?.let {
+            listOf(LibraryGrouper.ArtistCredit(fallbackId, it))
+        }.orEmpty()
     }
 
     /**
@@ -474,6 +554,9 @@ class JellyfinLibraryLoader(
         const val EXTRA_IS_FAVOURITE = "JellyfinIsFavourite"
         const val EXTRA_LAST_PLAYED = "JellyfinLastPlayed"
         const val EXTRA_TRACK_ARTISTS = "JellyfinTrackArtists"
+        const val EXTRA_TRACK_ARTIST_IDS = "JellyfinTrackArtistIds"
+        const val EXTRA_ALBUM_ARTISTS = "JellyfinAlbumArtists"
+        const val EXTRA_ALBUM_ARTIST_IDS = "JellyfinAlbumArtistIds"
 
         private const val TAG = "JellyfinLibraryLoader"
         /**

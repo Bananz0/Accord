@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- A light material wash over the album blur, keeping dark typography legible. -->
+    <color name="output_picker_blur_scrim">#D9FFFFFF</color>
+</resources>

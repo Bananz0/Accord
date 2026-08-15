@@ -4,7 +4,6 @@ import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
@@ -31,7 +30,14 @@ import java.util.concurrent.TimeUnit
  * Every call is fire-and-forget on a background scope: reporting is best-effort telemetry and must
  * never delay or break playback if the server is unreachable.
  */
-class JellyfinReporter(private val context: Context) {
+class JellyfinReporter(context: Context) {
+
+    /**
+     * Reporting is intentionally allowed to finish after its caller is destroyed (most notably
+     * the final playback-stopped report from the service's onDestroy). Keep only the process
+     * context so an in-flight OkHttp continuation cannot retain that service or a UI context.
+     */
+    private val appContext = context.applicationContext
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -54,7 +60,7 @@ class JellyfinReporter(private val context: Context) {
                 // - so hardcoding DirectPlay while asking for a transcode makes both of them lie,
                 // and makes the one place you would look to confirm a quality setting works say
                 // that it does not.
-                playMethod = playMethod(context),
+                playMethod = playMethod(appContext),
                 repeatMode = RepeatMode.REPEAT_NONE,
                 playbackOrder = PlaybackOrder.DEFAULT,
             )
@@ -75,7 +81,7 @@ class JellyfinReporter(private val context: Context) {
                 // - so hardcoding DirectPlay while asking for a transcode makes both of them lie,
                 // and makes the one place you would look to confirm a quality setting works say
                 // that it does not.
-                playMethod = playMethod(context),
+                playMethod = playMethod(appContext),
                 repeatMode = RepeatMode.REPEAT_NONE,
                 playbackOrder = PlaybackOrder.DEFAULT,
             )
@@ -137,10 +143,11 @@ class JellyfinReporter(private val context: Context) {
         crossinline block: suspend (org.jellyfin.sdk.api.client.ApiClient, UUID) -> Unit
     ) {
         if (mediaId == null) return
-        scope.launch(NonCancellable) {
+        scope.launch {
             try {
                 val api = JellyfinClientHolder.api() ?: return@launch
-                val remote = JellyfinItemResolver.remoteIdForMediaId(context, mediaId) ?: return@launch
+                val remote = JellyfinItemResolver.remoteIdForMediaId(appContext, mediaId)
+                    ?: return@launch
                 block(api, UUID.fromString(remote.toDashedUuid()))
             } catch (e: Exception) {
                 // Telemetry only - a failure here must not surface to the user or stop playback.

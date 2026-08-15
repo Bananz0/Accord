@@ -4,12 +4,52 @@
     switcher. Built from the same grouped card the settings screens use rather than a Material
     dialog, so it reads as part of this app instead of as a system prompt dropped on top of it.
 -->
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:background="@drawable/bg_output_picker"
-    android:orientation="vertical"
-    android:paddingBottom="12dp">
+    android:clipToOutline="true">
+
+    <!--
+        A lightweight GPU-blurred copy of the current artwork. A second full BlendView performed
+        several bitmap crops on first open and its match-parent child also made a wrap-content
+        bottom sheet measure as tall as the screen.
+    -->
+    <ImageView
+        android:id="@+id/output_picker_artwork"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:importantForAccessibility="no"
+        android:scaleType="centerCrop"
+        android:visibility="gone"
+        app:layout_constraintBottom_toBottomOf="@id/output_picker_content"
+        app:layout_constraintEnd_toEndOf="@id/output_picker_content"
+        app:layout_constraintStart_toStartOf="@id/output_picker_content"
+        app:layout_constraintTop_toTopOf="@id/output_picker_content" />
+
+    <!-- Keeps type readable while allowing the artwork colour to remain visible. -->
+    <View
+        android:id="@+id/output_picker_blend_scrim"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:background="@color/output_picker_blur_scrim"
+        android:importantForAccessibility="no"
+        android:visibility="gone"
+        app:layout_constraintBottom_toBottomOf="@id/output_picker_content"
+        app:layout_constraintEnd_toEndOf="@id/output_picker_content"
+        app:layout_constraintStart_toStartOf="@id/output_picker_content"
+        app:layout_constraintTop_toTopOf="@id/output_picker_content" />
+
+    <LinearLayout
+        android:id="@+id/output_picker_content"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingBottom="12dp"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent">
 
     <!-- The grabber, so the sheet reads as draggable before anyone touches it. -->
     <View
@@ -53,4 +93,6 @@
         android:layout_marginHorizontal="18dp"
         android:orientation="vertical" />
 
-</LinearLayout>
+    </LinearLayout>
+
+</androidx.constraintlayout.widget.ConstraintLayout>

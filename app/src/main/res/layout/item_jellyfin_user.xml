@@ -4,6 +4,7 @@
     apart, which reads as clutter rather than as structure.
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:background="?attr/selectableItemBackground"
@@ -11,6 +12,7 @@
     android:focusable="true"
     android:gravity="center_vertical"
     android:orientation="horizontal"
+    android:minHeight="60dp"
     android:paddingHorizontal="18dp"
     android:paddingVertical="10dp">
 
@@ -34,4 +36,14 @@
         android:maxLines="1"
         android:textColor="@color/onSurfaceColor"
         android:textSize="17sp" />
+
+    <ImageView
+        android:id="@+id/selected"
+        android:layout_width="22dp"
+        android:layout_height="22dp"
+        android:layout_marginStart="12dp"
+        android:contentDescription="@null"
+        android:src="@drawable/ic_checkmark"
+        app:tint="@color/accentColor"
+        android:visibility="invisible" />
 </LinearLayout>

@@ -3,7 +3,7 @@ package uk.akane.accord.ui.components.player
 import android.content.Intent
 import android.os.Bundle
 import android.util.Log
-import android.widget.Toast
+import uk.akane.accord.ui.components.NoToast as Toast
 import androidx.core.os.BundleCompat
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope

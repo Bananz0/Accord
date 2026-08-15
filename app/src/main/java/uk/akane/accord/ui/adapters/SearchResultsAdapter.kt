@@ -33,6 +33,7 @@ class SearchResultsAdapter(
     private val onAlbum: (Album) -> Unit = {},
     private val onArtist: (Artist) -> Unit = {},
     private val onRecent: (String) -> Unit = {},
+    private val onTrackSelected: () -> Unit = {},
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
     /** One line of the results list. */
@@ -51,8 +52,14 @@ class SearchResultsAdapter(
 
     private val rows = mutableListOf<Row>()
 
-    /** The songs, in list order, so playing one continues through the rest of the results. */
-    private val songs get() = rows.filterIsInstance<Row.SongRow>().map { it.item }
+    /** Every playable result, in list order, so a lyric hit is a real track rather than decoration. */
+    private val songs get() = rows.mapNotNull { it.mediaItemOrNull() }
+
+    private fun Row.mediaItemOrNull(): MediaItem? = when (this) {
+        is Row.SongRow -> item
+        is Row.LyricRow -> item
+        else -> null
+    }
 
     fun submit(results: List<Row>) {
         val diff = DiffUtil.calculateDiff(Diff(rows.toList(), results))
@@ -81,7 +88,7 @@ class SearchResultsAdapter(
      * Null for anything that is not a song: the swipe gestures queue and enqueue tracks, and there
      * is nothing sensible for them to do to a header.
      */
-    fun itemAt(position: Int): MediaItem? = (rows.getOrNull(position) as? Row.SongRow)?.item
+    fun itemAt(position: Int): MediaItem? = rows.getOrNull(position)?.mediaItemOrNull()
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
         val inflater = LayoutInflater.from(parent.context)
@@ -164,9 +171,13 @@ class SearchResultsAdapter(
             menu?.visibility = View.VISIBLE
             menu?.setOnClickListener { anchor -> TrackRowMenu.show(anchor, item) }
             itemView.setOnClickListener {
-                // Plays the songs section from here, so skipping forward stays within the results.
+                // Plays every track section from here. Lyric rows used to be excluded from this
+                // queue: a lyrics-only search therefore set an empty timeline, while a mixed
+                // search silently played its first ordinary title match instead.
                 val queue = songs
-                val start = queue.indexOfFirst { it.mediaId == item.mediaId }.coerceAtLeast(0)
+                val start = queue.indexOfFirst { it.mediaId == item.mediaId }
+                if (start < 0) return@setOnClickListener
+                onTrackSelected()
                 player()?.apply {
                     setMediaItems(queue, start, C.TIME_UNSET)
                     prepare()

@@ -37,6 +37,7 @@ import uk.akane.accord.ui.MainActivity
 import uk.akane.accord.ui.adapters.BannerCarouselAdapter
 import uk.akane.accord.ui.adapters.BannerItem
 import uk.akane.accord.ui.components.NavigationBar
+import uk.akane.accord.ui.components.CollageArtView
 import uk.akane.accord.ui.fragments.browse.AlbumDetailFragment
 import uk.akane.accord.ui.fragments.browse.StationDetailFragment
 import java.time.LocalDate
@@ -88,6 +89,15 @@ class HomeFragment: Fragment() {
         headerAdapter.setBannerItems(HomeFeedCache.loadBanners(requireContext()).orEmpty())
         val cachedSections = HomeFeedCache.load(requireContext())
         sectionAdapter.submit(cachedSections ?: buildInitialSkeletonSections(requireContext()))
+        cachedSections?.let { sections ->
+            CollageArtView.prefetch(
+                requireContext(),
+                sections.asSequence()
+                    .flatMap { it.cards.asSequence() }
+                    .flatMap { it.collageCovers.asSequence() }
+                    .asIterable(),
+            )
+        }
 
         rootView.findViewById<RecyclerView>(R.id.home_sections).apply {
             layoutManager = LinearLayoutManager(context)
@@ -192,6 +202,13 @@ class HomeFragment: Fragment() {
                         val displayedSections = mergeSections(
                             sectionAdapter.currentSections(),
                             withSimilar(sections)
+                        )
+                        CollageArtView.prefetch(
+                            requireContext(),
+                            displayedSections.asSequence()
+                                .flatMap { it.cards.asSequence() }
+                                .flatMap { it.collageCovers.asSequence() }
+                                .asIterable(),
                         )
                         sectionAdapter.submit(displayedSections)
                         withContext(Dispatchers.IO) {

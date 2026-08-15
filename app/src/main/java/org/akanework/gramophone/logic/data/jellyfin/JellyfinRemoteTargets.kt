@@ -1,88 +1,104 @@
 package org.akanework.gramophone.logic.data.jellyfin
 
+import android.content.Context
+import android.os.SystemClock
 import android.util.Log
+import androidx.preference.PreferenceManager
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.jellyfin.sdk.api.client.extensions.sessionApi
+import org.jellyfin.sdk.api.sockets.subscribe
 import org.jellyfin.sdk.model.api.GeneralCommandType
 import org.jellyfin.sdk.model.api.PlayCommand
+import org.jellyfin.sdk.model.api.PlaybackOrder
 import org.jellyfin.sdk.model.api.PlaystateCommand
+import org.jellyfin.sdk.model.api.RepeatMode
+import org.jellyfin.sdk.model.api.SessionInfoDto
+import org.jellyfin.sdk.model.api.SessionsMessage
 import java.util.UUID
 
-/**
- * The other Jellyfin clients this one can play to.
- *
- * The sending half of remote control, and the mirror of [JellyfinRemoteControl]: that one lets
- * other clients drive Accord, this one lets Accord drive them. Both sides are the server's, so a
- * device only has to be signed in to the same Jellyfin to appear here - the web client on a
- * desktop, another phone, a Jellyfin Media Player on a TV.
- *
- * Deliberately a small piece of state rather than a mode. Handing playback to another device does
- * not change what this app is: the queue, the library and the now-playing screen are unchanged, and
- * only where the sound comes out moves. That is also why the player shows it in the same place it
- * shows a pair of headphones.
- */
+/** Sending and live-state half of Finnect. */
 object JellyfinRemoteTargets {
 
-    private const val TAG = "JellyfinRemoteTargets"
+    const val PREF_FINNECT_ENABLED = "finnect_enabled"
 
-    /**
-     * How stale a session may be before it is not worth offering.
-     *
-     * Jellyfin keeps sessions around after a client has gone quiet, so listing everything shows
-     * devices that stopped existing hours ago - and a "Play on" that reaches nothing is worse than
-     * a short list.
-     */
+    private const val TAG = "JellyfinRemoteTargets"
     private const val MAX_IDLE_MINUTES = 10L
+    private const val AVAILABLE_CACHE_MS = 30_000L
+    private const val TICKS_PER_MILLISECOND = 10_000L
 
     data class Target(
         val sessionId: String,
-        /** The client application - "Jellyfin Web", "Findroid", "Accord". */
         val client: String,
-        /** The machine it is running on, which is what tells two of the same client apart. */
         val deviceName: String,
         val nowPlaying: String?,
     )
 
+    /** The authoritative state reported by the target session. */
+    data class RemotePlaybackState(
+        val target: Target,
+        val itemId: String?,
+        val itemName: String?,
+        val queueIds: List<String>,
+        val positionMs: Long,
+        val durationMs: Long?,
+        val isPaused: Boolean,
+        val canSeek: Boolean,
+        val volumePercent: Int?,
+        val repeatMode: RepeatMode,
+        val playbackOrder: PlaybackOrder,
+        val observedAtElapsedMs: Long = SystemClock.elapsedRealtime(),
+    ) {
+        fun projectedPositionMs(nowElapsedMs: Long = SystemClock.elapsedRealtime()): Long {
+            val elapsed = if (isPaused) 0L else (nowElapsedMs - observedAtElapsedMs).coerceAtLeast(0L)
+            val projected = positionMs + elapsed
+            return durationMs?.let { projected.coerceIn(0L, it) } ?: projected.coerceAtLeast(0L)
+        }
+    }
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var monitorJob: Job? = null
     private val _active = MutableStateFlow<Target?>(null)
+    private val _playbackState = MutableStateFlow<RemotePlaybackState?>(null)
 
-    /** The device currently being played to, or null when playback is local. */
+    @Volatile
+    private var availableCache: List<Target> = emptyList()
+    @Volatile
+    private var availableCacheUpdatedAtMs = 0L
+
     val active: StateFlow<Target?> = _active.asStateFlow()
+    val playbackState: StateFlow<RemotePlaybackState?> = _playbackState.asStateFlow()
 
-    /**
-     * Controllable sessions, this one excluded.
-     *
-     * Filtered to those that said they support media control, because the rest cannot be played to
-     * and listing them would offer a choice that fails.
-     */
+    fun isEnabled(context: Context): Boolean = PreferenceManager
+        .getDefaultSharedPreferences(context)
+        .getBoolean(PREF_FINNECT_ENABLED, true)
+
+    fun cachedAvailable(): List<Target> = availableCache.takeIf {
+        SystemClock.elapsedRealtime() - availableCacheUpdatedAtMs <= AVAILABLE_CACHE_MS
+    }.orEmpty()
+
     suspend fun available(): List<Target> = withContext(Dispatchers.IO) {
-        val api = JellyfinClientHolder.api() ?: return@withContext emptyList()
         try {
+            val api = JellyfinClientHolder.api() ?: return@withContext emptyList()
             val ownDeviceId = api.deviceInfo.id
-            // controllableByUserId is not optional in practice. Without it the server answers with
-            // this client's own session and nothing else - a non-administrator is not allowed to
-            // enumerate sessions, only to ask which ones they may control. That is why the picker
-            // listed every device when queried with an admin key and none from inside the app.
-            val userId = JellyfinClientHolder.credentials.userId
-                ?.let { runCatching { UUID.fromString(it.toDashedUuid()) }.getOrNull() }
-            api.sessionApi.getSessions(
-                controllableByUserId = userId,
-                activeWithinSeconds = (MAX_IDLE_MINUTES * 60).toInt(),
-            )
-                .content
-                .filter { it.supportsRemoteControl == true }
+            val sessions = controllableSessions()
+            sessions.firstOrNull { it.id == _active.value?.sessionId }?.let(::applySession)
+            sessions
+                .filter { it.supportsRemoteControl }
                 .filter { it.deviceId != ownDeviceId }
                 .filter { !it.client.isNullOrBlank() }
-                .map { session ->
-                    Target(
-                        sessionId = session.id.orEmpty(),
-                        client = session.client.orEmpty(),
-                        deviceName = session.deviceName.orEmpty(),
-                        nowPlaying = session.nowPlayingItem?.name,
-                    )
+                .map(::toTarget)
+                .also {
+                    availableCache = it
+                    availableCacheUpdatedAtMs = SystemClock.elapsedRealtime()
                 }
         } catch (e: Exception) {
             Log.w(TAG, "Could not list sessions", e)
@@ -90,12 +106,6 @@ object JellyfinRemoteTargets {
         }
     }
 
-    /**
-     * Sends [remoteIds] to [target] and makes it the active device.
-     *
-     * The ids go over as Jellyfin's own, not this app's local ones: the receiving client will look
-     * them up against the same server, and has never heard of our row numbers.
-     */
     suspend fun playOn(
         target: Target,
         remoteIds: List<String>,
@@ -103,7 +113,9 @@ object JellyfinRemoteTargets {
         startPositionMs: Long = 0L,
     ): Boolean = withContext(Dispatchers.IO) {
         val api = JellyfinClientHolder.api() ?: return@withContext false
-        val ids = remoteIds.mapNotNull { runCatching { UUID.fromString(it.toDashedUuid()) }.getOrNull() }
+        val ids = remoteIds.mapNotNull {
+            runCatching { UUID.fromString(it.toDashedUuid()) }.getOrNull()
+        }
         if (ids.isEmpty()) return@withContext false
         try {
             api.sessionApi.play(
@@ -114,6 +126,20 @@ object JellyfinRemoteTargets {
                 startPositionTicks = startPositionMs * TICKS_PER_MILLISECOND,
             )
             _active.value = target
+            _playbackState.value = RemotePlaybackState(
+                target = target,
+                itemId = remoteIds.getOrNull(startIndex)?.normalizedId(),
+                itemName = target.nowPlaying,
+                queueIds = remoteIds.map { it.normalizedId() },
+                positionMs = startPositionMs,
+                durationMs = null,
+                isPaused = false,
+                canSeek = true,
+                volumePercent = null,
+                repeatMode = RepeatMode.REPEAT_NONE,
+                playbackOrder = PlaybackOrder.DEFAULT,
+            )
+            startMonitor()
             Log.d(TAG, "Handed ${ids.size} items to ${target.client} on ${target.deviceName}")
             true
         } catch (e: Exception) {
@@ -122,50 +148,222 @@ object JellyfinRemoteTargets {
         }
     }
 
-    /** Transport for the device being played to. Silently does nothing when playback is local. */
-    suspend fun sendTransport(command: PlaystateCommand, seekPositionMs: Long? = null) {
-        val target = _active.value ?: return
-        val api = JellyfinClientHolder.api() ?: return
-        withContext(Dispatchers.IO) {
+    /** Fetch immediately before pulling playback back; the socket remains the normal update path. */
+    suspend fun refreshActiveState(): RemotePlaybackState? = withContext(Dispatchers.IO) {
+        val target = _active.value ?: return@withContext null
+        runCatching {
+            controllableSessions().firstOrNull { it.id == target.sessionId }?.also(::applySession)
+        }.onFailure { Log.w(TAG, "Could not refresh active Finnect session", it) }
+        _playbackState.value
+    }
+
+    suspend fun sendTransport(command: PlaystateCommand, seekPositionMs: Long? = null): Boolean {
+        val target = _active.value ?: return false
+        val api = JellyfinClientHolder.api() ?: return false
+        return withContext(Dispatchers.IO) {
             runCatching {
                 api.sessionApi.sendPlaystateCommand(
                     sessionId = target.sessionId,
                     command = command,
                     seekPositionTicks = seekPositionMs?.times(TICKS_PER_MILLISECOND),
                 )
-            }.onFailure { Log.w(TAG, "Transport $command failed", it) }
+                applyOptimisticTransport(command, seekPositionMs)
+                true
+            }.onFailure { Log.w(TAG, "Transport $command failed", it) }.getOrDefault(false)
         }
     }
 
-    suspend fun sendVolume(percent: Int) {
-        val target = _active.value ?: return
-        val api = JellyfinClientHolder.api() ?: return
-        withContext(Dispatchers.IO) {
+    suspend fun playQueueIndex(index: Int): Boolean {
+        val state = _playbackState.value ?: return false
+        if (index !in state.queueIds.indices) return false
+        return playOn(state.target, state.queueIds, startIndex = index, startPositionMs = 0L)
+    }
+
+    suspend fun sendVolume(percent: Int): Boolean {
+        val target = _active.value ?: return false
+        val api = JellyfinClientHolder.api() ?: return false
+        val bounded = percent.coerceIn(0, 100)
+        return withContext(Dispatchers.IO) {
             runCatching {
                 api.sessionApi.sendFullGeneralCommand(
                     sessionId = target.sessionId,
                     data = org.jellyfin.sdk.model.api.GeneralCommand(
                         name = GeneralCommandType.SET_VOLUME,
-                        // The server fills this in from the token; sending a zero UUID is
-                        // how the SDK's own callers say "whoever I am".
                         controllingUserId = UUID(0, 0),
-                        arguments = mapOf("Volume" to percent.coerceIn(0, 100).toString()),
+                        arguments = mapOf("Volume" to bounded.toString()),
                     ),
                 )
-            }.onFailure { Log.w(TAG, "Volume failed", it) }
+                _playbackState.value = _playbackState.value?.copy(volumePercent = bounded)
+                true
+            }.onFailure { Log.w(TAG, "Volume failed", it) }.getOrDefault(false)
         }
     }
 
-    /**
-     * Brings playback back to this device.
-     *
-     * Only forgets the target; it does not stop the other device. Whether handing playback back
-     * should also silence what is playing over there is a decision for the screen that offers it,
-     * not for this.
-     */
-    fun playLocally() {
-        _active.value = null
+    suspend fun sendShuffle(enabled: Boolean): Boolean = sendGeneral(
+        command = GeneralCommandType.SET_SHUFFLE_QUEUE,
+        arguments = mapOf("ShuffleMode" to if (enabled) "Shuffle" else "Sorted"),
+    ) {
+        copy(playbackOrder = if (enabled) PlaybackOrder.SHUFFLE else PlaybackOrder.DEFAULT)
     }
+
+    suspend fun sendRepeat(mode: RepeatMode): Boolean = sendGeneral(
+        command = GeneralCommandType.SET_REPEAT_MODE,
+        arguments = mapOf(
+            "RepeatMode" to when (mode) {
+                RepeatMode.REPEAT_ALL -> "RepeatAll"
+                RepeatMode.REPEAT_ONE -> "RepeatOne"
+                RepeatMode.REPEAT_NONE -> "RepeatNone"
+            }
+        ),
+    ) { copy(repeatMode = mode) }
+
+    private suspend fun sendGeneral(
+        command: GeneralCommandType,
+        arguments: Map<String, String>,
+        optimisticUpdate: RemotePlaybackState.() -> RemotePlaybackState,
+    ): Boolean {
+        val target = _active.value ?: return false
+        val api = JellyfinClientHolder.api() ?: return false
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                api.sessionApi.sendFullGeneralCommand(
+                    sessionId = target.sessionId,
+                    data = org.jellyfin.sdk.model.api.GeneralCommand(
+                        name = command,
+                        controllingUserId = UUID(0, 0),
+                        arguments = arguments,
+                    ),
+                )
+                _playbackState.value = _playbackState.value?.optimisticUpdate()
+                true
+            }.onFailure { Log.w(TAG, "$command failed", it) }.getOrDefault(false)
+        }
+    }
+
+    fun playLocally() {
+        monitorJob?.cancel()
+        monitorJob = null
+        _active.value = null
+        _playbackState.value = null
+    }
+
+    /** Called when the global setting is switched off. */
+    fun disable() {
+        val target = _active.value
+        availableCache = emptyList()
+        availableCacheUpdatedAtMs = 0L
+        playLocally()
+        // Turning the feature off must not strand music on another phone with no controls left in
+        // this UI. Clear local Finnect state immediately, then best-effort stop the old target.
+        if (target != null) scope.launch {
+            val api = JellyfinClientHolder.api() ?: return@launch
+            runCatching {
+                api.sessionApi.sendPlaystateCommand(
+                    sessionId = target.sessionId,
+                    command = PlaystateCommand.STOP,
+                )
+            }.onFailure { Log.w(TAG, "Could not stop Finnect target while disabling", it) }
+        }
+    }
+
+    private fun startMonitor() {
+        monitorJob?.cancel()
+        monitorJob = scope.launch {
+            val api = JellyfinClientHolder.api() ?: return@launch
+            // Gives the UI full state immediately; Sessions messages then arrive every second.
+            refreshActiveState()
+            api.webSocket.subscribe(SessionsMessage::class).collectLatest { message ->
+                val sessionId = _active.value?.sessionId ?: return@collectLatest
+                message.data?.firstOrNull { it.id == sessionId }?.let(::applySession)
+            }
+        }
+    }
+
+    private suspend fun controllableSessions(): List<SessionInfoDto> {
+        val api = JellyfinClientHolder.api() ?: return emptyList()
+        val userId = JellyfinClientHolder.credentials.userId
+            ?.let { runCatching { UUID.fromString(it.toDashedUuid()) }.getOrNull() }
+        return api.sessionApi.getSessions(
+            controllableByUserId = userId,
+            activeWithinSeconds = (MAX_IDLE_MINUTES * 60).toInt(),
+        ).content
+    }
+
+    private fun applySession(session: SessionInfoDto) {
+        val target = _active.value ?: return
+        if (session.id != target.sessionId) return
+        val previous = _playbackState.value
+        val playState = session.playState
+        val reportedQueue = session.nowPlayingQueue.orEmpty().map { it.id.toString().normalizedId() }
+        _playbackState.value = RemotePlaybackState(
+            target = target.copy(nowPlaying = session.nowPlayingItem?.name),
+            itemId = session.nowPlayingItem?.id?.toString()?.normalizedId(),
+            itemName = session.nowPlayingItem?.name,
+            queueIds = reportedQueue.ifEmpty { previous?.queueIds.orEmpty() },
+            positionMs = (playState?.positionTicks ?: 0L) / TICKS_PER_MILLISECOND,
+            durationMs = session.nowPlayingItem?.runTimeTicks?.div(TICKS_PER_MILLISECOND),
+            isPaused = playState?.isPaused ?: true,
+            canSeek = playState?.canSeek ?: false,
+            volumePercent = playState?.volumeLevel,
+            repeatMode = playState?.repeatMode ?: previous?.repeatMode ?: RepeatMode.REPEAT_NONE,
+            playbackOrder = playState?.playbackOrder
+                ?: previous?.playbackOrder
+                ?: PlaybackOrder.DEFAULT,
+        )
+    }
+
+    private fun applyOptimisticTransport(command: PlaystateCommand, seekPositionMs: Long?) {
+        val state = _playbackState.value ?: return
+        val currentPosition = state.projectedPositionMs()
+        _playbackState.value = when (command) {
+            PlaystateCommand.PLAY_PAUSE -> state.copy(
+                positionMs = currentPosition,
+                isPaused = !state.isPaused,
+                observedAtElapsedMs = SystemClock.elapsedRealtime(),
+            )
+            PlaystateCommand.PAUSE -> state.copy(
+                positionMs = currentPosition,
+                isPaused = true,
+                observedAtElapsedMs = SystemClock.elapsedRealtime(),
+            )
+            PlaystateCommand.UNPAUSE -> state.copy(
+                positionMs = currentPosition,
+                isPaused = false,
+                observedAtElapsedMs = SystemClock.elapsedRealtime(),
+            )
+            PlaystateCommand.SEEK -> state.copy(
+                positionMs = seekPositionMs ?: currentPosition,
+                observedAtElapsedMs = SystemClock.elapsedRealtime(),
+            )
+            PlaystateCommand.NEXT_TRACK,
+            PlaystateCommand.PREVIOUS_TRACK -> {
+                val current = state.queueIds.indexOf(state.itemId?.normalizedId())
+                val next = if (command == PlaystateCommand.NEXT_TRACK) current + 1 else current - 1
+                state.copy(
+                    itemId = state.queueIds.getOrNull(next) ?: state.itemId,
+                    itemName = null,
+                    positionMs = 0L,
+                    durationMs = null,
+                    observedAtElapsedMs = SystemClock.elapsedRealtime(),
+                )
+            }
+            PlaystateCommand.STOP -> state.copy(
+                positionMs = currentPosition,
+                isPaused = true,
+                observedAtElapsedMs = SystemClock.elapsedRealtime(),
+            )
+            else -> state
+        }
+    }
+
+    private fun toTarget(session: SessionInfoDto) = Target(
+        sessionId = session.id.orEmpty(),
+        client = session.client.orEmpty(),
+        deviceName = session.deviceName.orEmpty(),
+        nowPlaying = session.nowPlayingItem?.name,
+    )
+
+    private fun String.normalizedId(): String = replace("-", "").lowercase()
 
     private fun String.toDashedUuid(): String {
         if (length != 32) return this
@@ -177,6 +375,4 @@ object JellyfinRemoteTargets {
             append(this@toDashedUuid, 20, 32)
         }
     }
-
-    private const val TICKS_PER_MILLISECOND = 10_000L
 }
