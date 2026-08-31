@@ -24,6 +24,7 @@ import androidx.constraintlayout.widget.ConstraintSet
 import androidx.core.content.res.ResourcesCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.view.doOnLayout
 import androidx.core.view.marginBottom
 import androidx.core.view.marginEnd
@@ -104,7 +105,15 @@ class FloatingPanelLayout @JvmOverloads constructor(
     private var previewCoverBoxMetrics: Int = 0
     private var previewCoverMarginX: Float = 8.dpToPx(context).toFloat()
     private var previewCoverMarginY: Float = 8.dpToPx(context).toFloat()
-    private var previewCoverHorizontalMargin: Int = 12.dpToPx(context)
+    /**
+     * Where the bar actually starts, which is not its start margin once it is capped.
+     *
+     * `preview_player_max_width` bounds the bar and centres what is left over, so on a wide canvas
+     * the bar begins far inside its own margin. Reading the margin instead painted the panel's
+     * surface - and the blur inside it - across the full width while the bar itself sat centred,
+     * leaving unblurred bands sticking out either end of it.
+     */
+    private var previewViewLeft: Int = 12.dpToPx(context)
     private var previewCoverPaddingPx: Float = (0.5F.dp.px).roundToInt().toFloat()
     private var previewCoverStrokePx: Float = (0.5F.dp.px).roundToInt().toFloat()
     private var previewCoverCornerRadius: Float = 0F
@@ -159,7 +168,7 @@ class FloatingPanelLayout @JvmOverloads constructor(
         previewCoverPaddingPx = previewCoverView.paddingLeft.toFloat()
         previewCoverStrokePx = previewCoverView.getStrokeWidth()
         previewCoverCornerRadius = previewCoverView.getCornerRadius().toFloat()
-        previewCoverHorizontalMargin = previewView.marginStart
+        previewViewLeft = previewView.left
     }
 
     fun setupTransitionImageView(w: Int, h: Int, mx: Int, mh: Int, bitmap: Bitmap) {
@@ -290,12 +299,12 @@ class FloatingPanelLayout @JvmOverloads constructor(
             if (it.width != 0) {
                 val rawDelta = fullScreenView.height - previewView.height - previewView.marginBottom
                 val initialScale = previewCoverBoxMetrics / it.width.toFloat()
-                val initialTranslationX = previewCoverMarginX * previewView.scaleX - previewCoverHorizontalMargin * fraction
+                val initialTranslationX = previewCoverMarginX * previewView.scaleX - previewViewLeft * fraction
                 val scale = lerp(initialScale, fullCoverScale, fraction)
 
                 it.scaleX = scale
                 it.scaleY = scale
-                it.translationX = lerp(initialTranslationX, fullCoverX - previewCoverHorizontalMargin.toFloat(), fraction)
+                it.translationX = lerp(initialTranslationX, fullCoverX - previewViewLeft.toFloat(), fraction)
                 it.translationY = lerp(previewCoverMarginY, -rawDelta.toFloat() + fullCoverY, fraction)
 
                 val targetVisualPadding = previewCoverPaddingPx
@@ -328,8 +337,42 @@ class FloatingPanelLayout @JvmOverloads constructor(
         }
     }
 
-    private fun updateTransform(newFraction: Float) {
-        if (newFraction == fraction && fraction != 0F && fraction != 1F) return
+    /** The geometry [updateTransform] last ran against, so a re-layout can tell it has gone stale. */
+    private var lastPreviewHeight = -1
+    private var lastPreviewMarginBottom = -1
+    private var lastFullHeight = -1
+    private var lastFullWidth = -1
+
+    /**
+     * Re-derives the panel's resting shape whenever the sizes it is built from change.
+     *
+     * Every position in [updateTransform] comes from the preview's height and bottom margin and
+     * the full player's size, and none of those are final on the first layout pass: the window
+     * insets have not landed, so the bar does not yet know how much room the navigation bar and
+     * the gesture area leave it. That first pass was the only one that ever ran, so the painted
+     * surface kept the shape of a screen that no longer existed while the controls inside it were
+     * laid out against the real one - the two disagreeing is what the bar looked mangled. Dragging
+     * the panel recomputed everything, which is why opening and closing it put things right.
+     */
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        super.onLayout(changed, left, top, right, bottom)
+        if (previewView.height == lastPreviewHeight &&
+            previewView.marginBottom == lastPreviewMarginBottom &&
+            fullScreenView.height == lastFullHeight &&
+            fullScreenView.width == lastFullWidth
+        ) {
+            return
+        }
+        lastPreviewHeight = previewView.height
+        lastPreviewMarginBottom = previewView.marginBottom
+        lastFullHeight = fullScreenView.height
+        lastFullWidth = fullScreenView.width
+        // Only transforms and an invalidate come out of this, so it cannot ask for another layout.
+        updateTransform(fraction, force = true)
+    }
+
+    private fun updateTransform(newFraction: Float, force: Boolean = false) {
+        if (!force && newFraction == fraction && fraction != 0F && fraction != 1F) return
         fraction = newFraction
 
         val deltaY = lerp(0f, (fullScreenView.height - previewView.height - previewView.marginBottom).toFloat(), fraction)
@@ -351,9 +394,12 @@ class FloatingPanelLayout @JvmOverloads constructor(
         fullScreenView.pivotY = 0f
         fullScreenView.pivotX = fullScreenView.width / 2f
 
-        previewLeft = previewView.marginStart.toFloat() + previewGestureX
+        // The bar's own edges, not the margins it was asked for: once it is capped by
+        // `preview_player_max_width` the leftover space is split either side of it, and painting
+        // the panel from margin to margin drew a surface wider than the bar it is meant to be.
+        previewLeft = previewView.left.toFloat() + previewGestureX
         previewTop = (fullScreenView.height - previewView.height - previewView.marginBottom).toFloat() + previewGestureY
-        previewRight = fullScreenView.width.toFloat() - previewView.marginEnd + previewGestureX
+        previewRight = previewView.right.toFloat() + previewGestureX
         previewBottom = fullScreenView.height.toFloat() - previewView.marginBottom + previewGestureY
 
         fullLeft = 0f
@@ -381,6 +427,8 @@ class FloatingPanelLayout @JvmOverloads constructor(
 
         previewView.alpha = lerp(1f, 0f, fraction * 2f)
         fullScreenView.alpha = lerp(0f, 1f, fraction * 2f)
+
+        updateImmersiveForFraction(fraction)
 
         invalidate()
         triggerSlide(fraction)
@@ -703,6 +751,11 @@ class FloatingPanelLayout @JvmOverloads constructor(
 
                 start()
             }
+        } else if (state == SlideStatus.EXPANDED) {
+            // Empty parts of the expanded player (most notably the artwork) do not consume their
+            // ACTION_DOWN, so this panel owns the completed tap. Hand it back to the player after
+            // GestureDetector has proved it was not a cover swipe or a collapse drag.
+            coverSwipeHandler?.onPlayerSurfaceTap(e.x, e.y)
         }
         return true
     }
@@ -753,6 +806,40 @@ class FloatingPanelLayout @JvmOverloads constructor(
         }
         if (prevState != state) {
             onSlideListeners.forEach { it.onSlideStatusChanged(state) }
+        }
+    }
+
+    private var statusBarHidden = false
+
+    /**
+     * The open player owns the screen, so the status bar steps out of it.
+     *
+     * Taking the bar away re-lays out everything behind the panel, and the page under it is
+     * headed by a large title sitting right where that inset is: doing this at the two resting
+     * states meant the title visibly jumped up as the player finished opening and dropped back as
+     * it finished closing, in full view both times. It happens while the panel still covers the
+     * screen instead - the same crossing in both directions, so the reflow lands behind the panel
+     * and the title is already where it belongs by the time anything uncovers it.
+     *
+     * The two thresholds are deliberately apart: a drag held around a single one would toggle the
+     * bar, and the window, back and forth under the finger.
+     */
+    private fun updateImmersiveForFraction(fraction: Float) {
+        val hidden = when {
+            fraction >= IMMERSIVE_HIDE_FRACTION -> true
+            fraction <= IMMERSIVE_SHOW_FRACTION -> false
+            else -> return
+        }
+        if (hidden == statusBarHidden) return
+        statusBarHidden = hidden
+        if (hidden) {
+            // Transient rather than a lock: a swipe from the top still brings the bar back
+            // without having to leave the player.
+            insetController.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            insetController.hide(WindowInsetsCompat.Type.statusBars())
+        } else {
+            insetController.show(WindowInsetsCompat.Type.statusBars())
         }
     }
 
@@ -816,6 +903,19 @@ class FloatingPanelLayout @JvmOverloads constructor(
         } else {
             setSlideFraction(1F)
         }
+    }
+
+    /** Opens a tablet bar destination after the shared artwork has finished expanding. */
+    fun expandTo(contentType: FullPlayer.ContentType) {
+        expand(animate = true)
+        postDelayed(
+            { fullScreenView.showContentFromPreview(contentType) },
+            DEFAULT_ANIMATION_DURATION,
+        )
+    }
+
+    fun showPlayerPopupFromPreview(anchor: View) {
+        fullScreenView.showPopupFromPreview(anchor)
     }
 
     fun setPreviewCover(drawable: Drawable?) {
@@ -898,6 +998,9 @@ class FloatingPanelLayout @JvmOverloads constructor(
     interface CoverSwipeHandler {
         /** Where the artwork is, in this panel's coordinates, or null when it cannot be swiped. */
         fun coverBounds(): RectF?
+
+        /** A completed, non-drag tap on otherwise non-interactive expanded-player space. */
+        fun onPlayerSurfaceTap(x: Float, y: Float)
 
         /** Called continuously with the distance dragged from where the finger went down. */
         fun onCoverSwipeMove(dx: Float)
@@ -1272,6 +1375,13 @@ class FloatingPanelLayout @JvmOverloads constructor(
     private class SavedState(val superStateInternal: Parcelable?, val savedValue: Float) : BaseSavedState(superStateInternal)
 
     companion object {
+        /**
+         * How far open the panel is when the status bar changes. High enough that the panel has
+         * the page behind it covered, so the reflow that follows is never seen.
+         */
+        private const val IMMERSIVE_HIDE_FRACTION = 0.94F
+        private const val IMMERSIVE_SHOW_FRACTION = 0.86F
+
         const val MINIMUM_ANIMATION_TIME = 220L
         const val MAXIMUM_ANIMATION_TIME = 320L
         const val SPEED_FACTOR = 2F

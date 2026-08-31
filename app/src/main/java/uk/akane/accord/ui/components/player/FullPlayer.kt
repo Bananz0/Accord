@@ -27,6 +27,8 @@ import android.widget.Button
 import uk.akane.accord.ui.components.NoToast as Toast
 import androidx.appcompat.content.res.AppCompatResources
 import androidx.constraintlayout.widget.ConstraintLayout
+import androidx.constraintlayout.widget.ConstraintSet
+import androidx.constraintlayout.widget.Guideline
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
 import androidx.core.view.WindowInsetsCompat
@@ -40,6 +42,7 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Timeline
 import androidx.media3.session.MediaController
 import androidx.recyclerview.widget.ItemTouchHelper
@@ -63,7 +66,9 @@ import androidx.annotation.DrawableRes
 import androidx.lifecycle.findViewTreeLifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinItemResolver
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinKaraoke
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinRemoteTargets
+import org.akanework.gramophone.logic.data.jellyfin.KaraokeMediaItems
 import org.jellyfin.sdk.model.api.PlaystateCommand
 import org.jellyfin.sdk.model.api.PlaybackOrder
 import org.jellyfin.sdk.model.api.RepeatMode
@@ -79,6 +84,8 @@ import androidx.media3.common.util.UnstableApi
 import com.google.common.util.concurrent.Futures
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.akanework.gramophone.logic.GramophonePlaybackService
@@ -87,6 +94,7 @@ import uk.akane.accord.ui.components.lyrics.Lyrics
 import uk.akane.accord.ui.components.lyrics.LyricsLine
 import uk.akane.accord.ui.components.lyrics.LyricsWordTiming
 import android.os.Bundle
+import android.os.Parcelable
 import androidx.core.os.BundleCompat
 import androidx.media3.session.SessionCommand
 import org.akanework.gramophone.logic.utils.MediaStoreUtils
@@ -96,7 +104,10 @@ import android.view.animation.AccelerateInterpolator
 import android.view.animation.LinearInterpolator
 import android.widget.ImageView
 import org.akanework.gramophone.logic.utils.AudioOutput
+import java.io.File
+import java.security.MessageDigest
 import kotlin.math.abs
+import kotlin.math.min
 import uk.akane.accord.R
 import uk.akane.accord.logic.ArtistCredits
 import uk.akane.accord.logic.dp
@@ -141,6 +152,7 @@ import android.view.animation.PathInterpolator
 import android.view.animation.OvershootInterpolator
 import androidx.preference.PreferenceManager
 import org.akanework.gramophone.logic.data.library.songListSnapshot
+import org.akanework.gramophone.logic.data.lyrics.AutomaticLyricsTranslator
 import org.akanework.gramophone.logic.data.AutoplayQueue
 import uk.akane.accord.logic.player.UsbHiFiStatus
 import uk.akane.accord.logic.player.AfFormatInfo
@@ -162,6 +174,7 @@ class FullPlayer @JvmOverloads constructor(
 
     private var initialMargin = IntArray(4)
 
+    private var meshGradientView: FlowingGradientView
     private var blendView: BlendView
     private var overlayDivider: OverlayDivider
     private var fadingEdgeLayout: FadingVerticalEdgeLayout
@@ -178,6 +191,8 @@ class FullPlayer @JvmOverloads constructor(
     private var listOverlayButton: OverlayButton
     private var airplayOverlayButton: OverlayButton
     private var captionOverlayButton: OverlayButton
+    private var karaokeOverlayButton: OverlayButton
+    private var karaokeStatus: TextView
     private var starTransformButton: StarTransformButton
     private var controllerButton: StateAnimatedVectorButton
     private var previousButton: AnimatedVectorButton
@@ -198,6 +213,10 @@ class FullPlayer @JvmOverloads constructor(
     private var remoteTargetJob: kotlinx.coroutines.Job? = null
     private var remotePlaybackJob: kotlinx.coroutines.Job? = null
     private var remoteTargetsWarmupJob: kotlinx.coroutines.Job? = null
+    private var karaokeJob: Job? = null
+    private var karaokeMediaId: String? = null
+    private var karaokeSwitchMediaId: String? = null
+    private var karaokeAvailable = false
     private var audioDeviceCallback: AudioDeviceCallback? = null
     private val outputRouteSelector = MediaRouteSelector.Builder()
         .addControlCategory(MediaControlIntent.CATEGORY_LIVE_AUDIO)
@@ -327,6 +346,7 @@ class FullPlayer @JvmOverloads constructor(
     init {
         inflate(context, R.layout.layout_full_player, this)
 
+        meshGradientView = findViewById(R.id.mesh_gradient)
         blendView = findViewById(R.id.blend_view)
         overlayDivider = findViewById(R.id.divider)
         fadingEdgeLayout = findViewById(R.id.fading)
@@ -340,6 +360,8 @@ class FullPlayer @JvmOverloads constructor(
         coverSimpleImageView = findViewById(R.id.cover)
         titleTextView = findViewById(R.id.title)
         subtitleTextView = findViewById(R.id.subtitle)
+        titleTextView.isSelected = true
+        subtitleTextView.isSelected = true
         subtitleTextView.setOnClickListener { view ->
             val item = instance?.currentMediaItem ?: return@setOnClickListener
             val artist = ArtistCredits.primaryArtist(item)
@@ -353,6 +375,9 @@ class FullPlayer @JvmOverloads constructor(
         listOverlayButton = findViewById(R.id.list)
         airplayOverlayButton = findViewById(R.id.airplay)
         captionOverlayButton = findViewById(R.id.caption)
+        karaokeOverlayButton = findViewById(R.id.karaoke)
+        karaokeStatus = findViewById(R.id.karaoke_status)
+        configureWideLayout()
         starTransformButton = findViewById(R.id.star)
         ellipsisButton = findViewById(R.id.ellipsis)
         qualityBadge = findViewById(R.id.quality_badge)
@@ -470,6 +495,10 @@ class FullPlayer @JvmOverloads constructor(
             it.performPressHaptic()
             toggleContentMode(ContentType.LYRICS)
         }
+        karaokeOverlayButton.setOnClickListener {
+            it.performPressHaptic()
+            toggleKaraoke()
+        }
 
         volumeOverlaySlider.addEmphasizeListener(object : OverlaySlider.EmphasizeListener {
             override fun onEmphasizeProgressLeft(translationX: Float) {
@@ -577,6 +606,23 @@ class FullPlayer @JvmOverloads constructor(
             )
 
             updateTransitionTargetForContentType(contentType)
+        }
+
+        // Insets, multi-window resizing and the tablet max-width constraint can move the target
+        // after its first layout. The transition layer used to keep that first phone-shaped
+        // rectangle, which made the artwork stretch and then jump into place near the end of an
+        // expansion. Follow the real target bounds whenever they change.
+        coverSimpleImageView.addOnLayoutChangeListener { _, left, top, right, bottom,
+                                                         oldLeft, oldTop, oldRight, oldBottom ->
+            if (left != oldLeft || top != oldTop || right != oldRight || bottom != oldBottom) {
+                post { updateTransitionTargetForContentType(contentType) }
+            }
+        }
+        fullPlayerToolbar.getCoverView().addOnLayoutChangeListener {
+                _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+            if (left != oldLeft || top != oldTop || right != oldRight || bottom != oldBottom) {
+                post { updateTransitionTargetForContentType(contentType) }
+            }
         }
 
         listOverlayButton.setOnClickListener {
@@ -730,7 +776,8 @@ class FullPlayer @JvmOverloads constructor(
     }
 
     /** Accord's unified output picker: live Android routes plus live Finnect clients. */
-    private fun showOutputPicker() {
+    /** Opens the combined Android-output and Jellyfin Connect picker from player or Settings UI. */
+    fun showOutputPicker() {
         if (outputPickerOpening || outputPickerDialog?.isShowing == true) return
         val owner = findViewTreeLifecycleOwner() ?: return
         outputPickerOpening = true
@@ -1132,7 +1179,10 @@ class FullPlayer @JvmOverloads constructor(
     private val lyricsStartFraction = 0.08F
 
     private fun updateTransitionTargetForContentType(value: ContentType) {
-        val compactMode = value == ContentType.PLAYLIST || value == ContentType.LYRICS
+        // A wide canvas never folds the artwork into the toolbar, so the shared image keeps
+        // landing on the full-size cover it actually flies to.
+        val compactMode = !isWideLayout &&
+            (value == ContentType.PLAYLIST || value == ContentType.LYRICS)
         val targetView = if (compactMode) {
             fullPlayerToolbar.getCoverView()
         } else {
@@ -1367,6 +1417,46 @@ class FullPlayer @JvmOverloads constructor(
         animateQueuePanel(fraction)
     }
 
+    /**
+     * The same content change on a canvas wide enough to put the pane beside the player.
+     *
+     * The artwork never moves and never shrinks here - it is in the left half, which the pane does
+     * not want. On a tablet the controls do not move either: its column holds artwork and controls
+     * together and the pane takes the right of the screen, so the transport stays live under the
+     * lyrics. A landscape phone has only two halves, so the rows that share the right half with
+     * the pane step aside for it; they are taken out of hit testing at the end so a scrubber that
+     * has faded to nothing cannot still catch a drag meant for the queue.
+     */
+    private fun animateWideContentChange(fraction: Float) {
+        // Lyrics already own the chrome on a phone: they hide it on a timer and give it back on a
+        // tap, restoring alpha and visibility themselves. Displacing the same rows underneath that
+        // left them revealed but dead, because the reveal never knew to re-enable them.
+        if (!isTabletLayout) {
+            applyWidePhoneDisplacement(if (contentType == ContentType.LYRICS) 0F else fraction)
+        }
+        animateQueuePanel(fraction)
+    }
+
+    /**
+     * Steps the rows that share a landscape phone's right half aside for the pane taking it.
+     *
+     * They are taken out of hit testing at the far end so a scrubber faded to nothing cannot still
+     * catch a drag meant for the queue over it.
+     */
+    private fun applyWidePhoneDisplacement(fraction: Float) {
+        val alpha = lerp(1F, 0F, (fraction * 1.2F).coerceIn(0F, 1F))
+        listOf(
+            titleTextView, subtitleTextView, starTransformButton, ellipsisButton,
+            progressOverlaySlider, currentTimestampTextView, leftTimestampTextView,
+            qualityBadge, qualityAvailableHint, controllerButton, previousButton, nextButton,
+            volumeOverlaySlider, speakerHintView, speakerFullHintView,
+        ).forEach { it.alpha = alpha }
+        listOf(
+            starTransformButton, ellipsisButton, progressOverlaySlider,
+            controllerButton, previousButton, nextButton, volumeOverlaySlider,
+        ).forEach { it.isEnabled = alpha > 0F }
+    }
+
     private fun resolveQueueEnterOffset(): Float {
         return 0F
     }
@@ -1431,9 +1521,10 @@ class FullPlayer @JvmOverloads constructor(
                 marginBottom + floatingInsets.bottom
             )
             Log.d(TAG, "initTop: ${initialMargin[1]}")
-            overlayDivider.updateLayoutParams<MarginLayoutParams> {
-                topMargin = initialMargin[1] + overlayDivider.marginTop
-            }
+            // The grabber keeps its own margin and nothing else. It used to carry the status bar's
+            // inset on top of it, which put it a third of the way down the top edge; the expanded
+            // player hides that bar now, so the space was being reserved for something not there
+            // and every reference has the grabber up against the top of the screen.
         }
         Log.d(
             TAG,
@@ -1443,6 +1534,9 @@ class FullPlayer @JvmOverloads constructor(
     }
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (contentType == ContentType.LYRICS && isWideLayout) {
+            return dispatchWideLyricsTouch(event)
+        }
         if (contentType == ContentType.LYRICS) {
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
@@ -1508,6 +1602,21 @@ class FullPlayer @JvmOverloads constructor(
     }
 
     private var transformationFraction = 0F
+    /**
+     * Whether the panes sit beside the player rather than on top of it.
+     *
+     * A phone in portrait folds the artwork away into a toolbar to make room for lyrics or the
+     * queue, because there is no room beside it. Every wide canvas has that room, and all of the
+     * references keep the artwork at full size on the left with the pane in the right half, so the
+     * fold must not run there. [isTabletLayout] adds that the controls stay too: only the phone's
+     * right half is shared between the transport and the pane.
+     */
+    private var isWideLayout = false
+    private var isTabletLayout = false
+
+    /** A destination restored from a rotation, waiting for a layout to reopen itself into. */
+    private var pendingContentType: ContentType? = null
+
     private var contentTypeAnimator: ValueAnimator? = null
     private var selectedBottomButton: OverlayButton? = null
     private val bottomButtonAnimators = mutableMapOf<OverlayButton, ValueAnimator>()
@@ -1524,14 +1633,27 @@ class FullPlayer @JvmOverloads constructor(
                     cancelControlsHide()
                     syncQualityBadgeVisibility()
                     showLyrics()
-                    if (previous == ContentType.PLAYLIST) {
-                        animateContentSwap(queueContainer, fadingEdgeLayout) {
-                            scheduleControlsHide()
-                        }
+                    // Armed here rather than from the opening animation's completion, so the delay
+                    // is measured from the moment the lyrics open and is the same every time. Hung
+                    // off the animation it was skipped whenever that animation was cancelled - by
+                    // a rotation, or by toggling twice quickly - and the chrome then stayed up for
+                    // good, which is why the wait never felt like the same wait twice.
+                    if (isWideLayout) {
+                        // Opening the lyrics is the request to read them, so the chrome goes at
+                        // once and they are scrollable and seekable from the first frame. Long
+                        // enough only for the opening animation to be under way first.
+                        removeCallbacks(hideControlsRunnable)
+                        postDelayed(hideControlsRunnable, CONTROLS_OPEN_HIDE_WIDE_MS)
                     } else {
-                        animatePlayerTransform(1F, animateLyrics = true) {
-                            scheduleControlsHide()
-                        }
+                        scheduleControlsHide()
+                    }
+                    if (previous == ContentType.PLAYLIST) {
+                        // Swapping pane for pane never runs the transform, so hand the rows back
+                        // explicitly - the lyrics chrome takes over from here.
+                        if (isWideLayout && !isTabletLayout) applyWidePhoneDisplacement(0F)
+                        animateContentSwap(queueContainer, fadingEdgeLayout)
+                    } else {
+                        animatePlayerTransform(1F, animateLyrics = true)
                     }
                 }
 
@@ -1554,6 +1676,8 @@ class FullPlayer @JvmOverloads constructor(
                     setQueueChildrenAlpha(0F)
                     queueContainer.bringToFront()
                     if (previous == ContentType.LYRICS) {
+                        // Same swap the other way: the queue does want the right half to itself.
+                        if (isWideLayout && !isTabletLayout) applyWidePhoneDisplacement(1F)
                         animateContentSwap(fadingEdgeLayout, queueContainer)
                     } else {
                         animatePlayerTransform(1F)
@@ -1566,6 +1690,46 @@ class FullPlayer @JvmOverloads constructor(
     private fun toggleContentMode(mode: ContentType) {
         if (contentTypeAnimator != null) return
         contentType = if (contentType == mode) ContentType.NORMAL else mode
+    }
+
+    /**
+     * Carries the open destination across a rotation.
+     *
+     * The panel already saved how far it was open, so a rotation came back to an expanded player -
+     * but the destination inside it did not travel, and the field reset to NORMAL while the lyrics
+     * container came back at its inflated visibility. What the listener got was the pane they had
+     * been reading, blank, with no way back to it but closing and reopening.
+     */
+    @Suppress("DEPRECATION")
+    override fun onSaveInstanceState(): Parcelable =
+        Bundle().apply {
+            putParcelable(STATE_SUPER, super.onSaveInstanceState())
+            putInt(STATE_CONTENT_TYPE, contentType.ordinal)
+        }
+
+    @Suppress("DEPRECATION")
+    override fun onRestoreInstanceState(state: Parcelable?) {
+        if (state !is Bundle) {
+            super.onRestoreInstanceState(state)
+            return
+        }
+        super.onRestoreInstanceState(state.getParcelable(STATE_SUPER))
+        pendingContentType = ContentType.values()
+            .getOrNull(state.getInt(STATE_CONTENT_TYPE, ContentType.NORMAL.ordinal))
+            ?.takeIf { it != ContentType.NORMAL }
+    }
+
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        super.onLayout(changed, left, top, right, bottom)
+        // Reopened from a laid-out player, so the transform it animates has real sizes to use.
+        // Dropped if the window went away first: a second configuration change can detach this
+        // view while the post is still queued, and the buttons release their bitmaps on detach.
+        val pending = pendingContentType ?: return
+        pendingContentType = null
+        post {
+            if (!isAttachedToWindow) return@post
+            contentType = pending
+        }
     }
 
     private fun showLyrics() {
@@ -1598,10 +1762,12 @@ class FullPlayer @JvmOverloads constructor(
             speakerHintView,
             speakerFullHintView,
             captionOverlayButton,
+            karaokeOverlayButton,
             airplayOverlayButton,
             outputDeviceIcon,
             outputDeviceName,
             listOverlayButton,
+            karaokeStatus,
         ).forEach { it.bringToFront() }
     }
 
@@ -1626,7 +1792,7 @@ class FullPlayer @JvmOverloads constructor(
             addUpdateListener { animator ->
                 val fraction = animator.animatedValue as Float
                 transformationFraction = fraction
-                animateCoverChange(fraction)
+                if (isWideLayout) animateWideContentChange(fraction) else animateCoverChange(fraction)
                 if (animateLyrics) animateLyricsEntrance(fraction)
             }
             addListener(object : AnimatorListenerAdapter() {
@@ -1763,8 +1929,17 @@ class FullPlayer @JvmOverloads constructor(
 
     private fun scheduleControlsHide() {
         removeCallbacks(hideControlsRunnable)
+        // A tablet's controls are beside the lyrics rather than under them, so they have nothing
+        // to get out of the way of - `06`, `09` and `10` all keep the transport up while reading.
+        if (isTabletLayout) return
         if (contentType == ContentType.LYRICS) {
-            postDelayed(hideControlsRunnable, CONTROLS_HIDE_DELAY_MS)
+            // Landscape shares one half between the chrome and the lyrics, so the chrome does not
+            // linger over them: the wait exists only to let you finish reading the transport after
+            // a tap put it back.
+            postDelayed(
+                hideControlsRunnable,
+                if (isWideLayout) CONTROLS_HIDE_DELAY_WIDE_MS else CONTROLS_HIDE_DELAY_MS,
+            )
         }
     }
 
@@ -1784,6 +1959,70 @@ class FullPlayer @JvmOverloads constructor(
             setControlsVisibility(false)
         }
     }
+
+    private var lyricsTouchDownX = 0F
+    private var lyricsTouchDownY = 0F
+    private var lyricsTouchDownAt = 0L
+
+    /**
+     * The lyrics keep their own touches on a landscape canvas.
+     *
+     * In portrait, a touch while the chrome is hidden is swallowed whole to bring it back, which
+     * is fine there because the lyrics fill the screen and the chrome is what you are reaching
+     * for. Landscape gives the lyrics half a screen and takes the chrome out of it entirely, so
+     * swallowing the gesture left them unscrollable and their lines unseekable - the only thing a
+     * touch could ever do was put the chrome back. Nothing is consumed here: a drag scrolls the
+     * lyrics and a tap reaches the line under it.
+     *
+     * Recalling the chrome is everywhere *except* the lyrics - the artwork beside them, or any of
+     * the space around it. A tap on a line already means something else there; asking it to seek
+     * and to summon the transport at the same time made every seek flash the chrome over the words
+     * that had just been jumped to.
+     */
+    private fun dispatchWideLyricsTouch(event: MotionEvent): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                removeCallbacks(hideControlsRunnable)
+                lyricsTouchDownX = event.x
+                lyricsTouchDownY = event.y
+                lyricsTouchDownAt = event.eventTime
+            }
+
+            MotionEvent.ACTION_UP -> {
+                val slop = ViewConfiguration.get(context).scaledTouchSlop
+                val tapped = abs(event.x - lyricsTouchDownX) <= slop &&
+                    abs(event.y - lyricsTouchDownY) <= slop &&
+                    event.eventTime - lyricsTouchDownAt <= LYRICS_TAP_TIMEOUT_MS
+                if (tapped && !isInsideLyricsPane(lyricsTouchDownX, lyricsTouchDownY) &&
+                    lyricsControlsHidden
+                ) {
+                    showLyricsControls(scheduleHide = true)
+                } else {
+                    scheduleControlsHide()
+                }
+            }
+
+            MotionEvent.ACTION_CANCEL -> scheduleControlsHide()
+        }
+        return super.dispatchTouchEvent(event)
+    }
+
+    /**
+     * Non-interactive player space falls through to [FloatingPanelLayout], which owns vertical
+     * collapse and artwork-swipe detection. Its confirmed tap comes back here; lyric taps never
+     * take this path because the lyrics scroll view keeps its own gesture from ACTION_DOWN.
+     */
+    override fun onPlayerSurfaceTap(x: Float, y: Float) {
+        if (contentType == ContentType.LYRICS && isWideLayout && lyricsControlsHidden &&
+            !isInsideLyricsPane(x, y)
+        ) {
+            showLyricsControls(scheduleHide = true)
+        }
+    }
+
+    private fun isInsideLyricsPane(x: Float, y: Float): Boolean =
+        x >= fadingEdgeLayout.left && x <= fadingEdgeLayout.right &&
+            y >= fadingEdgeLayout.top && y <= fadingEdgeLayout.bottom
 
     private fun showLyricsControls(scheduleHide: Boolean) {
         removeCallbacks(hideControlsRunnable)
@@ -1835,14 +2074,33 @@ class FullPlayer @JvmOverloads constructor(
             speakerHintView,
             speakerFullHintView,
             captionOverlayButton,
+            karaokeOverlayButton,
             airplayOverlayButton,
             listOverlayButton,
             outputDeviceIcon,
             outputDeviceName,
             qualityBadge,
+            karaokeStatus,
         ).forEach { applyControlCollapse(it, fraction) }
+        identityRowThatCollapses().forEach { applyControlCollapse(it, fraction) }
         updateLyricsClip(fraction)
     }
+
+    /**
+     * The track's name, artist, favourite and overflow, when they are the chrome's to take away.
+     *
+     * In portrait they are not: folding the artwork into the toolbar carries all four up with it.
+     * A wide canvas does not fold, so on a landscape phone - where lyrics want the whole right half
+     * that these four sit at the top of - they leave with the rest of the chrome and come back with
+     * it. A tablet keeps them: its column is beside the lyrics, not underneath them, and every
+     * reference shows the name still there while the lyrics run.
+     */
+    private fun identityRowThatCollapses(): List<View> =
+        if (isWideLayout && !isTabletLayout) {
+            listOf(titleTextView, subtitleTextView, starTransformButton, ellipsisButton)
+        } else {
+            emptyList()
+        }
 
     private fun applyControlCollapse(view: View, fraction: Float) {
         view.alpha = 1F - fraction
@@ -1865,6 +2123,12 @@ class FullPlayer @JvmOverloads constructor(
             captionOverlayButton,
             listOverlayButton,
         ).forEach { it.visibility = visibility }
+        identityRowThatCollapses().forEach { it.visibility = visibility }
+        // GONE, not INVISIBLE: this button sits in the bottom row's horizontal chain, so an
+        // invisible one still reserves its slot and leaves the three permanent buttons laid out
+        // as though there were four - the middle one drifting off the centre its own device label
+        // is aligned to.
+        karaokeOverlayButton.visibility = if (visible && karaokeAvailable) VISIBLE else GONE
         if (visible) {
             refreshOutputDevice()
             syncQualityBadgeVisibility()
@@ -1893,12 +2157,25 @@ class FullPlayer @JvmOverloads constructor(
         val clipBottom = (
             controlsTop + (height - controlsTop) * fraction
         ).toInt().coerceIn(0, height)
-        lyricsClipRect.set(0, 0, fadingEdgeLayout.width, clipBottom)
+        // The identity row is above the lyrics rather than folded away into a toolbar here, so the
+        // pane has to start below it or the current line is drawn straight through the title.
+        // It opens back up as the row leaves.
+        val identityBottom = if (identityRowThatCollapses().isEmpty()) {
+            0
+        } else {
+            (subtitleTextView.bottom - fadingEdgeLayout.top + 12.dp.px).toInt().coerceIn(0, height)
+        }
+        val clipTop = (identityBottom * (1F - fraction)).toInt().coerceIn(0, clipBottom)
+        lyricsClipRect.set(0, clipTop, fadingEdgeLayout.width, clipBottom)
         fadingEdgeLayout.clipBounds = lyricsClipRect
         fadingEdgeLayout.setBottomFadeOffset(height - clipBottom)
     }
 
     private var lastDisposable: Disposable? = null
+    private var lyricsRefreshJob: Job? = null
+    private var artworkLookupJob: Job? = null
+    private var embeddedArtworkJob: Job? = null
+    private var loadedArtworkIdentity: String? = null
 
     /**
      * The badge describes the format the player selected, which is only known once the tracks for
@@ -1912,12 +2189,20 @@ class FullPlayer @JvmOverloads constructor(
      */
     private fun refreshLyrics() {
         val controller = instance ?: return
-        CoroutineScope(Dispatchers.Main).launch {
+        val mediaId = controller.currentMediaItem?.mediaId ?: return
+        cachedLyrics.takeIf { cachedLyricsMediaId == mediaId }?.let {
+            // Recreation should paint the last confirmed value immediately. The service may still
+            // be resolving the same lyrics, but an unchanged item must not flash empty meanwhile.
+            lyricsViewModel?.setLyrics(it)
+        }
+        lyricsRefreshJob?.cancel()
+        lyricsRefreshJob = (findViewTreeLifecycleOwner()?.lifecycleScope
+            ?: CoroutineScope(Dispatchers.Main)).launch {
             // Two steps on purpose. MediaController rejects calls from any thread but the one it
             // was built on, so the command has to be sent from here; waiting on the reply blocks,
             // so that part cannot be. Doing both off-main threw IllegalStateException every time,
             // which is why lyrics never appeared.
-            val resolved = runCatching {
+            val resolvedResult = runCatching {
                 val future = controller.sendCustomCommand(
                     SessionCommand(GramophonePlaybackService.SERVICE_GET_LYRICS, Bundle.EMPTY),
                     Bundle.EMPTY
@@ -1928,8 +2213,22 @@ class FullPlayer @JvmOverloads constructor(
                         future.get().extras, "lyrics", MediaStoreUtils.Lyric::class.java
                     ) as Array<MediaStoreUtils.Lyric>?
                 }?.toList()
-            }.onFailure { Log.e(TAG, "fetching lyrics failed", it) }.getOrNull()
-            val mapped = resolved.orEmpty()
+            }.onFailure { Log.e(TAG, "fetching lyrics failed", it) }
+            // A failed refresh says nothing about whether the previous lyrics are still valid.
+            // Keep them for the same media id; only a successful empty response means "no lyrics".
+            if (resolvedResult.isFailure && cachedLyricsMediaId == mediaId) return@launch
+            val resolved = resolvedResult.getOrNull()
+            val translated = if (
+                PreferenceManager.getDefaultSharedPreferences(context)
+                    .getBoolean("automatic_lyrics_translation", false)
+            ) {
+                withContext(Dispatchers.IO) {
+                    AutomaticLyricsTranslator.translateMissing(resolved.orEmpty())
+                }
+            } else {
+                resolved.orEmpty()
+            }
+            val mapped = translated
                 // The service prepends an empty element as a lead-in; it has no text to show.
                 .filter { !it.content.isNullOrBlank() }
                 .map { lyric ->
@@ -1950,13 +2249,17 @@ class FullPlayer @JvmOverloads constructor(
             withContext(Dispatchers.Main) {
                 // An empty list renders as a black screen with nothing in it, which reads as a bug
                 // rather than as "this track has no lyrics". Say so instead.
-                lyricsViewModel?.setLyrics(
-                    if (mapped.isEmpty()) {
+                val display = if (mapped.isEmpty()) {
                         Lyrics(listOf(LyricsLine(0L, null, context.getString(R.string.no_lyrics), null)))
                     } else {
                         Lyrics(mapped)
                     }
-                )
+                if (instance?.currentMediaItem?.mediaId != mediaId) return@withContext
+                if (cachedLyricsMediaId != mediaId || cachedLyrics != display) {
+                    cachedLyricsMediaId = mediaId
+                    cachedLyrics = display
+                    lyricsViewModel?.setLyrics(display)
+                }
             }
         }
     }
@@ -2593,10 +2896,149 @@ class FullPlayer @JvmOverloads constructor(
         }
     }
 
+    /** Starts, cancels, enables, or disables the reversible instrumental stream for this track. */
+    private fun toggleKaraoke() {
+        if (JellyfinRemoteTargets.active.value != null) {
+            Toast.makeText(context, R.string.karaoke_local_only, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val player = instance ?: return
+        val item = player.currentMediaItem ?: return
+        if (KaraokeMediaItems.isActive(item)) {
+            karaokeJob?.cancel()
+            switchKaraokeItem(KaraokeMediaItems.deactivate(item), active = false)
+            showKaraokeStatus(context.getString(R.string.karaoke_off), transient = true)
+            return
+        }
+        if (karaokeJob?.isActive == true) {
+            karaokeJob?.cancel()
+            karaokeJob = null
+            hideKaraokeStatus()
+            Toast.makeText(context, R.string.karaoke_cancelled, Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val mediaId = item.mediaId
+        karaokeJob = findViewTreeLifecycleOwner()?.lifecycleScope?.launch {
+            showKaraokeStatus(context.getString(R.string.karaoke_checking))
+            var state = JellyfinKaraoke.prepare(context, mediaId).getOrElse {
+                showKaraokeFailure(it.message)
+                return@launch
+            }
+            while (karaokeMediaId == mediaId &&
+                state.status in setOf(JellyfinKaraoke.Status.QUEUED, JellyfinKaraoke.Status.PROCESSING)
+            ) {
+                renderKaraokeState(state)
+                delay(KARAOKE_POLL_INTERVAL_MS)
+                state = JellyfinKaraoke.status(context, mediaId).getOrElse {
+                    showKaraokeFailure(it.message)
+                    return@launch
+                }
+            }
+            if (karaokeMediaId != mediaId) return@launch
+            when (state.status) {
+                JellyfinKaraoke.Status.READY -> {
+                    val stream = state.streamUrl
+                    val current = instance?.currentMediaItem
+                    if (stream == null || current?.mediaId != mediaId) return@launch
+                    switchKaraokeItem(KaraokeMediaItems.activate(current, stream), active = true)
+                    showKaraokeStatus(context.getString(R.string.karaoke_ready), transient = true)
+                }
+                JellyfinKaraoke.Status.FAILED -> showKaraokeFailure(state.message)
+                else -> hideKaraokeStatus()
+            }
+        }
+    }
+
+    private fun switchKaraokeItem(item: MediaItem, active: Boolean) {
+        val player = instance ?: return
+        val index = player.currentMediaItemIndex
+        if (index !in 0 until player.mediaItemCount) return
+        val position = player.currentPosition.coerceAtLeast(0L)
+        val playWhenReady = player.playWhenReady
+        karaokeSwitchMediaId = item.mediaId
+        setBottomButtonSelected(karaokeOverlayButton, active)
+        player.replaceMediaItem(index, item)
+        player.seekTo(index, position)
+        player.prepare()
+        player.playWhenReady = playWhenReady
+        postDelayed({
+            if (karaokeSwitchMediaId == item.mediaId) karaokeSwitchMediaId = null
+        }, KARAOKE_SWITCH_GUARD_MS)
+    }
+
+    /** Checks availability without preparing anything, so unsupported/local tracks stay uncluttered. */
+    private fun refreshKaraoke(mediaItem: MediaItem?) {
+        karaokeJob?.cancel()
+        karaokeJob = null
+        karaokeMediaId = mediaItem?.mediaId
+        val active = KaraokeMediaItems.isActive(mediaItem)
+        setBottomButtonSelected(karaokeOverlayButton, active)
+        karaokeAvailable = active
+        karaokeOverlayButton.visibility = if (active && !lyricsControlsHidden) VISIBLE else GONE
+        karaokeStatus.removeCallbacks(hideKaraokeStatusRunnable)
+        karaokeStatus.visibility = GONE
+        val mediaId = mediaItem?.mediaId?.takeIf(String::isNotBlank) ?: return
+        karaokeJob = findViewTreeLifecycleOwner()?.lifecycleScope?.launch {
+            val state = JellyfinKaraoke.status(context, mediaId).getOrNull() ?: return@launch
+            if (karaokeMediaId != mediaId) return@launch
+            karaokeAvailable = true
+            if (!lyricsControlsHidden) karaokeOverlayButton.visibility = VISIBLE
+        }
+    }
+
+    private fun renderKaraokeState(state: JellyfinKaraoke.State) {
+        val text = when (state.status) {
+            JellyfinKaraoke.Status.QUEUED -> context.getString(R.string.karaoke_queued)
+            JellyfinKaraoke.Status.PROCESSING -> when (state.phase) {
+                "encoding" -> context.getString(R.string.karaoke_encoding)
+                else -> context.getString(R.string.karaoke_separating)
+            }
+            else -> return
+        }
+        showKaraokeStatus(text)
+    }
+
+    private fun showKaraokeFailure(message: String?) {
+        hideKaraokeStatus()
+        Toast.makeText(
+            context,
+            context.getString(R.string.karaoke_failed, message ?: "Unknown error"),
+            Toast.LENGTH_LONG,
+        ).show()
+    }
+
+    private fun showKaraokeStatus(text: String, transient: Boolean = false) {
+        karaokeStatus.removeCallbacks(hideKaraokeStatusRunnable)
+        karaokeStatus.text = text
+        karaokeStatus.visibility = VISIBLE
+        qualityBadge.visibility = GONE
+        qualityAvailableHint.visibility = GONE
+        if (transient) karaokeStatus.postDelayed(hideKaraokeStatusRunnable, KARAOKE_STATUS_HOLD_MS)
+    }
+
+    private fun hideKaraokeStatus() {
+        karaokeStatus.removeCallbacks(hideKaraokeStatusRunnable)
+        karaokeStatus.visibility = GONE
+        syncQualityBadgeVisibility()
+    }
+
+    private val hideKaraokeStatusRunnable = Runnable { hideKaraokeStatus() }
+
     override fun onMediaItemTransition(
         mediaItem: MediaItem?,
         reason: Int
     ) {
+        if (karaokeSwitchMediaId == mediaItem?.mediaId) {
+            karaokeSwitchMediaId = null
+            fullPlayerToolbar.onMediaItemTransition(mediaItem, reason)
+            qualityBadge.visibility = GONE
+            showCachedLyricsOrEmpty(mediaItem)
+            refreshLyrics()
+            refreshKaraoke(mediaItem)
+            updateProgressDisplay()
+            return
+        }
         coverSwipeHaptics.reset()
         fullPlayerToolbar.onMediaItemTransition(mediaItem, reason)
         // The headings are relative to what is playing, and advancing a track moves that line
@@ -2609,7 +3051,8 @@ class FullPlayer @JvmOverloads constructor(
         // Hide until the new item's tracks arrive, so the previous track's badge does not linger
         // over a different song.
         qualityBadge.visibility = GONE
-        lyricsViewModel?.setLyrics(Lyrics.Empty)
+        refreshKaraoke(mediaItem)
+        showCachedLyricsOrEmpty(mediaItem)
         refreshLyrics()
         if (instance?.mediaItemCount != 0) {
             lastDisposable?.dispose()
@@ -2637,6 +3080,14 @@ class FullPlayer @JvmOverloads constructor(
             updateProgressDisplay()
             updateFavoriteButtons(false)
         }
+    }
+
+    override fun onPlayerError(error: PlaybackException) {
+        val current = instance?.currentMediaItem ?: return
+        if (!KaraokeMediaItems.isActive(current)) return
+        Log.w(TAG, "Instrumental stream failed; restoring original track", error)
+        Toast.makeText(context, R.string.karaoke_stream_failed, Toast.LENGTH_LONG).show()
+        switchKaraokeItem(KaraokeMediaItems.deactivate(current), active = false)
     }
 
     /**
@@ -2691,6 +3142,7 @@ class FullPlayer @JvmOverloads constructor(
         bitmap: android.graphics.Bitmap?
     ) {
         appliedCoverBitmap = bitmap
+        meshGradientView.setArtwork(bitmap)
         blendView.setImageBitmap(bitmap)
         fullPlayerToolbar.setImageViewCover(drawable)
         floatingPanelLayout.transitionImageView?.setImageDrawable(drawable)
@@ -2804,20 +3256,431 @@ class FullPlayer @JvmOverloads constructor(
                 TAG,
                 "load cover for ${mediaItem?.mediaMetadata?.title} at ${coverSimpleImageView.width} ${coverSimpleImageView.height}"
             )
-            lastDisposable = context.imageLoader.enqueue(
+            val artwork = mediaItem?.mediaMetadata?.artworkUri
+            if (artwork != null) {
+                enqueueCover(mediaItem.mediaId, artwork)
+                return
+            }
+
+            // A MediaSession queue restored after process death can contain an incomplete copy of
+            // metadata even though the freshly cached library has the complete item. Do not pass
+            // null to Coil (which clears a perfectly useful cached drawable); recover the URI by
+            // stable media id, then by stable album id for older saved queues.
+            val mediaId = mediaItem?.mediaId ?: return
+            embeddedArtworkFile(mediaId).takeIf(File::isFile)?.let {
+                enqueueCover(mediaId, Uri.fromFile(it))
+                return
+            }
+            artworkLookupJob?.cancel()
+            artworkLookupJob = (findViewTreeLifecycleOwner()?.lifecycleScope
+                ?: CoroutineScope(Dispatchers.Main)).launch {
+                val resolved = resolveCachedArtwork(mediaItem)
+                if (resolved != null && instance?.currentMediaItem?.mediaId == mediaId) {
+                    enqueueCover(mediaId, resolved)
+                } else if (appliedCoverBitmap == null) {
+                    applyCover(AppCompatResources.getDrawable(context, R.drawable.default_cover), null)
+                }
+            }
+        }
+    }
+
+    fun showContentFromPreview(value: ContentType) {
+        if (contentType != value) contentType = value
+    }
+
+    fun showPopupFromPreview(anchor: View) {
+        callUpPlayerPopupMenu(anchor)
+    }
+
+    /**
+     * The portrait constraint chain is intentionally album-art-first. On a short landscape phone
+     * that same vertical chain leaves almost no room for controls, while on a tablet it inflates
+     * the cover to poster size. Split a genuinely wide canvas at a bounded 46% instead: artwork
+     * on the left, metadata and controls on the right. A portrait tablet is still a portrait
+     * player; its artwork is capped by the layout resource rather than being pushed into a
+     * landscape arrangement merely because its smallest width crosses Android's tablet boundary.
+     */
+    private fun configureWideLayout() {
+        val configuration = resources.configuration
+        val widthDp = configuration.screenWidthDp
+        val heightDp = configuration.screenHeightDp
+
+        // The *window's* smallest side, not the device's. `smallestScreenWidthDp` still reports
+        // 600+ for a phone-sized split-screen or freeform window on a tablet, which would take a
+        // layout whose column and full control stack need far more room than the window has.
+        isTabletLayout = min(widthDp, heightDp) >= TABLET_WINDOW_DP
+        if (isTabletLayout) configureTabletActionRow()
+
+        if (widthDp <= heightDp) return
+        isWideLayout = true
+
+        // The rows are fractions of the canvas, but what stands on them is fixed dp: two lines of
+        // 21sp between the title and the scrubber, a 72dp transport button, a 48dp action row.
+        // Below these heights a fraction hands a row less room than its contents need and they
+        // collide, so the older margin-driven chain - which can crowd but cannot overlap - keeps
+        // the short windows.
+        if (isTabletLayout && heightDp >= TABLET_RHYTHM_MIN_HEIGHT_DP) {
+            configureTabletLandscape()
+            return
+        }
+        // A tablet-sized window too short for that column is a landscape phone in every way that
+        // matters here, including the controls stepping aside for the pane.
+        isTabletLayout = false
+        val proportional = heightDp >= PHONE_RHYTHM_MIN_HEIGHT_DP
+
+        val split = Guideline(context).apply { id = View.generateViewId() }
+        addView(split, LayoutParams(0, 0).apply {
+            orientation = LayoutParams.VERTICAL
+            guidePercent = 0.46F
+        })
+
+        // Rows measured off `11-compact-landscape-player.jpg`. The stack used to hang off fixed
+        // margins and drifted low as the pane grew: the scrubber sat at 45% where the reference
+        // has it at 36%, and the volume row at 78% against 66%.
+        val titleRow = if (proportional) horizontalGuide(0.200F) else null
+        val progressRow = if (proportional) horizontalGuide(0.335F) else null
+        val volumeRow = if (proportional) horizontalGuide(0.635F) else null
+        val actionRow = if (proportional) horizontalGuide(0.805F) else null
+
+        ConstraintSet().apply {
+            clone(this@FullPlayer)
+
+            // The control column is the right-hand pane here, uncapped: the artwork it is normally
+            // sized against has moved out of it. Everything anchored to the column follows, so the
+            // re-anchors below only have to cover what the column does not already carry.
+            clear(R.id.content_column, ConstraintSet.START)
+            clear(R.id.content_column, ConstraintSet.END)
+            connect(R.id.content_column, ConstraintSet.START, split.id, ConstraintSet.END)
+            connect(R.id.content_column, ConstraintSet.END, ConstraintSet.PARENT_ID, ConstraintSet.END)
+            constrainMaxWidth(R.id.content_column, 0)
+
+            // Both skip buttons bias inside the pane, so the two gaps either side of the play
+            // button are equal. Biasing the back one across the whole width - which is what the
+            // parent anchor did - made it drift left as the pane grew, and the trio came out
+            // lopsided against every reference.
+            clear(R.id.backward_btn, ConstraintSet.START)
+            connect(R.id.backward_btn, ConstraintSet.START, split.id, ConstraintSet.END)
+            clear(R.id.forward_btn, ConstraintSet.END)
+            connect(R.id.forward_btn, ConstraintSet.END, ConstraintSet.PARENT_ID, ConstraintSet.END)
+
+            // Measured from the canvas, not from the divider: the divider's own height pushed the
+            // artwork down until it ran past the action row instead of centring in the half.
+            clear(R.id.cover)
+            connect(R.id.cover, ConstraintSet.TOP, ConstraintSet.PARENT_ID, ConstraintSet.TOP, 18.dp.px.toInt())
+            connect(R.id.cover, ConstraintSet.BOTTOM, ConstraintSet.PARENT_ID, ConstraintSet.BOTTOM, 18.dp.px.toInt())
+            connect(R.id.cover, ConstraintSet.START, ConstraintSet.PARENT_ID, ConstraintSet.START, 28.dp.px.toInt())
+            connect(R.id.cover, ConstraintSet.END, split.id, ConstraintSet.END, 28.dp.px.toInt())
+            sizeCoverSquare(
+                min(0.46F * configuration.screenWidthDp - 56F, configuration.screenHeightDp - 36F)
+            )
+
+            clear(R.id.title, ConstraintSet.TOP)
+            clear(R.id.title, ConstraintSet.START)
+            connect(R.id.title, ConstraintSet.START, split.id, ConstraintSet.END, 34.dp.px.toInt())
+
+            clear(R.id.progressBar, ConstraintSet.START)
+            connect(R.id.progressBar, ConstraintSet.START, split.id, ConstraintSet.END, 28.dp.px.toInt())
+            connect(R.id.progressBar, ConstraintSet.END, ConstraintSet.PARENT_ID, ConstraintSet.END, 28.dp.px.toInt())
+
+            if (titleRow != null && progressRow != null && volumeRow != null && actionRow != null) {
+                connect(R.id.title, ConstraintSet.TOP, titleRow.id, ConstraintSet.TOP)
+
+                clear(R.id.progressBar, ConstraintSet.TOP)
+                connect(R.id.progressBar, ConstraintSet.TOP, progressRow.id, ConstraintSet.TOP)
+
+                clear(R.id.speaker_hint, ConstraintSet.BOTTOM)
+                connect(R.id.speaker_hint, ConstraintSet.TOP, volumeRow.id, ConstraintSet.TOP)
+
+                clear(R.id.list, ConstraintSet.BOTTOM)
+                connect(R.id.list, ConstraintSet.TOP, actionRow.id, ConstraintSet.TOP)
+            } else {
+                connect(R.id.title, ConstraintSet.TOP, R.id.divider, ConstraintSet.BOTTOM, 34.dp.px.toInt())
+                setMargin(R.id.progressBar, ConstraintSet.TOP, 18.dp.px.toInt())
+            }
+
+            clear(R.id.main_control_btn, ConstraintSet.START)
+            clear(R.id.main_control_btn, ConstraintSet.END)
+            connect(R.id.main_control_btn, ConstraintSet.START, split.id, ConstraintSet.END)
+            connect(R.id.main_control_btn, ConstraintSet.END, ConstraintSet.PARENT_ID, ConstraintSet.END)
+
+            clear(R.id.caption, ConstraintSet.START)
+            connect(R.id.caption, ConstraintSet.START, split.id, ConstraintSet.END)
+            clear(R.id.speaker_hint, ConstraintSet.START)
+            connect(R.id.speaker_hint, ConstraintSet.START, split.id, ConstraintSet.END, 34.dp.px.toInt())
+
+            clear(R.id.output_device_name, ConstraintSet.START)
+            connect(R.id.output_device_name, ConstraintSet.START, split.id, ConstraintSet.END)
+
+            clear(R.id.quality_badge, ConstraintSet.START)
+            connect(R.id.quality_badge, ConstraintSet.START, split.id, ConstraintSet.END)
+            clear(R.id.quality_available_hint, ConstraintSet.START)
+            connect(R.id.quality_available_hint, ConstraintSet.START, split.id, ConstraintSet.END)
+            clear(R.id.karaoke_status, ConstraintSet.START)
+            connect(R.id.karaoke_status, ConstraintSet.START, split.id, ConstraintSet.END)
+
+            // Lyrics and the queue are the right half, beside artwork that stays at full size.
+            for (pane in intArrayOf(R.id.fading, R.id.queue_container)) {
+                clear(pane, ConstraintSet.START)
+                clear(pane, ConstraintSet.TOP)
+                clear(pane, ConstraintSet.BOTTOM)
+                connect(pane, ConstraintSet.START, split.id, ConstraintSet.END, 28.dp.px.toInt())
+                connect(pane, ConstraintSet.END, ConstraintSet.PARENT_ID, ConstraintSet.END, 28.dp.px.toInt())
+                if (pane == R.id.fading) {
+                    // Use the artwork itself as the ruler. It is a fixed square centred between
+                    // the screen-edge constraints, so repeating those constraints on the lyrics
+                    // produces a taller box. Direct anchors make both blurred edges line up while
+                    // leaving FadingVerticalEdgeLayout's top and bottom fades intact.
+                    connect(pane, ConstraintSet.TOP, R.id.cover, ConstraintSet.TOP)
+                    connect(pane, ConstraintSet.BOTTOM, R.id.cover, ConstraintSet.BOTTOM)
+                } else {
+                    // The queue has no clip of its own, so it keeps clear of the row by hand.
+                    connect(pane, ConstraintSet.TOP, ConstraintSet.PARENT_ID, ConstraintSet.TOP, 18.dp.px.toInt())
+                    connect(pane, ConstraintSet.BOTTOM, R.id.list, ConstraintSet.TOP, 8.dp.px.toInt())
+                }
+            }
+            applyTo(this@FullPlayer)
+        }
+    }
+
+    private fun horizontalGuide(percent: Float) =
+        Guideline(context).apply { id = View.generateViewId() }.also {
+            addView(it, LayoutParams(0, 0).apply {
+                orientation = LayoutParams.HORIZONTAL
+                guidePercent = percent
+            })
+        }
+
+    /**
+     * Sizes the artwork to an exact square of [sideDp], rather than asking for one.
+     *
+     * A square *asked* for - both dimensions free, a `1:1` ratio and a cap - lands well under its
+     * cap, because the artwork sits in a vertical chain with the title and a free dimension in a
+     * chain takes a share of the leftover space before the ratio is applied. It came out at 467dp
+     * inside a 560dp cap in portrait and 247dp inside 327dp on a landscape phone, and prefixing
+     * the ratio did not help. The caller has already reduced the two directions to one number, so
+     * the size is simply stated. It can never overflow: [sideDp] is the smaller direction.
+     */
+    private fun ConstraintSet.sizeCoverSquare(sideDp: Float) {
+        val side = sideDp.coerceAtLeast(0F).dp.px.toInt()
+        setDimensionRatio(R.id.cover, "")
+        constrainWidth(R.id.cover, side)
+        constrainHeight(R.id.cover, side)
+        constrainMaxWidth(R.id.cover, side)
+        constrainMaxHeight(R.id.cover, side)
+    }
+
+    /**
+     * The output button goes to one end of the row and the two destinations to the other.
+     *
+     * A phone spreads lyrics, output and queue evenly because the row is the width of a phone. On
+     * a tablet the references press the two destinations together at the far end with the output
+     * alone at the near one - `01`, `09` and `10` all show it - so the row does not read as three
+     * unrelated taps strung across half a metre of glass.
+     */
+    private fun configureTabletActionRow() {
+        ConstraintSet().apply {
+            clone(this@FullPlayer)
+
+            clear(R.id.airplay, ConstraintSet.START)
+            clear(R.id.airplay, ConstraintSet.END)
+            connect(R.id.airplay, ConstraintSet.START, R.id.content_column, ConstraintSet.START)
+
+            clear(R.id.karaoke, ConstraintSet.START)
+            clear(R.id.karaoke, ConstraintSet.END)
+            connect(R.id.karaoke, ConstraintSet.END, R.id.caption, ConstraintSet.START)
+
+            clear(R.id.caption, ConstraintSet.START)
+            clear(R.id.caption, ConstraintSet.END)
+            connect(R.id.caption, ConstraintSet.END, R.id.list, ConstraintSet.START, 8.dp.px.toInt())
+
+            clear(R.id.list, ConstraintSet.START)
+            connect(R.id.list, ConstraintSet.END, R.id.content_column, ConstraintSet.END)
+
+            // Portrait only: `01` puts the artwork at 78% of the width, and the same bare-ratio
+            // shortfall was leaving it at 58%. Landscape sizes its own in configureTabletLandscape.
+            val configuration = resources.configuration
+            if (configuration.screenWidthDp <= configuration.screenHeightDp) {
+                sizeCoverSquare(
+                    min(0.78F * configuration.screenWidthDp, 0.56F * configuration.screenHeightDp)
+                )
+            }
+
+            applyTo(this@FullPlayer)
+        }
+    }
+
+    /**
+     * The landscape tablet, which is not a wider landscape phone.
+     *
+     * A landscape phone splits the canvas in two and hands the whole right half to the controls,
+     * so opening lyrics or the queue has to take that half back off them. A tablet does not: the
+     * references keep artwork *and* every control together in one narrow left column and reserve
+     * the right for lyrics or the queue, which is why the transport does not move when either
+     * opens. Running the phone's arrangement here also left the artwork at a phone's 360dp
+     * ceiling and the control rows pinned to the top and bottom of a pane twice as tall, with two
+     * voids where the reference has an even rhythm.
+     *
+     * The percentages are measured off `06-landscape-lyrics-split.png` (right half) and
+     * `10-landscape-player-lyrics-alt.png`, which agree to within a percent of each other. They
+     * are fractions of the canvas rather than fixed margins so the rhythm survives any height.
+     */
+    private fun configureTabletLandscape() {
+        fun guide(percent: Float, vertical: Boolean) =
+            Guideline(context).apply { id = View.generateViewId() }.also {
+                addView(it, LayoutParams(0, 0).apply {
+                    orientation = if (vertical) LayoutParams.VERTICAL else LayoutParams.HORIZONTAL
+                    guidePercent = percent
+                })
+            }
+
+        // The column the artwork and every control share, and the row each of them sits on.
+        val columnStart = guide(0.05F, vertical = true)
+        val columnEnd = guide(0.40F, vertical = true)
+        val paneStart = guide(0.45F, vertical = true)
+        val titleRow = guide(0.585F, vertical = false)
+        val progressRow = guide(0.665F, vertical = false)
+        val volumeRow = guide(0.859F, vertical = false)
+        val actionRow = guide(0.911F, vertical = false)
+
+        ConstraintSet().apply {
+            clone(this@FullPlayer)
+
+            clear(R.id.content_column, ConstraintSet.START)
+            clear(R.id.content_column, ConstraintSet.END)
+            connect(R.id.content_column, ConstraintSet.START, columnStart.id, ConstraintSet.START)
+            connect(R.id.content_column, ConstraintSet.END, columnEnd.id, ConstraintSet.END)
+            constrainMaxWidth(R.id.content_column, 0)
+
+            // Uncapped: the column is the cap, and the artwork fills whatever the rows leave it.
+            clear(R.id.cover)
+            connect(R.id.cover, ConstraintSet.TOP, ConstraintSet.PARENT_ID, ConstraintSet.TOP, 18.dp.px.toInt())
+            connect(R.id.cover, ConstraintSet.BOTTOM, titleRow.id, ConstraintSet.TOP, 18.dp.px.toInt())
+            connect(R.id.cover, ConstraintSet.START, columnStart.id, ConstraintSet.START)
+            connect(R.id.cover, ConstraintSet.END, columnEnd.id, ConstraintSet.END)
+            val configuration = resources.configuration
+            sizeCoverSquare(
+                min(0.35F * configuration.screenWidthDp, 0.585F * configuration.screenHeightDp - 36F)
+            )
+
+            clear(R.id.title, ConstraintSet.TOP)
+            connect(R.id.title, ConstraintSet.TOP, titleRow.id, ConstraintSet.TOP)
+            // Flush with the column, and the scrubber's track pulled out to meet it: the slider
+            // insets its own track by 16dp, which is exactly what the phone's 36/20 margin pair
+            // cancels out.
+            setMargin(R.id.title, ConstraintSet.START, 0)
+            setMargin(R.id.ellipsis, ConstraintSet.END, 0)
+
+            clear(R.id.progressBar, ConstraintSet.TOP)
+            connect(R.id.progressBar, ConstraintSet.TOP, progressRow.id, ConstraintSet.TOP)
+            setMargin(R.id.progressBar, ConstraintSet.START, (-16).dp.px.toInt())
+            setMargin(R.id.progressBar, ConstraintSet.END, (-16).dp.px.toInt())
+
+            clear(R.id.speaker_hint, ConstraintSet.BOTTOM)
+            connect(R.id.speaker_hint, ConstraintSet.TOP, volumeRow.id, ConstraintSet.TOP)
+
+            clear(R.id.list, ConstraintSet.BOTTOM)
+            connect(R.id.list, ConstraintSet.TOP, actionRow.id, ConstraintSet.TOP)
+
+            // Lyrics and the queue are the right-hand pane, not a sheet over the controls. Both
+            // run the full height of it, which is why neither displaces the transport.
+            for (pane in intArrayOf(R.id.fading, R.id.queue_container)) {
+                clear(pane, ConstraintSet.START)
+                clear(pane, ConstraintSet.TOP)
+                clear(pane, ConstraintSet.BOTTOM)
+                connect(pane, ConstraintSet.START, paneStart.id, ConstraintSet.START)
+                connect(pane, ConstraintSet.END, ConstraintSet.PARENT_ID, ConstraintSet.END, 40.dp.px.toInt())
+                connect(pane, ConstraintSet.TOP, ConstraintSet.PARENT_ID, ConstraintSet.TOP, 24.dp.px.toInt())
+                connect(pane, ConstraintSet.BOTTOM, ConstraintSet.PARENT_ID, ConstraintSet.BOTTOM, 24.dp.px.toInt())
+            }
+
+            applyTo(this@FullPlayer)
+        }
+    }
+
+    private fun enqueueCover(mediaId: String, artwork: Uri) {
+        if (instance?.currentMediaItem?.mediaId != mediaId) return
+        val identity = "$mediaId:$artwork"
+        if (identity == loadedArtworkIdentity && appliedCoverBitmap != null) return
+        loadedArtworkIdentity = identity
+        lastDisposable = context.imageLoader.enqueue(
                 ImageRequest.Builder(context).apply {
-                    data(mediaItem?.mediaMetadata?.artworkUri)
+                    data(artwork)
                     size(coverSimpleImageView.width, coverSimpleImageView.height)
                     scale(Scale.FILL)
                     target(onSuccess = {
                         applyCover(it.asDrawable(context.resources), it.toBitmap())
                     }, onError = {
+                        loadedArtworkIdentity = null
                         applyCover(it?.asDrawable(context.resources), it?.toBitmap())
                     }) // do not react to onStart() which sets placeholder
                     allowHardware(coverSimpleImageView.isHardwareAccelerated)
                 }.build()
             )
+    }
+
+    private suspend fun resolveCachedArtwork(mediaItem: MediaItem): Uri? {
+        val songs = activity.reader.songListSnapshot()
+        songs.firstOrNull { it.mediaId == mediaItem.mediaId }
+            ?.mediaMetadata?.artworkUri?.let { return it }
+        val extras = mediaItem.mediaMetadata.extras ?: return null
+        if (!extras.containsKey("AlbumId")) return null
+        val albumId = extras.getLong("AlbumId")
+        return songs.firstOrNull { candidate ->
+            val candidateExtras = candidate.mediaMetadata.extras
+            candidateExtras?.containsKey("AlbumId") == true &&
+                candidateExtras.getLong("AlbumId") == albumId &&
+                candidate.mediaMetadata.artworkUri != null
+        }?.mediaMetadata?.artworkUri
+    }
+
+    private fun showCachedLyricsOrEmpty(mediaItem: MediaItem?) {
+        lyricsViewModel?.setLyrics(
+            cachedLyrics.takeIf { cachedLyricsMediaId == mediaItem?.mediaId } ?: Lyrics.Empty
+        )
+    }
+
+    /**
+     * Extractors can discover embedded cover bytes after playback starts even when Jellyfin did
+     * not advertise an image. Keep the confirmed bytes by media id so the next Activity (and the
+     * collapsed player it owns) can paint them before the stream is parsed again.
+     */
+    override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) {
+        val mediaId = instance?.currentMediaItem?.mediaId ?: return
+        mediaMetadata.artworkUri?.let {
+            enqueueCover(mediaId, it)
+            return
         }
+        val bytes = mediaMetadata.artworkData ?: return
+        embeddedArtworkJob?.cancel()
+        embeddedArtworkJob = (findViewTreeLifecycleOwner()?.lifecycleScope
+            ?: CoroutineScope(Dispatchers.Main)).launch {
+            val file = withContext(Dispatchers.IO) { storeEmbeddedArtwork(mediaId, bytes) }
+            if (instance?.currentMediaItem?.mediaId == mediaId) {
+                enqueueCover(mediaId, Uri.fromFile(file))
+            }
+        }
+    }
+
+    private fun storeEmbeddedArtwork(mediaId: String, bytes: ByteArray): File {
+        val target = embeddedArtworkFile(mediaId)
+        target.parentFile?.mkdirs()
+        val unchanged = target.isFile && target.length() == bytes.size.toLong() &&
+            runCatching { target.readBytes().contentEquals(bytes) }.getOrDefault(false)
+        if (unchanged) return target
+        val pending = File(target.parentFile, "${target.name}.pending")
+        pending.writeBytes(bytes)
+        if (!pending.renameTo(target)) {
+            target.writeBytes(bytes)
+            pending.delete()
+        }
+        return target
+    }
+
+    private fun embeddedArtworkFile(mediaId: String): File {
+        val name = MessageDigest.getInstance("SHA-256")
+            .digest(mediaId.toByteArray())
+            .joinToString("") { "%02x".format(it) }
+        return File(context.cacheDir, "embedded_artwork/$name")
     }
 
     override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -2919,7 +3782,15 @@ class FullPlayer @JvmOverloads constructor(
     }
 
     private fun applyCoverScale() {
-        val queueBlend = transformationFraction.coerceIn(0F, 1F)
+        // Only the queue neutralises the paused scale while it folds the portrait artwork into
+        // its toolbar. Lyrics use the same content-transition fraction, but on a wide layout the
+        // artwork remains beside them and must keep its normal pause-to-shrink/play-to-expand
+        // behaviour.
+        val queueBlend = if (contentType == ContentType.PLAYLIST) {
+            transformationFraction.coerceIn(0F, 1F)
+        } else {
+            0F
+        }
         val effectivePauseScale = lerp(coverPauseScale, 1F, queueBlend)
         // Treat an invalid intermediate value as the neutral transform. This is a final safety
         // boundary: view properties must never receive NaN/Infinity even if layout and playback
@@ -3044,6 +3915,9 @@ class FullPlayer @JvmOverloads constructor(
     }
 
     override fun onDetachedFromWindow() {
+        karaokeJob?.cancel()
+        karaokeJob = null
+        karaokeStatus.removeCallbacks(hideKaraokeStatusRunnable)
         remoteTargetJob?.cancel()
         remoteTargetJob = null
         remotePlaybackJob?.cancel()
@@ -3061,6 +3935,10 @@ class FullPlayer @JvmOverloads constructor(
         airplayOverlayButton.removeCallbacks(resetAirplayButton)
         removeCallbacks(coverSlideBackstop)
         removeCallbacks(coverSlideInDeadline)
+        artworkLookupJob?.cancel()
+        artworkLookupJob = null
+        embeddedArtworkJob?.cancel()
+        embeddedArtworkJob = null
         coverSlideAnimator?.cancel()
         coverSlideAnimator = null
         coverSwipeHaptics.reset()
@@ -3183,6 +4061,23 @@ class FullPlayer @JvmOverloads constructor(
     }
 
     companion object {
+        /** Measured on the window, so a phone-sized window on a tablet is treated as one. */
+        private const val TABLET_WINDOW_DP = 600
+
+        /**
+         * Floors for the proportional rhythms, below which the fixed-size contents of a row no
+         * longer fit the fraction it is given. The tablet column needs ~60dp between the title and
+         * the scrubber out of the 8% it is allotted; the phone's 13.5% covers the same two lines.
+         */
+        private const val TABLET_RHYTHM_MIN_HEIGHT_DP = 720
+        private const val PHONE_RHYTHM_MIN_HEIGHT_DP = 360
+
+        private const val STATE_SUPER = "superState"
+        private const val STATE_CONTENT_TYPE = "contentType"
+
+        /** Last confirmed lyrics survive an Activity recreation for the unchanged media item. */
+        private var cachedLyricsMediaId: String? = null
+        private var cachedLyrics: Lyrics? = null
         const val TAG = "FullPlayer"
         private const val POSITION_UPDATE_INTERVAL_MS = 500L
 
@@ -3217,6 +4112,17 @@ class FullPlayer @JvmOverloads constructor(
         /** The longest the cover stays off screen waiting for artwork to load. */
         private const val COVER_ART_WAIT_MS = 90L
         private const val CONTROLS_HIDE_DELAY_MS = 3_000L
+
+        /**
+         * Landscape only. The chrome and the lyrics want the same half of the screen there, so it
+         * leaves as soon as the lyrics open and lingers only briefly after a tap has recalled it.
+         */
+        private const val CONTROLS_OPEN_HIDE_WIDE_MS = 180L
+        private const val CONTROLS_HIDE_DELAY_WIDE_MS = 1_400L
+        private const val LYRICS_TAP_TIMEOUT_MS = 300L
+        private const val KARAOKE_POLL_INTERVAL_MS = 2_000L
+        private const val KARAOKE_STATUS_HOLD_MS = 2_000L
+        private const val KARAOKE_SWITCH_GUARD_MS = 1_000L
 
         private const val PREF_AUTOPLAY = "autoplay_similar"
     }
