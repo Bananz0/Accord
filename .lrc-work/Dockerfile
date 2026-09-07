@@ -17,6 +17,9 @@ RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu 
 
 WORKDIR /app
 COPY service.py /app/service.py
+# The shared alignment rules. Pure Python, no dependencies, so it adds nothing to the
+# image beyond the file itself.
+COPY elrc_rules.py /app/elrc_rules.py
 COPY enhanced_lrc.py /app/enhanced_lrc.py
 COPY enhanced_lrc_receiver.py /app/enhanced_lrc_receiver.py
 COPY enhanced_lrc_gpu_api.py /app/enhanced_lrc_gpu_api.py

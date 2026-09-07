@@ -8,9 +8,9 @@
 > Deliberately a separate repo rather than a submodule: it moves at its own pace and
 > nothing in the Gradle build needs it present.
 >
-> **`enhanced_lrc.py` and the studio's `pipeline_core.py` now carry the same alignment
-> rules in two copies.** They were merged from the same fix and agree today; if one is
-> changed, change the other. Folding them into a single shared module is the open item.
+> **The alignment rules are now one module.** `elrc_rules.py` here is a verbatim copy of
+> the canonical file in that repository, imported by `enhanced_lrc.py` and copied into the
+> image by the Dockerfile. Do not edit the copy - change the canonical one and re-copy.
 
 
 The karaoke service runs a persistent CPU Enhanced LRC worker. Two additional

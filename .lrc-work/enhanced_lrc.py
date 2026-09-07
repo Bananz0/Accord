@@ -31,6 +31,20 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable
 
+# The alignment rules, shared with the desktop app and the batch runner. This file is a
+# verbatim copy of the canonical module in Bananz0/fincord-lyrics-studio - do not edit it
+# here. Three copies of these rules had already drifted into three different opinions
+# about the same bug, which is what folding them into one module ended.
+from elrc_rules import (  # noqa: E402
+    MAX_INTERIOR_HOLD_MS,
+    PLAUSIBLE_BASE_S,
+    PLAUSIBLE_PER_WORD_S,
+    SHORT_LINE_WORDS,
+    stamp_seconds as stamp,
+    stretched_word_in_rendered,
+    window_for,
+)
+
 
 LOG = logging.getLogger("accord-enhanced-lrc")
 MEDIA_ROOT = Path(os.environ.get("MEDIA_ROOT", "/data/media")).resolve()
@@ -275,13 +289,6 @@ def finish(path: Path, status: str, message: str, *, source: str | None = None, 
             (status, message[-1000:], source, str(output) if output else None,
              current_fingerprint, int(time.time()), str(path)),
         )
-
-
-def stamp(seconds: float, brackets: str = "<>") -> str:
-    centiseconds = max(0, round(seconds * 100))
-    minutes, centiseconds = divmod(centiseconds, 6000)
-    secs, centiseconds = divmod(centiseconds, 100)
-    return f"{brackets[0]}{minutes:02d}:{secs:02d}.{centiseconds:02d}{brackets[1]}"
 
 
 def parse_lrc(value: str) -> list[tuple[float, str]]:
@@ -533,17 +540,6 @@ def normalise_word(word: str, labels: set[str]) -> str:
     return "".join(ch for ch in word.upper() if ch in labels)
 
 
-# How long a line could plausibly take to sing: a base allowance plus a share per word.
-# Used to bound the CTC window so an instrumental gap is never offered to the aligner as
-# somewhere to put a word.
-PLAUSIBLE_LINE_BASE_S = 2.0
-PLAUSIBLE_PER_WORD_S = 0.7
-
-# A word may legitimately be held - a sustained note, a spoken-word passage. What is not
-# legitimate is a short line, sung as one phrase, whose interior words are pulled apart.
-MAX_INTERIOR_HOLD_MS = 3000
-SHORT_LINE_WORDS = 8
-
 
 def evenly_spaced(start: float, end: float, count: int) -> list[tuple[float, float]]:
     if count == 0:
@@ -780,7 +776,8 @@ def align_track(path: Path, lines: list[tuple[float, str]], duration: float) -> 
         active = [(i, word) for i, word in enumerate(normalised) if word]
         if not active:
             continue
-        window_start = max(0.0, line_start - 0.45)
+        window_start, window_end = window_for(line_start, len(active),
+                                              next_start, duration)
         # Bounded by what the line could plausibly take to sing, not by where the next
         # line starts.
         #
@@ -797,8 +794,8 @@ def align_track(path: Path, lines: list[tuple[float, str]], duration: float) -> 
         #
         # Two thirds of a second a word plus slack is generous for sung delivery and an
         # order of magnitude tighter than an instrumental.
-        plausible = line_start + PLAUSIBLE_LINE_BASE_S + PLAUSIBLE_PER_WORD_S * len(active)
-        window_end = min(duration, max(line_start + 0.5, min(next_start + 0.25, plausible)))
+        # Still needed on its own for the widened retry below.
+        plausible = line_start + PLAUSIBLE_BASE_S + PLAUSIBLE_PER_WORD_S * len(active)
         timings: list[tuple[float, float] | None] = [None] * len(original_words)
 
         def run_alignment(begin: float, end: float) -> list[tuple[float, float]]:
@@ -881,48 +878,9 @@ def validate(rendered: list[str], duration: float, aligned: int, fallback: int) 
         raise NeedsReview("Generated word cues extend past the audio duration")
     if fallback > max(3, math.floor((aligned + fallback) * 0.02)):
         raise NeedsReview(f"Fallback timing exceeded the safety threshold ({fallback} words)")
-    stretched = stretched_word(rendered)
+    stretched = stretched_word_in_rendered(rendered)
     if stretched:
         raise NeedsReview(stretched)
-
-
-def stretched_word(rendered: list[str]) -> str | None:
-    """
-    A word held far longer than anyone sings one, which is the defect this gate exists for.
-
-    Everything else validate() checks - monotonicity, overrun, fallback rate - passed the
-    file that started this:
-
-        [00:01.47] <00:01.47>I <00:02.94>know <00:11.54>you <00:12.74>do<00:12.78>
-
-    Its cues rise, they sit inside the audio, and they were aligned rather than guessed.
-    It is still wrong: `know` is given 8.6 seconds of an instrumental the singer spends
-    silent, so the highlight parks on it and lights `you do` as the next line begins.
-
-    Only interior gaps count, and only on short lines. The span from the last word to the
-    line's closing marker is a legitimate way to say the line ended, and a line of many
-    words is more often a spoken passage than a mistake. A genuine held note passes: two
-    seconds on "Ohhhh" is under the threshold and always will be.
-
-    It does reject the extreme cases in long-form tracks - a J. Cole outro line holding a
-    word for 282 seconds is flagged, and should be. That output is wrong wherever it
-    appears; the line ought to have been split. Rejection means needs_review rather than
-    installation, so the track simply keeps whatever lyrics it already had.
-    """
-    for line in rendered:
-        cues = [
-            int(mm) * 60000 + int(ss) * 1000 + int(fr) * 10 ** (3 - len(fr))
-            for mm, ss, fr in re.findall(r"<(\d+):(\d{2})[.:](\d{2,3})>", line)
-        ]
-        words = len(cues) - 1          # the final cue closes the line
-        if words < 2 or words > SHORT_LINE_WORDS:
-            continue
-        interior = [cues[i + 1] - cues[i] for i in range(len(cues) - 2)]
-        if interior and max(interior) >= MAX_INTERIOR_HOLD_MS:
-            held = max(interior) / 1000
-            return (f"A word is held {held:.1f}s inside a {words}-word line, which is an "
-                    f"instrumental gap charged to a word rather than the line ending")
-    return None
 
 
 def install(path: Path, content: str) -> Path:

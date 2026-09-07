@@ -254,6 +254,31 @@ behavior and resources, then implement improvements in source with original attr
   Explicit manual Lidarr entry remains an override and must not be silently replaced when it
   differs from the plugin response.
 
+### The shared alignment rules — 2026-09-08
+
+- `.lrc-work/elrc_rules.py` is a **verbatim copy** of the canonical module in
+  **Bananz0/fincord-lyrics-studio** (GPL-3.0, this maintainer). Do not edit it here:
+  change the canonical file and re-copy, or the drift it exists to end starts again.
+  Same convention as the vendored media3 classes above, and for the same reason - a
+  build-time dependency on another repository would be worse than a file.
+- It is imported by `enhanced_lrc.py` and copied into the image by the `Dockerfile`. It is
+  pure Python with no dependencies, so it costs nothing but the file.
+- **Why it exists.** The rules had three implementations - the Dockerised service, the
+  batch runner and the desktop app - and they had already drifted into three different
+  opinions about the same bug. Only the app clamped a line's end to the next line's start;
+  only the runner checked the flash-word rate; only the service checked interior holds on
+  short lines. The app therefore had the weakest gate of the three, which is backwards for
+  the one a human is watching. The folded gate is the **union**, so every caller got
+  stricter rather than the three being averaged.
+- One deliberate behaviour change came out of it: `stamp` now **rounds** to the nearest
+  centisecond. Two of the three truncated, which leans every cue up to 10 ms early - always
+  the same direction, so it does not average out across a line the way rounding does.
+- The Enhanced LRC format is why the gate reads word objects rather than the file it
+  writes: the format stores only word *starts*, so a finished file cannot tell a two-second
+  held note from a short word followed by silence. Judging output that way rejected good
+  tracks for singing slowly. `stretched_word_in_rendered` is the file-level check, and is
+  only for auditing a library whose alignment is long gone.
+
 ### The server plugin, and the discography cache — 2026-09-04
 
 - The Jellyfin plugin is **Fincord** (GUID `0d22caeb-c386-47c4-868b-b390e41b5441`), source at
