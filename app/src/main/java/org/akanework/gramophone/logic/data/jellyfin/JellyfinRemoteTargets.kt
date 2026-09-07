@@ -34,6 +34,7 @@ object JellyfinRemoteTargets {
     private const val MAX_IDLE_MINUTES = 10L
     private const val AVAILABLE_CACHE_MS = 30_000L
     private const val TICKS_PER_MILLISECOND = 10_000L
+    private const val KEY_ACTIVE_SESSION_ID = "finnect_active_session_id"
 
     data class Target(
         val sessionId: String,
@@ -126,6 +127,7 @@ object JellyfinRemoteTargets {
                 startPositionTicks = startPositionMs * TICKS_PER_MILLISECOND,
             )
             _active.value = target
+            rememberActive(target.sessionId)
             _playbackState.value = RemotePlaybackState(
                 target = target,
                 itemId = remoteIds.getOrNull(startIndex)?.normalizedId(),
@@ -146,6 +148,49 @@ object JellyfinRemoteTargets {
             Log.w(TAG, "Could not play on ${target.client}", e)
             false
         }
+    }
+
+    /**
+     * Claims an already-playing target without replacing its queue.
+     *
+     * This is what another Accord client for the same Jellyfin user needs: the server has already
+     * scoped [controllableSessions] to that user, and the live session remains authoritative.
+     */
+    suspend fun claim(target: Target): Boolean = withContext(Dispatchers.IO) {
+        val session = runCatching {
+            controllableSessions().firstOrNull {
+                it.id == target.sessionId && it.supportsRemoteControl && it.nowPlayingItem != null
+            }
+        }.onFailure { Log.w(TAG, "Could not claim Finnect session", it) }.getOrNull()
+            ?: return@withContext false
+        val liveTarget = toTarget(session)
+        _active.value = liveTarget
+        rememberActive(liveTarget.sessionId)
+        applySession(session)
+        startMonitor()
+        true
+    }
+
+    /** Reclaims the target this controller owned before its process was restarted. */
+    suspend fun restoreActive(): Boolean = withContext(Dispatchers.IO) {
+        if (_active.value != null) return@withContext true
+        val sessionId = PreferenceManager.getDefaultSharedPreferences(JellyfinClientHolder.context())
+            .getString(KEY_ACTIVE_SESSION_ID, null)
+            ?: return@withContext false
+        val session = runCatching {
+            controllableSessions().firstOrNull {
+                it.id == sessionId && it.supportsRemoteControl && it.nowPlayingItem != null
+            }
+        }.getOrNull()
+        if (session == null) {
+            forgetActive()
+            return@withContext false
+        }
+        val target = toTarget(session)
+        _active.value = target
+        applySession(session)
+        startMonitor()
+        true
     }
 
     /** Fetch immediately before pulling playback back; the socket remains the normal update path. */
@@ -245,6 +290,7 @@ object JellyfinRemoteTargets {
         monitorJob = null
         _active.value = null
         _playbackState.value = null
+        forgetActive()
     }
 
     /** Called when the global setting is switched off. */
@@ -362,6 +408,16 @@ object JellyfinRemoteTargets {
         deviceName = session.deviceName.orEmpty(),
         nowPlaying = session.nowPlayingItem?.name,
     )
+
+    private fun rememberActive(sessionId: String) {
+        PreferenceManager.getDefaultSharedPreferences(JellyfinClientHolder.context())
+            .edit().putString(KEY_ACTIVE_SESSION_ID, sessionId).apply()
+    }
+
+    private fun forgetActive() {
+        PreferenceManager.getDefaultSharedPreferences(JellyfinClientHolder.context())
+            .edit().remove(KEY_ACTIVE_SESSION_ID).apply()
+    }
 
     private fun String.normalizedId(): String = replace("-", "").lowercase()
 

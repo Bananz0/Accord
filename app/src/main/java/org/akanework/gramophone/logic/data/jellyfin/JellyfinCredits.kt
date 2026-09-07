@@ -2,11 +2,14 @@ package org.akanework.gramophone.logic.data.jellyfin
 
 import android.content.Context
 import android.util.Log
-import androidx.annotation.WorkerThread
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import org.akanework.gramophone.logic.data.jellyfin.JellyfinReporter.Companion.undashed
-import org.json.JSONObject
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinReporter.Companion.toDashedUuid
+import org.jellyfin.sdk.api.client.ApiClient
+import org.jellyfin.sdk.api.client.extensions.imageApi
+import org.jellyfin.sdk.api.client.extensions.libraryApi
+import org.jellyfin.sdk.model.UUID
+import org.jellyfin.sdk.model.api.BaseItemDto
+import org.jellyfin.sdk.model.api.ImageType
+import org.jellyfin.sdk.model.api.MediaStreamType
 import java.util.Locale
 
 /**
@@ -37,13 +40,10 @@ object JellyfinCredits {
      * Loads the credits for [mediaId], or null when signed out, offline, or the item is a local
      * file rather than a server one.
      */
-    @WorkerThread
-    fun load(context: Context, mediaId: String?): Result? {
-        val credentials = JellyfinClientHolder.credentials
-        val server = credentials.serverUrl?.trimEnd('/')
-        val token = credentials.accessToken
-        val userId = credentials.userId
-        if (server == null || token == null || userId == null) {
+    suspend fun load(context: Context, mediaId: String?): Result? {
+        val api = JellyfinClientHolder.api()
+        val userId = JellyfinClientHolder.credentials.userId
+        if (api == null || userId == null) {
             Log.w(TAG, "Not signed in; no credits for $mediaId")
             return null
         }
@@ -53,29 +53,20 @@ object JellyfinCredits {
             return null
         }
 
-        val request = Request.Builder()
-            .url("$server/Users/${userId.undashed()}/Items/${remoteId.undashed()}")
-            .header("Authorization", "MediaBrowser Token=\"$token\"")
-            .build()
-        val body = runCatching {
-            CLIENT.newCall(request).execute().use { response ->
-                if (response.isSuccessful) response.body?.string() else {
-                    Log.w(TAG, "Credits for $remoteId rejected with HTTP ${response.code}")
-                    null
-                }
-            }
+        val item = runCatching {
+            api.libraryApi.getItem(
+                itemId = UUID.fromString(remoteId.toDashedUuid()),
+                userId = UUID.fromString(userId.toDashedUuid()),
+            ).content
         }.getOrElse {
             Log.w(TAG, "Credits for $remoteId failed: $it")
-            null
-        } ?: return null
-
-        return runCatching { parse(JSONObject(body), server, token) }.getOrElse {
-            Log.w(TAG, "Could not parse credits for $remoteId: $it")
-            null
+            return null
         }
+
+        return parse(item, api)
     }
 
-    private fun parse(item: JSONObject, server: String, token: String): Result {
+    private fun parse(item: BaseItemDto, api: ApiClient): Result {
         val sections = mutableListOf<Section>()
 
         // People arrive with a Type ("Composer", "Artist") and sometimes a free-text Role. The same
@@ -84,18 +75,24 @@ object JellyfinCredits {
         // role.
         val people = LinkedHashMap<String, MutableSet<String>>()
         val images = LinkedHashMap<String, String?>()
-        item.optJSONArray("People")?.let { array ->
-            for (index in 0 until array.length()) {
-                val person = array.optJSONObject(index) ?: continue
-                val name = person.optString("Name").ifEmpty { continue }
-                val role = person.optString("Role").ifEmpty { person.optString("Type") }
-                people.getOrPut(name) { linkedSetOf() }.apply { if (role.isNotEmpty()) add(role.humanised()) }
-                images.getOrPut(name) {
-                    person.optString("Id").takeIf { it.isNotEmpty() }?.let { id ->
-                        "$server/Items/$id/Images/Primary?maxWidth=$THUMBNAIL_MAX_WIDTH&api_key=$token"
+        item.people.orEmpty().forEach { person ->
+                val name = person.name?.takeIf(String::isNotBlank) ?: return@forEach
+                val role = person.role?.takeIf(String::isNotBlank) ?: person.type.toString()
+                people.getOrPut(name) { linkedSetOf() }.apply {
+                    if (role.isNotBlank() && !role.equals("Unknown", ignoreCase = true)) {
+                        add(role.humanised())
                     }
                 }
-            }
+                images.getOrPut(name) {
+                    person.primaryImageTag?.let { tag ->
+                        api.imageApi.getItemImageUrl(
+                            itemId = person.id,
+                            imageType = ImageType.PRIMARY,
+                            tag = tag,
+                            maxWidth = THUMBNAIL_MAX_WIDTH,
+                        )
+                    }
+                }
         }
         if (people.isNotEmpty()) {
             sections += Section(
@@ -106,31 +103,22 @@ object JellyfinCredits {
             )
         }
 
-        val studios = item.optJSONArray("Studios")?.let { array ->
-            (0 until array.length()).mapNotNull { index ->
-                array.optJSONObject(index)?.optString("Name")?.takeIf { it.isNotEmpty() }
-            }
-        }.orEmpty()
+        val studios = item.studios.orEmpty().mapNotNull { it.name?.takeIf(String::isNotBlank) }
         if (studios.isNotEmpty()) {
             sections += Section(SECTION_RELEASE, studios.map { Credit(it, null, null) })
         }
 
         // The technical row. Built from the first audio stream, which is the one that plays.
-        val audioStream = item.optJSONArray("MediaSources")
-            ?.optJSONObject(0)
-            ?.optJSONArray("MediaStreams")
-            ?.let { streams ->
-                (0 until streams.length())
-                    .mapNotNull { streams.optJSONObject(it) }
-                    .firstOrNull { it.optString("Type") == "Audio" }
-            }
+        val firstSource = item.mediaSources?.firstOrNull()
+        val audioStream = (firstSource?.mediaStreams ?: item.mediaStreams)
+            ?.firstOrNull { it.type == MediaStreamType.AUDIO }
         val technical = mutableListOf<Credit>()
         audioStream?.let { stream ->
-            stream.optString("Codec").takeIf { it.isNotEmpty() }?.let {
+            stream.codec?.takeIf(String::isNotBlank)?.let {
                 technical += Credit(it.uppercase(Locale.ROOT), LABEL_FORMAT, null)
             }
-            val sampleRate = stream.optInt("SampleRate", 0)
-            val bitDepth = stream.optInt("BitDepth", 0)
+            val sampleRate = stream.sampleRate ?: 0
+            val bitDepth = stream.bitDepth ?: 0
             if (sampleRate > 0) {
                 val khz = "%.1f".format(sampleRate / 1000f).removeSuffix(".0")
                 technical += Credit(
@@ -139,14 +127,14 @@ object JellyfinCredits {
                     null
                 )
             }
-            stream.optInt("BitRate", 0).takeIf { it > 0 }?.let {
+            stream.bitRate?.takeIf { it > 0 }?.let {
                 technical += Credit("${it / 1000} kbps", LABEL_BITRATE, null)
             }
-            stream.optString("ChannelLayout").takeIf { it.isNotEmpty() }?.let {
+            stream.channelLayout?.takeIf(String::isNotBlank)?.let {
                 technical += Credit(it.humanised(), LABEL_CHANNELS, null)
             }
         }
-        item.optString("Container").takeIf { it.isNotEmpty() }?.let {
+        (firstSource?.container ?: item.container)?.takeIf(String::isNotBlank)?.let {
             technical += Credit(it.uppercase(Locale.ROOT), LABEL_CONTAINER, null)
         }
         if (technical.isNotEmpty()) sections += Section(SECTION_AUDIO, technical)
@@ -171,12 +159,4 @@ object JellyfinCredits {
     private const val LABEL_CHANNELS = "Channels"
     private const val LABEL_CONTAINER = "Container"
 
-    /**
-     * The shared client, not one of our own.
-     *
-     * Every separately built client brings its own connection pool, so a call here would open a new
-     * connection to a server the app already has one to. Going through the shared pool reuses it,
-     * and inherits the timeouts [JellyfinClientHolder.apiHttpClient] sets for small API calls.
-     */
-    private val CLIENT: OkHttpClient get() = JellyfinClientHolder.apiHttpClient()
 }

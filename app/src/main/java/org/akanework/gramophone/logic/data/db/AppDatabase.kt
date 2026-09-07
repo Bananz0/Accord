@@ -7,6 +7,7 @@ import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import org.akanework.gramophone.logic.data.db.dao.AlbumSyncStateDao
+import org.akanework.gramophone.logic.data.db.dao.AnalysedTrackDao
 import org.akanework.gramophone.logic.data.db.dao.CachedSongDao
 import org.akanework.gramophone.logic.data.db.dao.ImportContributionDao
 import org.akanework.gramophone.logic.data.db.dao.JellyfinIdDao
@@ -16,7 +17,9 @@ import org.akanework.gramophone.logic.data.db.dao.OwnPlayDao
 import org.akanework.gramophone.logic.data.db.dao.PendingScrobbleDao
 import org.akanework.gramophone.logic.data.db.dao.PlaylistDao
 import org.akanework.gramophone.logic.data.db.entity.ALBUM_SYNC_STATE_TABLE_NAME
+import org.akanework.gramophone.logic.data.db.entity.ANALYSED_TRACK_TABLE_NAME
 import org.akanework.gramophone.logic.data.db.entity.AlbumSyncState
+import org.akanework.gramophone.logic.data.db.entity.AnalysedTrack
 import org.akanework.gramophone.logic.data.db.entity.CACHED_SONG_TABLE_NAME
 import org.akanework.gramophone.logic.data.db.entity.CachedSong
 import org.akanework.gramophone.logic.data.db.entity.IMPORT_CONTRIBUTION_TABLE_NAME
@@ -50,8 +53,9 @@ const val APP_DATABASE_FILE_NAME = "app.db"
         OwnPlay::class,
         LyricsIndex::class,
         LyricsState::class,
+        AnalysedTrack::class,
     ],
-    version = 10,
+    version = 11,
 )
 abstract class AppDatabase : RoomDatabase() {
 
@@ -64,6 +68,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun importContributionDao(): ImportContributionDao
     abstract fun ownPlayDao(): OwnPlayDao
     abstract fun lyricsDao(): LyricsDao
+    abstract fun analysedTrackDao(): AnalysedTrackDao
 
     companion object {
         @Volatile
@@ -211,6 +216,37 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
+         * Adds the Automix beat and key analysis cache.
+         *
+         * Additive and empty. Every row is derived from audio the phone can decode again, so an
+         * empty table costs one re-analysis of the next track rather than anything lost - and each
+         * row carries the version of the analyser that wrote it, so a later change to the DSP
+         * invalidates rows without needing a migration at all.
+         */
+        private val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(CREATE_ANALYSED_TRACK)
+            }
+        }
+
+        private const val CREATE_ANALYSED_TRACK =
+            "CREATE TABLE IF NOT EXISTS `$ANALYSED_TRACK_TABLE_NAME` (" +
+                    "`jellyfinId` TEXT NOT NULL, " +
+                    "`bpm` REAL NOT NULL, " +
+                    "`tempoConfidence` REAL NOT NULL, " +
+                    "`beatsMs` BLOB NOT NULL, " +
+                    "`beatsPerBar` INTEGER NOT NULL, " +
+                    "`downbeatIndex` INTEGER NOT NULL, " +
+                    "`downbeatConfidence` REAL NOT NULL, " +
+                    "`keyPitchClass` INTEGER NOT NULL, " +
+                    "`keyIsMajor` INTEGER NOT NULL, " +
+                    "`keyStrength` REAL NOT NULL, " +
+                    "`analysedSeconds` REAL NOT NULL, " +
+                    "`analysedAt` INTEGER NOT NULL, " +
+                    "`analyserVersion` INTEGER NOT NULL, " +
+                    "PRIMARY KEY(`jellyfinId`))"
+
+        /**
          * The virtual table Room generates for an @Fts4 entity. Written out by hand here because a
          * migration runs raw SQL, and it has to match what Room expects byte for byte or the
          * identity check on the next open fails.
@@ -274,7 +310,7 @@ abstract class AppDatabase : RoomDatabase() {
                     .addMigrations(
                         MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
                         MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
-                        MIGRATION_9_10,
+                        MIGRATION_9_10, MIGRATION_10_11,
                     )
                     .build()
                     .apply { instance = this }

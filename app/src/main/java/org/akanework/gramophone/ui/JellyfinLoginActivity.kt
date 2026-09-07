@@ -22,6 +22,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.view.updatePadding
+import androidx.core.widget.doAfterTextChanged
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -37,6 +38,7 @@ import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.onEach
@@ -44,10 +46,15 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import uk.akane.accord.R
+import uk.akane.accord.Accord
+import org.akanework.gramophone.logic.GramophoneApplication
 import uk.akane.accord.logic.enableEdgeToEdgeProperly
+import uk.akane.accord.logic.lockPortraitOnPhone
 import uk.akane.accord.ui.components.enablePasteInto
 import uk.akane.cupertino.utils.AnimationUtils
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinClientHolder
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinEndpoints
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinDiscography
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinPlugins
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinUserImage
 import org.jellyfin.sdk.api.client.ApiClient
@@ -58,8 +65,6 @@ import org.jellyfin.sdk.api.client.exception.TimeoutException
 import org.jellyfin.sdk.api.client.extensions.authenticateUserByName
 import org.jellyfin.sdk.api.client.extensions.authenticationApi
 import org.jellyfin.sdk.api.client.extensions.userApi
-import org.jellyfin.sdk.discovery.RecommendedServerInfo
-import org.jellyfin.sdk.discovery.RecommendedServerInfoScore
 import org.jellyfin.sdk.model.api.AuthenticationResult
 import org.jellyfin.sdk.model.api.QuickConnectDto
 import org.jellyfin.sdk.model.api.UserDto
@@ -82,6 +87,11 @@ class JellyfinLoginActivity : AppCompatActivity() {
     private lateinit var discoveredList: RecyclerView
     private lateinit var discoveryProgress: ProgressBar
     private lateinit var serverUrlField: TextInputEditText
+    private lateinit var remoteServerUrlField: TextInputEditText
+    private lateinit var localServerStatus: TextView
+    private lateinit var remoteServerStatus: TextView
+    private lateinit var localServerTest: MaterialButton
+    private lateinit var remoteServerTest: MaterialButton
     private lateinit var connectButton: MaterialButton
     private lateinit var serverProgress: LinearProgressIndicator
     private lateinit var serverStatus: TextView
@@ -100,11 +110,23 @@ class JellyfinLoginActivity : AppCompatActivity() {
 
     /** Set once a server has been resolved; every step-two action needs it. */
     private var serverUrl: String? = null
+    private var testedLocalServerUrl: String? = null
+    private var testedRemoteServerUrl: String? = null
+    private var testedLocalNetworkName: String? = null
+    /**
+     * Set once a test has proven one address and rejected the other, so the next tap on the same
+     * button means "yes, go on with the one that works" rather than a repeat of the test.
+     */
+    private var partialConfirmPending = false
     private var quickConnectJob: Job? = null
     private var showingUserStep = false
     private var stepAnimator: android.animation.ValueAnimator? = null
 
-    private val discoveredAdapter = ServerAdapter { connectTo(it.address) }
+    private val discoveredAdapter = ServerAdapter { discovered ->
+        serverUrlField.setText(discovered.address)
+        serverUrlField.setSelection(serverUrlField.text?.length ?: 0)
+        localServerStatus.visibility = View.GONE
+    }
     private val userAdapter = UserAdapter { user ->
         usernameField.setText(user.name)
         usernameField.setSelection(usernameField.text?.length ?: 0)
@@ -122,6 +144,9 @@ class JellyfinLoginActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdgeProperly()
+        // A stack of text fields with the keyboard up has nothing to gain from a phone's landscape
+        // and a great deal of height to lose by it.
+        lockPortraitOnPhone()
         setContentView(R.layout.activity_jellyfin_login)
         bindViews()
         applyWindowInsets()
@@ -132,13 +157,30 @@ class JellyfinLoginActivity : AppCompatActivity() {
         userList.adapter = userAdapter
 
         connectButton.setOnClickListener {
-            connectTo(serverUrlField.text?.toString()?.trim().orEmpty())
+            connectTo(
+                serverUrlField.text?.toString()?.trim().orEmpty(),
+                remoteServerUrlField.text?.toString()?.trim().orEmpty(),
+                allowPartial = partialConfirmPending,
+            )
         }
+        localServerTest.setOnClickListener { testSingleAddress(local = true) }
+        remoteServerTest.setOnClickListener { testSingleAddress(local = false) }
+        // Editing either address invalidates whatever the last test concluded, including a pending
+        // "continue with one of them" - the button must not still be offering that for text the
+        // user has since changed.
+        serverUrlField.doAfterTextChanged { resetTestState(localServerStatus) }
+        remoteServerUrlField.doAfterTextChanged { resetTestState(remoteServerStatus) }
         signInButton.setOnClickListener { signInWithPassword() }
         quickConnectButton.setOnClickListener { startQuickConnect() }
         findViewById<TextView>(R.id.change_server).setOnClickListener { showServerStep() }
 
-        serverUrlField.setOnEditorActionListener { _, actionId, event ->
+        serverUrlField.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_NEXT) {
+                remoteServerUrlField.requestFocus()
+                true
+            } else false
+        }
+        remoteServerUrlField.setOnEditorActionListener { _, actionId, event ->
             if (actionId == EditorInfo.IME_ACTION_DONE ||
                 event?.keyCode == KeyEvent.KEYCODE_ENTER
             ) {
@@ -179,12 +221,22 @@ class JellyfinLoginActivity : AppCompatActivity() {
         })
 
         val restoredServer = savedInstanceState?.getString(STATE_SERVER_URL)
-        val rememberedServer = JellyfinClientHolder.credentials.serverUrl
-        serverUrlField.setText(restoredServer ?: rememberedServer.orEmpty())
+        val credentials = JellyfinClientHolder.credentials
+        serverUrlField.setText(
+            savedInstanceState?.getString(STATE_LOCAL_SERVER_URL)
+                ?: credentials.localServerUrl.orEmpty()
+        )
+        remoteServerUrlField.setText(
+            savedInstanceState?.getString(STATE_REMOTE_SERVER_URL)
+                ?: credentials.remoteServerUrl.orEmpty()
+        )
 
         startDiscovery()
         if (savedInstanceState?.getBoolean(STATE_USER_STEP) == true && !restoredServer.isNullOrBlank()) {
-            connectTo(restoredServer)
+            connectTo(
+                serverUrlField.text?.toString().orEmpty(),
+                remoteServerUrlField.text?.toString().orEmpty(),
+            )
         }
     }
 
@@ -197,6 +249,17 @@ class JellyfinLoginActivity : AppCompatActivity() {
         discoveryProgress = findViewById(R.id.discovery_progress)
         serverUrlField = findViewById(R.id.server_url)
         findViewById<TextInputLayout>(R.id.server_url_layout).enablePasteInto(serverUrlField)
+        remoteServerUrlField = findViewById(R.id.remote_server_url)
+        findViewById<TextInputLayout>(R.id.remote_server_url_layout)
+            .enablePasteInto(remoteServerUrlField)
+        localServerStatus = findViewById(R.id.local_server_status)
+        remoteServerStatus = findViewById(R.id.remote_server_status)
+        localServerTest = findViewById(R.id.local_server_test)
+        remoteServerTest = findViewById(R.id.remote_server_test)
+        JellyfinEndpoints.currentWifiName(this)?.let { networkName ->
+            findViewById<TextInputLayout>(R.id.server_url_layout).hint =
+                getString(R.string.jellyfin_local_server_url_on_network, networkName)
+        }
         connectButton = findViewById(R.id.connect)
         serverProgress = findViewById(R.id.server_progress)
         serverStatus = findViewById(R.id.server_status)
@@ -224,6 +287,12 @@ class JellyfinLoginActivity : AppCompatActivity() {
             .discoverLocalServers()
             .onEach { found ->
                 discoveredAdapter.add(found.name.orEmpty(), found.address.orEmpty())
+                // Immich-style setup: the server announcing on the current Wi-Fi is the best
+                // default LAN endpoint. Keep anything the user already typed.
+                if (serverUrlField.text.isNullOrBlank() && !found.address.isNullOrBlank()) {
+                    serverUrlField.setText(found.address)
+                    testedLocalNetworkName = JellyfinEndpoints.currentWifiName(this)
+                }
                 discoveredList.visibility = View.VISIBLE
                 discoveryEmpty.visibility = View.GONE
                 discoveryProgress.visibility = View.GONE
@@ -245,24 +314,125 @@ class JellyfinLoginActivity : AppCompatActivity() {
         }
     }
 
-    /** Resolves [input] to a working address, then moves to the user step. */
-    private fun connectTo(input: String) {
+    /**
+     * Tests one address on its own, without the other one having any say in the result.
+     *
+     * The two addresses are for different situations, so at any given moment one of them is quite
+     * likely not to answer: the LAN address cannot be reached from outside the house, and a
+     * reverse proxy can be down while the server itself is fine. Being able to prove them one at a
+     * time is what makes signing in from either side of that possible.
+     */
+    private fun testSingleAddress(local: Boolean) {
+        val field = if (local) serverUrlField else remoteServerUrlField
+        val statusView = if (local) localServerStatus else remoteServerStatus
+        val button = if (local) localServerTest else remoteServerTest
+        val input = field.text?.toString()?.trim().orEmpty()
         if (input.isEmpty()) {
+            statusView.visibility = View.VISIBLE
+            statusView.setText(R.string.jellyfin_error_no_server)
+            return
+        }
+        hideKeyboard()
+        clearPartialConfirm()
+        serverStatus.visibility = View.GONE
+        button.isEnabled = false
+        showEndpointTesting(statusView, input)
+        lifecycleScope.launch {
+            val tested = withContext(Dispatchers.IO) { JellyfinEndpoints.testInput(input) }
+            showEndpointResult(statusView, input, tested)
+            button.isEnabled = true
+        }
+    }
+
+    /** A changed address makes its old result, and any offer based on it, meaningless. */
+    private fun resetTestState(statusView: TextView) {
+        statusView.visibility = View.GONE
+        clearPartialConfirm()
+    }
+
+    private fun clearPartialConfirm() {
+        if (!partialConfirmPending) return
+        partialConfirmPending = false
+        connectButton.setText(R.string.jellyfin_test_and_connect)
+        serverStatus.visibility = View.GONE
+    }
+
+    /**
+     * Proves the configured addresses, then moves to the user step.
+     *
+     * One address answering is enough. The other is kept exactly as typed and tried again on every
+     * later connection, which is the whole point of having two: away from home the LAN address
+     * cannot answer, and it is still the right address to use once the phone is back on that
+     * network. Continuing on one address takes a second tap, so a typo is not quietly stored as a
+     * second endpoint.
+     */
+    private fun connectTo(localInput: String, remoteInput: String, allowPartial: Boolean = false) {
+        if (localInput.isEmpty() && remoteInput.isEmpty()) {
             showServerError(getString(R.string.jellyfin_error_no_server))
             return
         }
+        partialConfirmPending = false
+        connectButton.setText(R.string.jellyfin_test_and_connect)
         hideKeyboard()
         setServerBusy(true)
         serverStatus.visibility = View.VISIBLE
         serverStatus.setText(R.string.jellyfin_finding_server)
+        showEndpointTesting(localServerStatus, localInput)
+        showEndpointTesting(remoteServerStatus, remoteInput)
 
         lifecycleScope.launch {
-            val resolved = withContext(Dispatchers.IO) { resolveServer(input) }
-            if (resolved == null) {
+            val localRequest = async(Dispatchers.IO) {
+                localInput.takeIf(String::isNotBlank)?.let { JellyfinEndpoints.testInput(it) }
+            }
+            val remoteRequest = async(Dispatchers.IO) {
+                remoteInput.takeIf(String::isNotBlank)?.let { JellyfinEndpoints.testInput(it) }
+            }
+            val local = localRequest.await()
+            val remote = remoteRequest.await()
+            showEndpointResult(localServerStatus, localInput, local)
+            showEndpointResult(remoteServerStatus, remoteInput, remote)
+
+            if (local == null && remote == null) {
                 setServerBusy(false)
-                showServerError(getString(R.string.jellyfin_error_no_server_found, input))
+                showServerError(getString(R.string.jellyfin_error_unreachable))
                 return@launch
             }
+            if (local?.serverId != null && remote?.serverId != null &&
+                local.serverId != remote.serverId
+            ) {
+                setServerBusy(false)
+                showServerError(getString(R.string.jellyfin_endpoint_mismatch))
+                return@launch
+            }
+
+            val localFailed = localInput.isNotBlank() && local == null
+            val remoteFailed = remoteInput.isNotBlank() && remote == null
+            if ((localFailed || remoteFailed) && !allowPartial) {
+                val workingName = getString(
+                    if (local != null) R.string.jellyfin_endpoint_local_name
+                    else R.string.jellyfin_endpoint_remote_name
+                )
+                val failedStatus = if (localFailed) localServerStatus else remoteServerStatus
+                failedStatus.text = getString(R.string.jellyfin_endpoint_failed) + " " +
+                    getString(R.string.jellyfin_endpoint_kept)
+                setServerBusy(false)
+                showServerError(getString(R.string.jellyfin_endpoint_partial, workingName))
+                connectButton.text = getString(R.string.jellyfin_continue_anyway, workingName)
+                partialConfirmPending = true
+                return@launch
+            }
+
+            // A kept-but-unproven address is stored as typed; JellyfinEndpoints resolves it the
+            // first time it does answer.
+            testedLocalServerUrl = local?.url
+                ?: localInput.takeIf(String::isNotBlank)?.let(JellyfinEndpoints::normalizeInput)
+            testedRemoteServerUrl = remote?.url
+                ?: remoteInput.takeIf(String::isNotBlank)?.let(JellyfinEndpoints::normalizeInput)
+            // Only a LAN address that actually answered says anything about the network this phone
+            // is on; a null here keeps plain reachability in charge of choosing later.
+            testedLocalNetworkName = if (local == null) null
+                else JellyfinEndpoints.currentWifiName(this@JellyfinLoginActivity)
+            val resolved = local?.url ?: remote?.url ?: return@launch
             serverUrl = resolved
             val api = JellyfinClientHolder.createUnauthenticatedApi(resolved)
             val users = withContext(Dispatchers.IO) { publicUsers(api) }
@@ -270,7 +440,8 @@ class JellyfinLoginActivity : AppCompatActivity() {
             setServerBusy(false)
             serverStatus.visibility = View.GONE
 
-            serverNameLabel.text = resolved.toUri().host ?: resolved
+            serverNameLabel.text = local?.serverName ?: remote?.serverName
+                ?: resolved.toUri().host ?: resolved
             userAdapter.submit(users, resolved)
             // With no public users the server is hiding them, so a name has to be typed. With some,
             // the field is still there for hidden accounts but starts out of the way.
@@ -283,6 +454,7 @@ class JellyfinLoginActivity : AppCompatActivity() {
 
     private fun showServerStep() {
         quickConnectJob?.cancel()
+        clearPartialConfirm()
         hideKeyboard(clearFocus = true)
         if (!showingUserStep) return
         showingUserStep = false
@@ -318,26 +490,6 @@ class JellyfinLoginActivity : AppCompatActivity() {
                 stepAnimator = null
             },
         )
-    }
-
-    /**
-     * Turns what the user typed into an address that actually answers, or null if none does.
-     *
-     * The SDK expands the input into the candidates worth probing - adding schemes and the default
-     * port - and grades each. Score comes first and response time only breaks ties: picking the
-     * fastest reply instead resolves a bare IP to whatever else is on port 80, which then returns an
-     * HTML page where the API was expected.
-     */
-    private suspend fun resolveServer(input: String): String? = try {
-        JellyfinClientHolder.discovery()
-            .getRecommendedServers(input, RecommendedServerInfoScore.OK)
-            .minWithOrNull(
-                compareBy<RecommendedServerInfo> { it.score.ordinal }.thenBy { it.responseTime }
-            )
-            ?.address
-    } catch (e: Exception) {
-        Log.w(TAG, "Could not resolve '$input'", e)
-        null
     }
 
     /** The accounts the server chooses to advertise. Empty is valid - it just means type a name. */
@@ -531,6 +683,8 @@ class JellyfinLoginActivity : AppCompatActivity() {
 
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putString(STATE_SERVER_URL, serverUrl ?: serverUrlField.text?.toString())
+        outState.putString(STATE_LOCAL_SERVER_URL, serverUrlField.text?.toString())
+        outState.putString(STATE_REMOTE_SERVER_URL, remoteServerUrlField.text?.toString())
         outState.putBoolean(STATE_USER_STEP, showingUserStep)
         super.onSaveInstanceState(outState)
     }
@@ -565,9 +719,20 @@ class JellyfinLoginActivity : AppCompatActivity() {
                 accessToken = token,
                 userId = userId,
                 serverName = result.serverId,
+                localServerUrl = testedLocalServerUrl,
+                remoteServerUrl = testedRemoteServerUrl,
+                localNetworkName = testedLocalNetworkName,
             )
             JellyfinClientHolder.invalidate()
             JellyfinPlugins.invalidate()
+            JellyfinDiscography.invalidate()
+            // The server plugin already knows Lidarr. Start adopting it as soon as authentication
+            // exists so the services page can show the finished state without a second tap.
+            (application as GramophoneApplication).syncLidarrFromPlugin()
+            // Authentication is the moment a first library becomes possible. Start a forced,
+            // application-owned sync now; it survives this activity closing and publishes each
+            // server page while the user finishes the wizard.
+            (application as Accord).refreshLibrary(force = true)
             // The signed-in user's picture is what the navigation bar draws, so it has to be known
             // before the first screen that has one is shown.
             JellyfinUserImage.refresh()
@@ -605,6 +770,8 @@ class JellyfinLoginActivity : AppCompatActivity() {
 
     private fun setServerBusy(busy: Boolean) {
         connectButton.isEnabled = !busy
+        localServerTest.isEnabled = !busy
+        remoteServerTest.isEnabled = !busy
         serverProgress.visibility = if (busy) View.VISIBLE else View.GONE
     }
 
@@ -617,6 +784,31 @@ class JellyfinLoginActivity : AppCompatActivity() {
     private fun showServerError(message: String) {
         serverStatus.visibility = View.VISIBLE
         serverStatus.text = message
+    }
+
+    private fun showEndpointTesting(statusView: TextView, input: String) {
+        statusView.visibility = if (input.isBlank()) View.GONE else View.VISIBLE
+        if (input.isNotBlank()) statusView.setText(R.string.jellyfin_endpoint_testing)
+    }
+
+    private fun showEndpointResult(
+        statusView: TextView,
+        input: String,
+        endpoint: JellyfinEndpoints.TestedEndpoint?,
+    ) {
+        if (input.isBlank()) {
+            statusView.visibility = View.GONE
+            return
+        }
+        statusView.visibility = View.VISIBLE
+        statusView.text = if (endpoint == null) {
+            getString(R.string.jellyfin_endpoint_failed)
+        } else {
+            getString(
+                R.string.jellyfin_endpoint_connected,
+                endpoint.serverName ?: endpoint.url.toUri().host ?: endpoint.url,
+            )
+        }
     }
 
     private fun showError(message: String) {
@@ -744,9 +936,11 @@ class JellyfinLoginActivity : AppCompatActivity() {
         /** How long to keep the discovery spinner up before assuming nothing will answer. */
         private const val DISCOVERY_SPINNER_MS = 4_000L
 
-        /** Jellyfin's own clients poll Quick Connect at about this rate. */
-        private const val QUICK_CONNECT_POLL_MS = 2_000L
+        /** The Kotlin SDK authentication guide recommends updating Quick Connect every 5 seconds. */
+        private const val QUICK_CONNECT_POLL_MS = 5_000L
         private const val STATE_SERVER_URL = "server_url"
+        private const val STATE_LOCAL_SERVER_URL = "local_server_url"
+        private const val STATE_REMOTE_SERVER_URL = "remote_server_url"
         private const val STATE_USER_STEP = "user_step"
     }
 }

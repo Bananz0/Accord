@@ -15,7 +15,7 @@ import org.akanework.gramophone.logic.data.spotify.SpotifyCredentialStore
 /**
  * Receives Spotify's redirect after the user approves or denies access.
  *
- * A bare activity with no layout: it exists only to catch the `accord://spotify-callback` intent,
+ * A bare activity with no layout: it exists only to catch the `fincord://spotify-callback` intent,
  * redeem the code, and hand the user straight back to where they were. Anything shown here would
  * flash for the fraction of a second the token exchange takes.
  *

@@ -50,25 +50,45 @@ object StreamQualityResolver {
      * @param quality supplied per call rather than read here, so playback and downloading can ask
      *   for different things - they are different settings and a download is about disk, not data.
      */
+    /**
+     * @param cachedVariant the variant of a track this device already holds, if any. Consulted
+     *   first, so bytes already on disk are always preferred to bytes over the network - including
+     *   a download still in flight, because the downloader and the player share one cache and a
+     *   half-written entry is readable from the first byte.
+     */
     fun factory(
         context: Context,
         upstream: androidx.media3.datasource.DataSource.Factory,
         quality: () -> StreamQuality,
+        cachedVariant: (String) -> StreamQuality? = { null },
     ): ResolvingDataSource.Factory =
         ResolvingDataSource.Factory(upstream) { dataSpec ->
-            resolve(dataSpec, quality())
+            val local = dataSpec.uri.itemId()?.let(cachedVariant)
+            resolve(dataSpec, local ?: quality(), JellyfinClientHolder.credentials.serverUrl)
         }
 
-    fun resolve(dataSpec: DataSpec, quality: StreamQuality): DataSpec {
-        val itemId = dataSpec.uri.itemId() ?: return dataSpec
+    fun resolve(
+        dataSpec: DataSpec,
+        quality: StreamQuality,
+        activeServerUrl: String? = null,
+    ): DataSpec {
+        // Cached MediaItems may have been built on home Wi-Fi. Rewrite their origin at open time
+        // after endpoint selection switches to the remote URL (or back), while retaining the item
+        // path, API key and media-source query parameters.
+        val activeSpec = activeServerUrl?.let { active ->
+            dataSpec.buildUpon()
+                .setUri(JellyfinEndpoints.rewriteServerBase(dataSpec.uri, active))
+                .build()
+        } ?: dataSpec
+        val itemId = activeSpec.uri.itemId() ?: return activeSpec
         val key = cacheKey(itemId, quality)
         if (quality.isOriginal) {
             // Still keyed explicitly, so the untouched file is one enumerable variant among the
             // rest rather than whatever media3 would have derived from the URI.
-            return dataSpec.buildUpon().setKey(key).build()
+            return activeSpec.buildUpon().setKey(key).build()
         }
-        return dataSpec.buildUpon()
-            .setUri(dataSpec.uri.withTranscoding(quality))
+        return activeSpec.buildUpon()
+            .setUri(activeSpec.uri.withTranscoding(quality))
             .setKey(key)
             .build()
     }
@@ -79,7 +99,7 @@ object StreamQualityResolver {
         return StreamQuality.entries.map { cacheKey(itemId, it) }
     }
 
-    private fun cacheKey(itemId: String, quality: StreamQuality) = "$itemId${quality.cacheSuffix}"
+    fun cacheKey(itemId: String, quality: StreamQuality) = "$itemId${quality.cacheSuffix}"
 
     /**
      * The item's GUID, taken from `/Audio/{id}/stream` or `/Audio/{id}/universal`.
@@ -87,7 +107,7 @@ object StreamQualityResolver {
      * Read from the path rather than a query parameter because the id is what identifies the track
      * across every quality, and the query is exactly the part that differs between them.
      */
-    private fun Uri.itemId(): String? {
+    fun Uri.itemId(): String? {
         val segments = pathSegments ?: return null
         val audioIndex = segments.indexOf("Audio")
         if (audioIndex < 0 || audioIndex + 1 >= segments.size) return null
@@ -120,4 +140,5 @@ object StreamQualityResolver {
             .appendQueryParameter(PARAM_AUDIO_BITRATE, quality.bitrateBps.toString())
             .build()
     }
+
 }

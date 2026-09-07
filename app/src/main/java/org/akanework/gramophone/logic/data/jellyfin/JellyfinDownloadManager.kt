@@ -111,6 +111,12 @@ object JellyfinDownloadManager {
         ).key ?: uri.toString()
 
     fun remove(context: Context, items: List<MediaItem>) {
+        // Removal is the one state change the user sees immediately, so the snapshot cannot go on
+        // claiming these are held. A download becoming complete is asynchronous and correctly
+        // stays "not downloaded" here until the index is next read.
+        completedIdsSnapshot?.let { snapshot ->
+            completedIdsSnapshot = snapshot - items.map { it.mediaId }.toSet()
+        }
         items.forEach { item ->
             try {
                 DownloadService.sendRemoveDownload(
@@ -178,11 +184,24 @@ object JellyfinDownloadManager {
                     add(cursor.download.request.id)
                 }
             }
-        }
+        }.also { completedIdsSnapshot = it }
     } catch (e: Exception) {
         Log.w(TAG, "Could not read download index", e)
         emptySet()
     }
+
+    @Volatile
+    private var completedIdsSnapshot: Set<String>? = null
+
+    /**
+     * The last set [completedIds] read, or null if it has never been read in this process.
+     *
+     * Cheap enough for the main thread, which is the point: the first real read has to build the
+     * DownloadManager and open its index, and on a large cache that is slow enough that a menu
+     * waiting on it arrives after the user has given up and tapped something else. A screen that
+     * only needs to label a row can render from this and let the index be read behind it.
+     */
+    fun cachedCompletedIds(): Set<String>? = completedIdsSnapshot
 
     /**
      * Media ids that can be played without reaching Jellyfin.

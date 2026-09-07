@@ -17,6 +17,7 @@ import org.akanework.gramophone.logic.data.jellyfin.JellyfinClientHolder
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinIdMap
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinLibraryLoader
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinMediaCache
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinEndpoints
 import org.akanework.gramophone.logic.utils.MediaStoreUtils
 import uk.akane.libphonograph.items.Album
 import uk.akane.libphonograph.items.Artist
@@ -102,6 +103,8 @@ class JellyfinLibraryReader(private val context: Context) : LibraryReader {
      *   should always reach the server; a launch should be allowed not to.
      */
     suspend fun refresh(force: Boolean) = refreshLock.withLock {
+        // The phone may have moved between home Wi-Fi and mobile data since the last refresh.
+        JellyfinEndpoints.selectReachableStoredEndpoint()
         val api = JellyfinClientHolder.api()
         if (api == null) {
             // Signed out. Not an error - the sign-in screen is what gets us back here.
@@ -130,7 +133,10 @@ class JellyfinLibraryReader(private val context: Context) : LibraryReader {
             }
         }
 
-        val hadSomething = store.value != null
+        // An empty Room result means there is nothing useful on screen. Treating the non-null
+        // wrapper itself as content disabled onPartial below, so first sign-in stayed blank until
+        // the final server page arrived instead of filling as each page was fetched.
+        val hadSomething = store.value?.songList?.isNotEmpty() == true
 
         // With a usable cache, ask the cheap question first: which albums moved? Re-pulling one
         // retagged record should not cost the same as fetching the library from scratch.

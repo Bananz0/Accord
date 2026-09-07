@@ -133,7 +133,7 @@ class SpotifyCredentialStore(context: Context) {
          * Must match the redirect URI registered on the Spotify app, and the intent filter on
          * SpotifyAuthActivity.
          */
-        const val REDIRECT_URI = "accord://spotify-callback"
+        const val REDIRECT_URI = "fincord://spotify-callback"
 
         fun isLinked(context: Context): Boolean =
             PreferenceManager.getDefaultSharedPreferences(context.applicationContext)

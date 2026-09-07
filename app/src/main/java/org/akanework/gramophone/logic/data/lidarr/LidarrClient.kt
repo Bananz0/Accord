@@ -2,12 +2,18 @@ package org.akanework.gramophone.logic.data.lidarr
 
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinClientHolder
+import org.akanework.gramophone.logic.data.matching.MusicText
+import org.akanework.gramophone.logic.data.matching.ReleaseCandidate
+import org.akanework.gramophone.logic.data.matching.ReleaseMatcher
+import org.akanework.gramophone.logic.data.matching.ReleaseQuery
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -28,19 +34,40 @@ class LidarrClient(
 
     class LidarrException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
-    /** An album as Lidarr's metadata source describes it, before it exists locally. */
+    /**
+     * An album as Lidarr's metadata source describes it, before it exists locally.
+     *
+     * [foreignAlbumId] is a MusicBrainz release group id - Lidarr is built on MusicBrainz - which is
+     * why it doubles as [musicBrainzId] and lets a resolved id settle a match outright.
+     */
     data class AlbumResult(
         val foreignAlbumId: String,
-        val title: String,
+        override val title: String,
         val artistName: String,
         val foreignArtistId: String,
-        val year: Int?,
+        override val year: Int?,
         val coverUrl: String?,
         /** True when Lidarr already tracks this album, so requesting it again is pointless. */
         val alreadyAdded: Boolean,
         /** Complete resource returned by Lidarr; POST /album requires its metadata and images. */
         val lidarrJson: String,
-    )
+        override val totalTracks: Int? = null,
+        /** Lidarr's own word for what kind of record this is: "Album", "EP", "Single", "Other". */
+        val albumType: String? = null,
+        /** Lidarr's internal id, once it tracks this album. Zero means it does not. */
+        val lidarrId: Int = 0,
+        /** How many of its tracks are actually on disk. Null when Lidarr does not say. */
+        val trackFileCount: Int? = null,
+        /**
+         * Whether Lidarr is actually chasing this album. Adding an artist pulls in their whole
+         * discography unmonitored, so "Lidarr knows about it" and "Lidarr is fetching it" are very
+         * different things - and treating the first as the second made those albums unrequestable.
+         */
+        val monitored: Boolean = false,
+    ) : ReleaseCandidate {
+        override val artist: String get() = artistName
+        override val musicBrainzId: String get() = foreignAlbumId
+    }
 
     data class RootFolder(val path: String, val freeSpaceBytes: Long?)
     data class Profile(val id: Int, val name: String)
@@ -69,30 +96,163 @@ class LidarrClient(
             Profile(it.optInt("id"), it.optString("name"))
         }
 
-    /** Searches Lidarr's unified artist/album index and returns the album rows in useful order. */
-    suspend fun searchAlbums(term: String): List<AlbumResult> {
+    /**
+     * Every album Lidarr can offer for [term], unranked.
+     *
+     * Three sources, because each misses what the others find. `/album/lookup` is the album search
+     * proper and is the only one that reliably surfaces a record by its own title - it is what the
+     * "Add New Album" box in Lidarr's own UI calls, and searching without it was the reason typing
+     * an album name returned five unrelated records. `/search` is the mixed index, which is better
+     * at artists and at partial names. And when the mixed index recognises the artist exactly, their
+     * full album list is pulled in, because otherwise a bare artist name returns only whichever
+     * handful ranked in the server's top twenty.
+     */
+    suspend fun lookupAlbums(term: String): List<AlbumResult> {
         if (term.isBlank()) return emptyList()
-        val searchRows = getArray("/api/v1/search", mapOf("term" to term))
-        val albums = searchRows.mapNotNull { it.optJSONObject("album") }.toMutableList()
+        val albums = mutableListOf<JSONObject>()
 
-        // A bare artist search otherwise returns only the handful of albums that happen to rank in
-        // the server's mixed top 20. If the exact artist is already known locally, include their
-        // complete album list before ranking it against the query.
-        val needle = term.normaliseForMatch()
+        // Both go out at once. Each is a round trip to Lidarr's metadata proxy and neither depends
+        // on the other, so running them in sequence simply doubled how long the list took to appear.
+        // A failure in one must not lose the other's results: a MusicBrainz id the proxy has never
+        // heard of answers 404 here, which is not fatal.
+        val (lookupRows, searchRows) = coroutineScope {
+            val lookup = async {
+                runCatching { getArray("/api/v1/album/lookup", mapOf("term" to term)) }
+                    .getOrDefault(emptyList())
+            }
+            val search = async {
+                runCatching { getArray("/api/v1/search", mapOf("term" to term)) }
+                    .getOrDefault(emptyList())
+            }
+            lookup.await() to search.await()
+        }
+        albums += lookupRows
+        albums += searchRows.mapNotNull { it.optJSONObject("album") }
+
+        val needle = MusicText.compactKey(term)
         val exactArtistId = searchRows.asSequence()
             .mapNotNull { it.optJSONObject("artist") }
-            .firstOrNull { it.optString("artistName").normaliseForMatch() == needle }
+            .firstOrNull { MusicText.compactKey(it.optString("artistName")) == needle }
             ?.optInt("id", 0)
             ?.takeIf { it > 0 }
         if (exactArtistId != null) {
-            albums += getArray("/api/v1/album", mapOf("artistId" to exactArtistId.toString()))
+            runCatching {
+                albums += getArray("/api/v1/album", mapOf("artistId" to exactArtistId.toString()))
+            }
         }
 
-        return rankAlbums(
-            term,
-            albums.mapNotNull(::albumResult).distinctBy(AlbumResult::foreignAlbumId),
-        )
+        return albums.mapNotNull(::albumResult).distinctBy(AlbumResult::foreignAlbumId)
     }
+
+    /**
+     * Looks an album up by its MusicBrainz release group id.
+     *
+     * Lidarr's metadata proxy accepts `lidarr:<mbid>` in place of a search phrase and answers with
+     * that exact release group. When an id is known this is the whole of matching: no names, no
+     * ranking, no chance of the wrong record.
+     */
+    suspend fun lookupByMusicBrainzId(releaseGroupId: String): AlbumResult? {
+        if (!MBID.matches(releaseGroupId)) return null
+        return runCatching {
+            getArray("/api/v1/album/lookup", mapOf("term" to "lidarr:$releaseGroupId"))
+                .mapNotNull(::albumResult)
+                .firstOrNull { it.foreignAlbumId.equals(releaseGroupId, ignoreCase = true) }
+        }.getOrNull()
+    }
+
+    /** An artist as Lidarr's metadata source describes them. */
+    data class ArtistResult(
+        val foreignArtistId: String,
+        val artistName: String,
+        val disambiguation: String?,
+        val imageUrl: String?,
+        /** Lidarr's internal id once it tracks them; zero means it does not. */
+        val lidarrId: Int,
+    )
+
+    /**
+     * Artists matching [term], best first as Lidarr ranked them.
+     *
+     * Accepts `lidarr:<mbid>` in place of a name, same as the album lookup, so an artist can be
+     * reached by identity when their name is spelled in a way no search will find.
+     */
+    suspend fun lookupArtists(term: String): List<ArtistResult> {
+        if (term.isBlank()) return emptyList()
+        return runCatching { getArray("/api/v1/artist/lookup", mapOf("term" to term)) }
+            .getOrDefault(emptyList())
+            .mapNotNull { item ->
+                val foreignArtistId = item.optString("foreignArtistId").takeIf { it.isNotBlank() }
+                    ?: return@mapNotNull null
+                ArtistResult(
+                    foreignArtistId = foreignArtistId,
+                    artistName = item.optString("artistName").ifBlank { "Unknown artist" },
+                    disambiguation = item.optString("disambiguation").takeIf { it.isNotBlank() },
+                    imageUrl = artistImageUrl(item),
+                    lidarrId = item.optInt("id", 0),
+                )
+            }
+            .distinctBy(ArtistResult::foreignArtistId)
+    }
+
+    /**
+     * A picture of an artist, from whichever of Lidarr's two answers applies.
+     *
+     * For an artist it does not track, Lidarr hands back `remoteUrl`s pointing at its own image
+     * cache. For one it does, it hands back container paths like `/config/MediaCover/253/poster.jpg`
+     * instead - which are meaningless to a phone, and were the reason a tracked artist's page came
+     * up with an empty header. Those are served over the API, so the path is rebuilt against the
+     * server.
+     *
+     * The key goes in the query string here rather than a header because an image loader fetches
+     * the URL on its own and cannot be given one. It never leaves the device: this is the user's
+     * own server, addressed directly.
+     */
+    private fun artistImageUrl(item: JSONObject): String? {
+        val images = item.optJSONArray("images") ?: return null
+        val ordered = (0 until images.length())
+            .mapNotNull { images.optJSONObject(it) }
+            // Poster first: fanart is a wide banner and crops badly into a portrait header.
+            .sortedBy { if (it.optString("coverType") == "poster") 0 else 1 }
+
+        val lidarrId = item.optInt("id", 0).takeIf { it > 0 }
+        val coverType = ordered.firstOrNull()?.optString("coverType")?.takeIf(String::isNotBlank)
+            ?: "poster"
+        // A tracked artist already has this image in Lidarr's MediaCover cache. Prefer that local
+        // hop over downloading the original again from fanart.tv/MusicBrainz through the phone.
+        if (lidarrId != null) localMediaCoverUrl("artist", lidarrId, coverType)?.let { return it }
+
+        return ordered.firstNotNullOfOrNull {
+            it.optString("remoteUrl").takeIf(String::isNotBlank)
+        }
+    }
+
+    /** The albums Lidarr already tracks for one of its own artists, with their file counts. */
+    suspend fun albumsOfTrackedArtist(lidarrArtistId: Int): List<AlbumResult> =
+        runCatching { getArray("/api/v1/album", mapOf("artistId" to lidarrArtistId.toString())) }
+            .getOrDefault(emptyList())
+            .mapNotNull(::albumResult)
+
+    /**
+     * The albums Lidarr is downloading right now, by its own album id.
+     *
+     * Its lookup results say nothing about progress, so "requested" and "arriving" look identical
+     * without this. One cheap call covers a whole page of results.
+     */
+    suspend fun downloadingAlbumIds(): Set<Int> = runCatching {
+        val queue = get("/api/v1/queue", mapOf("pageSize" to "200"))
+        val records = queue.optJSONArray("records") ?: return emptySet()
+        (0 until records.length())
+            .mapNotNull { records.optJSONObject(it) }
+            .mapNotNull { record ->
+                record.optInt("albumId", 0).takeIf { it > 0 }
+                    ?: record.optJSONObject("album")?.optInt("id", 0)?.takeIf { it > 0 }
+            }
+            .toSet()
+    }.getOrDefault(emptySet())
+
+    /** [lookupAlbums] ordered for a person reading a list of results. */
+    suspend fun searchAlbums(term: String): List<AlbumResult> =
+        ReleaseMatcher.rank(ReleaseQuery.freeText(term), lookupAlbums(term)).map { it.release }
 
     private fun albumResult(item: JSONObject): AlbumResult? {
         val foreignAlbumId = item.optString("foreignAlbumId").takeIf { it.isNotBlank() }
@@ -104,15 +264,43 @@ class LidarrClient(
             artistName = artist?.optString("artistName").orEmpty(),
             foreignArtistId = artist?.optString("foreignArtistId").orEmpty(),
             year = item.optString("releaseDate").take(4).toIntOrNull(),
-            coverUrl = item.optJSONArray("images")?.let { images ->
-                (0 until images.length())
-                    .mapNotNull { images.optJSONObject(it)?.optString("remoteUrl") }
-                    .firstOrNull { it.isNotBlank() }
-            },
+            coverUrl = albumImageUrl(item),
+            albumType = item.optString("albumType").takeIf { it.isNotBlank() },
             // Lidarr gives an album an internal id once it is tracked; zero means it is not.
             alreadyAdded = item.optInt("id", 0) > 0,
+            lidarrId = item.optInt("id", 0),
+            trackFileCount = item.optJSONObject("statistics")?.optInt("trackFileCount"),
+            monitored = item.optBoolean("monitored", false),
             lidarrJson = item.toString(),
+            totalTracks = item.optJSONObject("statistics")?.optInt("trackCount")?.takeIf { it > 0 }
+                ?: item.optJSONArray("releases")?.let { releases ->
+                    (0 until releases.length())
+                        .mapNotNull { releases.optJSONObject(it)?.optInt("trackCount") }
+                        .filter { it > 0 }
+                        .maxOrNull()
+                },
         )
+    }
+
+    /** Uses Lidarr's already-downloaded cover for tracked albums, falling back to remote artwork. */
+    private fun albumImageUrl(item: JSONObject): String? {
+        val images = item.optJSONArray("images")
+        val ordered = if (images == null) emptyList() else (0 until images.length())
+            .mapNotNull { images.optJSONObject(it) }
+            .sortedBy { if (it.optString("coverType") == "cover") 0 else 1 }
+        val lidarrId = item.optInt("id", 0).takeIf { it > 0 }
+        val coverType = ordered.firstOrNull()?.optString("coverType")?.takeIf(String::isNotBlank)
+            ?: "cover"
+        if (lidarrId != null) localMediaCoverUrl("album", lidarrId, coverType)?.let { return it }
+        return ordered.firstNotNullOfOrNull {
+            it.optString("remoteUrl").takeIf(String::isNotBlank)
+        }
+    }
+
+    private fun localMediaCoverUrl(kind: String, id: Int, coverType: String): String? {
+        val base = store.serverUrl?.takeIf { it.isNotBlank() } ?: return null
+        val key = store.apiKey?.takeIf { it.isNotBlank() } ?: return null
+        return "$base/api/v1/mediacover/$kind/$id/$coverType.jpg?apikey=$key"
     }
 
     /**
@@ -167,6 +355,34 @@ class LidarrClient(
                 throw e
             }
         }
+    }
+
+    /**
+     * Starts chasing an album Lidarr already knows about.
+     *
+     * Adding an artist brings their whole discography in unmonitored, so most of what an artist
+     * page lists is in this state: known, and being ignored. POST would be rejected as a duplicate,
+     * so the album is switched to monitored and a search is asked for explicitly - which is exactly
+     * what pressing the button in Lidarr's own UI does.
+     */
+    suspend fun monitorExistingAlbum(lidarrAlbumId: Int): Boolean {
+        if (lidarrAlbumId <= 0) return false
+        val current = get("/api/v1/album/$lidarrAlbumId")
+        put("/api/v1/album/$lidarrAlbumId", current.put("monitored", true))
+        post(
+            "/api/v1/command",
+            JSONObject()
+                .put("name", "AlbumSearch")
+                .put("albumIds", JSONArray().put(lidarrAlbumId)),
+        )
+        return true
+    }
+
+    private suspend fun put(path: String, body: JSONObject): String = withContext(Dispatchers.IO) {
+        val request = buildRequest(path).newBuilder()
+            .put(body.toString().toRequestBody(JSON))
+            .build()
+        executeRaw(request)
     }
 
     private suspend fun get(path: String, query: Map<String, String> = emptyMap()): JSONObject =
@@ -251,47 +467,7 @@ class LidarrClient(
         private const val TAG = "LidarrClient"
         private val JSON = "application/json; charset=utf-8".toMediaType()
 
-        internal fun rankAlbums(term: String, albums: List<AlbumResult>): List<AlbumResult> {
-            val needle = term.normaliseForMatch()
-            val familyNeedle = term.editionFamilyForMatch()
-            val terms = term.split(NON_WORD)
-                .map { it.normaliseForMatch() }
-                .filter(String::isNotBlank)
-            return albums.sortedWith(compareBy<AlbumResult> { album ->
-                val title = album.title.normaliseForMatch()
-                val artist = album.artistName.normaliseForMatch()
-                val combined = "$artist$title"
-                val familyTitle = album.title.editionFamilyForMatch()
-                val familyCombined = "$artist$familyTitle"
-                when {
-                    needle == combined || needle == "$title$artist" ||
-                        familyNeedle == familyCombined || familyNeedle == "$familyTitle$artist" -> 0
-                    needle == artist -> 1
-                    needle == title -> 2
-                    title.startsWith(needle) -> 3
-                    artist.startsWith(needle) -> 4
-                    title.contains(needle) -> 5
-                    artist.contains(needle) -> 6
-                    terms.isNotEmpty() && terms.all(combined::contains) -> 7
-                    else -> 8
-                }
-            }.thenBy { if (it.title.contains(PREFERRED_EDITION)) 0 else 1 }
-                .thenByDescending(AlbumResult::year))
-        }
-
-        internal fun String.normaliseForMatch(): String = lowercase().filter(Char::isLetterOrDigit)
-
-        private fun String.editionFamilyForMatch(): String =
-            replace(EDITION_MARKER, "").normaliseForMatch()
-
-        private val NON_WORD = Regex("[^\\p{L}\\p{N}]+")
-        private val EDITION_MARKER = Regex(
-            """\b(deluxe|expanded|anniversary|special|complete|bonus(?:\s+track)?|platinum)\s*(edition|version)?\b""",
-            RegexOption.IGNORE_CASE,
-        )
-        private val PREFERRED_EDITION = Regex(
-            """\b(deluxe|expanded|anniversary|special edition|complete edition|bonus track|platinum)\b""",
-            RegexOption.IGNORE_CASE,
-        )
+        private val MBID =
+            Regex("(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
     }
 }

@@ -2,12 +2,12 @@ package org.akanework.gramophone.logic.data.playcounts
 
 import android.content.Context
 import android.net.Uri
+import android.util.JsonReader
+import android.util.JsonToken
 import android.util.Log
-import org.json.JSONArray
-import org.json.JSONObject
-import org.json.JSONTokener
 import java.io.BufferedReader
 import java.io.InputStream
+import java.io.InputStreamReader
 import java.time.Instant
 import java.time.format.DateTimeParseException
 import java.util.zip.ZipInputStream
@@ -25,6 +25,12 @@ import java.util.zip.ZipInputStream
  * the user pressed to request them; a parser that insisted on one exact shape would be wrong within
  * a year. Unrecognised rows are skipped rather than fatal, and the import preview shows the user
  * how much was understood before anything is written.
+ *
+ * It is also written to hold none of it. These exports are routinely hundreds of megabytes - a
+ * heavy Takeout `watch-history.json` on its own can be half a gigabyte - and a phone cannot hold
+ * one as a String, let alone as a parsed tree. Every format here is read as a stream and reduced to
+ * a tally as it goes, so the memory cost is the number of distinct tracks rather than the size of
+ * the file.
  */
 object PlayHistoryArchive {
 
@@ -71,11 +77,11 @@ object PlayHistoryArchive {
     fun read(context: Context, uri: Uri, expected: PlayCountSource): Outcome {
         val name = displayName(context, uri).orEmpty()
         return try {
-            context.contentResolver.openInputStream(uri).use { stream ->
-                if (stream == null) return Outcome.Unreadable("Could not open the file")
-                if (name.endsWith(".zip", ignoreCase = true) || looksLikeZip(uri, context)) {
-                    readZip(context, uri, expected)
-                } else {
+            if (name.endsWith(".zip", ignoreCase = true) || looksLikeZip(context, uri)) {
+                readZip(context, uri, expected)
+            } else {
+                context.contentResolver.openInputStream(uri).use { stream ->
+                    if (stream == null) return Outcome.Unreadable("Could not open the file")
                     readSingle(stream, name, expected)
                 }
             }
@@ -86,9 +92,8 @@ object PlayHistoryArchive {
     }
 
     private fun readSingle(stream: InputStream, name: String, expected: PlayCountSource): Outcome {
-        val text = stream.bufferedReader().readText()
         val accumulator = Accumulator()
-        val handled = parseInto(text, name, expected, accumulator)
+        val handled = parseInto(stream.buffered(), name, expected, accumulator)
         if (!handled) return Outcome.Unrecognised
         return finish(expected, accumulator, listOf(name))
     }
@@ -96,9 +101,10 @@ object PlayHistoryArchive {
     /**
      * Walks the zip, feeding every member a parser recognises.
      *
-     * Streamed rather than extracted. These archives run to hundreds of megabytes and the entries
-     * that matter are a fraction of that; unpacking to disk first would need space the phone may
-     * not have for data that is thrown away immediately.
+     * Streamed rather than extracted, and streamed rather than read: unpacking to disk would need
+     * space the phone may not have for data thrown away immediately, and reading an entry whole
+     * would need the heap to hold a file that can be larger than the heap. Each entry is handed to
+     * its parser as the stream it already is.
      */
     private fun readZip(context: Context, uri: Uri, expected: PlayCountSource): Outcome {
         val accumulator = Accumulator()
@@ -110,10 +116,10 @@ object PlayHistoryArchive {
                     if (entry.isDirectory) continue
                     val entryName = entry.name.substringAfterLast('/')
                     if (!isInteresting(entryName, expected)) continue
-                    // Not closed with use(): closing the reader closes the whole zip stream and
-                    // the remaining entries with it.
-                    val text = BufferedReader(zip.reader()).readText()
-                    if (parseInto(text, entryName, expected, accumulator)) filesRead += entryName
+                    // Shielded: a parser closing its reader would otherwise close the whole
+                    // archive and take every remaining entry with it.
+                    val shielded = ShieldedInputStream(zip)
+                    if (parseInto(shielded, entryName, expected, accumulator)) filesRead += entryName
                 }
             }
         } ?: return Outcome.Unreadable("Could not open the archive")
@@ -140,14 +146,14 @@ object PlayHistoryArchive {
     }
 
     private fun parseInto(
-        text: String,
+        stream: InputStream,
         name: String,
         expected: PlayCountSource,
         into: Accumulator,
     ): Boolean = when (expected) {
-        PlayCountSource.SPOTIFY -> parseSpotify(text, into)
-        PlayCountSource.YOUTUBE_MUSIC -> parseYouTube(text, into)
-        PlayCountSource.APPLE_MUSIC -> parseAppleCsv(text, into)
+        PlayCountSource.SPOTIFY -> parseSpotify(stream, into)
+        PlayCountSource.YOUTUBE_MUSIC -> parseYouTube(stream, into)
+        PlayCountSource.APPLE_MUSIC -> parseAppleCsv(stream, into)
         PlayCountSource.LAST_FM -> false
     }.also { if (!it) Log.d(TAG, "Nothing recognised in $name") }
 
@@ -160,34 +166,28 @@ object PlayHistoryArchive {
      * `master_metadata_*`; the older account-data download uses `endTime`/`msPlayed` with plain
      * `artistName`/`trackName`. Users have both, often in the same folder, and neither is labelled.
      */
-    private fun parseSpotify(text: String, into: Accumulator): Boolean {
-        val array = text.asJsonArray() ?: return false
-        var recognised = false
-        for (index in 0 until minOf(array.length(), MAX_ENTRIES)) {
-            val row = array.optJSONObject(index) ?: continue
-            val extended = row.has("ms_played")
-            val legacy = row.has("msPlayed")
-            if (!extended && !legacy) continue
-            recognised = true
-
-            val playedMs = if (extended) row.optLong("ms_played") else row.optLong("msPlayed")
-            val title = (
-                row.optStringOrNull("master_metadata_track_name")
-                    ?: row.optStringOrNull("trackName")
-                ) ?: run { into.skip(); continue }
-            val artist = (
-                row.optStringOrNull("master_metadata_album_artist_name")
-                    ?: row.optStringOrNull("artistName")
-                ) ?: run { into.skip(); continue }
-            if (playedMs < SPOTIFY_MIN_MS) { into.skip(); continue }
-
-            val album = row.optStringOrNull("master_metadata_album_album_name")
-            val at = (row.optStringOrNull("ts") ?: row.optStringOrNull("endTime"))
-                ?.toEpochSeconds() ?: 0L
-            into.add(artist, title, album, at)
+    private fun parseSpotify(stream: InputStream, into: Accumulator): Boolean =
+        streamJsonArray(stream) { reader ->
+            var msPlayed: Long? = null
+            var title: String? = null
+            var artist: String? = null
+            var album: String? = null
+            var timestamp: String? = null
+            reader.beginObject()
+            while (reader.hasNext()) {
+                when (reader.nextName()) {
+                    "ms_played", "msPlayed" -> msPlayed = reader.nextLongOrNull()
+                    "master_metadata_track_name", "trackName" -> title = reader.nextStringOrNull()
+                    "master_metadata_album_artist_name", "artistName" ->
+                        artist = reader.nextStringOrNull()
+                    "master_metadata_album_album_name" -> album = reader.nextStringOrNull()
+                    "ts", "endTime" -> timestamp = reader.nextStringOrNull()
+                    else -> reader.skipValue()
+                }
+            }
+            reader.endObject()
+            into.accept(spotifyRow(msPlayed, title, artist, album, timestamp))
         }
-        return recognised
-    }
 
     // ---------------------------------------------------------------- YouTube
 
@@ -198,87 +198,115 @@ object PlayHistoryArchive {
      * field, so this is a music import only if that is honoured. Titles arrive as "Watched <name>"
      * and the artist sits in `subtitles`, usually as the auto-generated "<artist> - Topic" channel.
      */
-    private fun parseYouTube(text: String, into: Accumulator): Boolean {
-        val array = text.asJsonArray() ?: return false
-        var recognised = false
-        for (index in 0 until minOf(array.length(), MAX_ENTRIES)) {
-            val row = array.optJSONObject(index) ?: continue
-            val header = row.optStringOrNull("header") ?: continue
-            if (!header.equals("YouTube Music", ignoreCase = true)) continue
-            recognised = true
-
-            val rawTitle = row.optStringOrNull("title") ?: run { into.skip(); continue }
-            // Removed by prefix rather than by locale-specific word, because a non-English Takeout
-            // says something else entirely - and a title that keeps the verb matches nothing.
-            val title = rawTitle.removePrefix("Watched ").trim()
-            if (title.isEmpty() || title.startsWith("https://")) { into.skip(); continue }
-
-            val channel = row.optJSONArray("subtitles")
-                ?.optJSONObject(0)
-                ?.optStringOrNull("name")
-            if (channel == null) { into.skip(); continue }
-            val artist = channel.removeSuffix(" - Topic").trim()
-            if (artist.isEmpty()) { into.skip(); continue }
-
-            val at = row.optStringOrNull("time")?.toEpochSeconds() ?: 0L
-            into.add(artist, title, album = null, atSeconds = at)
+    private fun parseYouTube(stream: InputStream, into: Accumulator): Boolean =
+        streamJsonArray(stream) { reader ->
+            var header: String? = null
+            var title: String? = null
+            var channel: String? = null
+            var time: String? = null
+            reader.beginObject()
+            while (reader.hasNext()) {
+                when (reader.nextName()) {
+                    "header" -> header = reader.nextStringOrNull()
+                    "title" -> title = reader.nextStringOrNull()
+                    "time" -> time = reader.nextStringOrNull()
+                    "subtitles" -> channel = reader.readFirstSubtitleName()
+                    else -> reader.skipValue()
+                }
+            }
+            reader.endObject()
+            into.accept(youTubeRow(header, title, channel, time))
         }
-        return recognised
+
+    /** The channel behind a watch entry: the first `subtitles` element's name, if there is one. */
+    private fun JsonReader.readFirstSubtitleName(): String? {
+        if (peek() == JsonToken.NULL) {
+            nextNull()
+            return null
+        }
+        var name: String? = null
+        beginArray()
+        var first = true
+        while (hasNext()) {
+            if (!first) {
+                skipValue()
+                continue
+            }
+            first = false
+            if (peek() != JsonToken.BEGIN_OBJECT) {
+                skipValue()
+                continue
+            }
+            beginObject()
+            while (hasNext()) {
+                if (nextName() == "name") name = nextStringOrNull() else skipValue()
+            }
+            endObject()
+        }
+        endArray()
+        return name
     }
 
     // ------------------------------------------------------------ Apple Music
 
     /**
-     * Apple's Play Activity CSV.
+     * Apple's Play Activity CSV, read a line at a time.
      *
-     * The columns are found by name rather than by position: Apple has renamed and reordered them
-     * between exports, and the file is wide enough that a fixed index would silently read the
-     * wrong field rather than fail. Several plausible names are accepted for each because which
-     * one you get depends on the vintage of the export.
+     * This is the biggest file any of these services hands over - a few years of listening runs to
+     * hundreds of megabytes - and it is also the one whose shape is least certain, so it is read
+     * the way a log is read: one row in, one tally out, nothing kept.
      */
-    private fun parseAppleCsv(text: String, into: Accumulator): Boolean {
-        val lines = text.lineSequence().iterator()
-        if (!lines.hasNext()) return false
-        val header = splitCsv(lines.next()).map { it.trim().lowercase() }
-
-        fun column(vararg candidates: String): Int =
-            candidates.firstNotNullOfOrNull { candidate ->
-                header.indexOf(candidate).takeIf { it >= 0 }
-            } ?: -1
-
-        val titleAt = column("song name", "content name", "track name", "item name")
-        val artistAt = column("artist name", "container artist name", "album artist name")
-        val albumAt = column("album name", "container name")
-        val playedAt = column("play duration milliseconds", "media duration in milliseconds")
-        val timeAt = column("event start timestamp", "event end timestamp", "play date time")
-        if (titleAt < 0) return false
+    private fun parseAppleCsv(stream: InputStream, into: Accumulator): Boolean {
+        val reader = BufferedReader(InputStreamReader(stream, Charsets.UTF_8))
+        val headerLine = reader.readLine() ?: return false
+        val columns = AppleColumns(splitCsv(headerLine.removePrefix(BYTE_ORDER_MARK)))
+        if (!columns.recognised) return false
 
         var count = 0
-        while (lines.hasNext() && count < MAX_ENTRIES) {
-            val row = splitCsv(lines.next())
-            if (row.size <= titleAt) continue
+        while (count < MAX_ENTRIES) {
+            val line = reader.readLine() ?: break
+            if (line.isEmpty()) continue
+            val fields = splitCsv(line)
+            if (fields.size <= columns.title) continue
             count++
-            val title = row.getOrNull(titleAt)?.trim().orEmpty()
-            // Apple has no artist column in some exports at all; those rows are unusable rather
-            // than guessable, and saying so is better than matching every "Intro" in the library.
-            val artist = artistAt.takeIf { it >= 0 }?.let { row.getOrNull(it)?.trim() }.orEmpty()
-            if (title.isEmpty() || artist.isEmpty()) { into.skip(); continue }
-            if (playedAt >= 0) {
-                val played = row.getOrNull(playedAt)?.trim()?.toLongOrNull()
-                if (played != null && played < APPLE_MIN_MS) { into.skip(); continue }
-            }
-            val album = albumAt.takeIf { it >= 0 }?.let { row.getOrNull(it)?.trim() }
-                ?.takeIf { it.isNotEmpty() }
-            val at = timeAt.takeIf { it >= 0 }
-                ?.let { row.getOrNull(it) }
-                ?.toEpochSeconds() ?: 0L
-            into.add(artist, title, album, at)
+            into.accept(appleRow(columns, fields))
         }
         return count > 0
     }
 
+    /** Where each field this import needs sits in a particular export's header row. */
+    internal class AppleColumns(header: List<String>) {
+        private val names = header.map { it.trim().trim('"').lowercase() }
+
+        private fun column(vararg candidates: String): Int =
+            candidates.firstNotNullOfOrNull { candidate ->
+                names.indexOf(candidate).takeIf { it >= 0 }
+            } ?: -1
+
+        // Found by name rather than by position: Apple has renamed and reordered these between
+        // exports, and the file is wide enough that a fixed index would silently read the wrong
+        // field rather than fail. Several plausible names are accepted for each because which one
+        // you get depends on the vintage of the export.
+        val title = column("song name", "content name", "track name", "item name")
+        val artist = column("artist name", "container artist name", "album artist name")
+        val album = column("album name", "container name")
+
+        /**
+         * How long the row actually played for.
+         *
+         * Only the play duration answers that. "Media duration" is the length of the track, so
+         * reading it as a threshold would keep every skip of a long song and drop every complete
+         * play of a short one - the opposite of what the threshold is for.
+         */
+        val played = column("play duration milliseconds")
+        val time = column("event start timestamp", "event end timestamp", "play date time")
+
+        /** Without a title there is nothing to match on, and this is not a play activity export. */
+        val recognised: Boolean get() = title >= 0
+    }
+
     /** A CSV splitter that understands quoting, because song titles contain commas. */
-    private fun splitCsv(line: String): List<String> {
+    internal fun splitCsv(line: String): List<String> {
         val fields = mutableListOf<String>()
         val current = StringBuilder()
         var quoted = false
@@ -303,7 +331,166 @@ object PlayHistoryArchive {
         return fields
     }
 
+    // ------------------------------------------------------------- row logic
+
+    /**
+     * What one row of an export turned out to be.
+     *
+     * Separated from the readers so the decisions - which field wins, what counts as a play, what
+     * a title has to be stripped of - can be stated and tested without a file, a zip or a device.
+     */
+    internal sealed interface RowOutcome {
+        data class Play(
+            val artist: String,
+            val title: String,
+            val album: String?,
+            val atSeconds: Long,
+        ) : RowOutcome
+
+        /** Recognised as history, but unusable: no title, no artist, or barely played. */
+        data object Skip : RowOutcome
+
+        /** Not a play at all - a different kind of row that happens to live in the same file. */
+        data object NotHistory : RowOutcome
+    }
+
+    internal fun spotifyRow(
+        msPlayed: Long?,
+        trackName: String?,
+        albumArtist: String?,
+        albumName: String?,
+        timestamp: String?,
+    ): RowOutcome {
+        // The play duration is what identifies a streaming-history row in either vintage.
+        if (msPlayed == null) return RowOutcome.NotHistory
+        val title = trackName?.takeIf { it.isNotBlank() } ?: return RowOutcome.Skip
+        val artist = albumArtist?.takeIf { it.isNotBlank() } ?: return RowOutcome.Skip
+        if (msPlayed < SPOTIFY_MIN_MS) return RowOutcome.Skip
+        return RowOutcome.Play(
+            artist = artist,
+            title = title,
+            album = albumName?.takeIf { it.isNotBlank() },
+            atSeconds = timestamp.toEpochSecondsOrZero(),
+        )
+    }
+
+    internal fun youTubeRow(
+        header: String?,
+        rawTitle: String?,
+        channel: String?,
+        time: String?,
+    ): RowOutcome {
+        if (!header.equals("YouTube Music", ignoreCase = true)) return RowOutcome.NotHistory
+        // Removed by prefix rather than by locale-specific word, because a non-English Takeout
+        // says something else entirely - and a title that keeps the verb matches nothing.
+        val title = rawTitle?.removePrefix("Watched ")?.trim().orEmpty()
+        if (title.isEmpty() || title.startsWith("https://")) return RowOutcome.Skip
+        val artist = channel?.removeSuffix(" - Topic")?.trim().orEmpty()
+        if (artist.isEmpty()) return RowOutcome.Skip
+        return RowOutcome.Play(artist, title, album = null, atSeconds = time.toEpochSecondsOrZero())
+    }
+
+    internal fun appleRow(columns: AppleColumns, fields: List<String>): RowOutcome {
+        val title = fields.getOrNull(columns.title)?.trim().orEmpty()
+        // Apple has no artist column in some exports at all; those rows are unusable rather than
+        // guessable, and saying so is better than matching every "Intro" in the library.
+        val artist = columns.artist.takeIf { it >= 0 }
+            ?.let { fields.getOrNull(it)?.trim() }
+            .orEmpty()
+        if (title.isEmpty() || artist.isEmpty()) return RowOutcome.Skip
+        if (columns.played >= 0) {
+            val played = fields.getOrNull(columns.played)?.trim()?.toLongOrNull()
+            // A missing duration is not evidence of a skip: some vintages leave it empty, and
+            // dropping those rows would silently discard the whole export.
+            if (played != null && played < APPLE_MIN_MS) return RowOutcome.Skip
+        }
+        val album = columns.album.takeIf { it >= 0 }
+            ?.let { fields.getOrNull(it)?.trim() }
+            ?.takeIf { it.isNotEmpty() }
+        val at = columns.time.takeIf { it >= 0 }
+            ?.let { fields.getOrNull(it) }
+            .toEpochSecondsOrZero()
+        return RowOutcome.Play(artist, title, album, at)
+    }
+
     // ----------------------------------------------------------------- shared
+
+    /**
+     * Walks a JSON array of objects, handing each one to [row] and never holding more than one.
+     *
+     * [JsonReader] is a pull parser, which is the only way these files can be read at all: the
+     * document object model for a half-gigabyte watch history does not fit in a phone's heap, and
+     * the tally being built out of it is a few thousand entries.
+     */
+    private fun streamJsonArray(
+        stream: InputStream,
+        row: (JsonReader) -> Boolean,
+    ): Boolean {
+        val reader = JsonReader(InputStreamReader(stream, Charsets.UTF_8))
+        reader.isLenient = true
+        return try {
+            when (reader.peek()) {
+                JsonToken.BEGIN_ARRAY -> readArrayOfRows(reader, row)
+                // Some export variants wrap the list in an object with a single key.
+                JsonToken.BEGIN_OBJECT -> {
+                    var recognised = false
+                    reader.beginObject()
+                    while (reader.hasNext()) {
+                        reader.nextName()
+                        if (reader.peek() == JsonToken.BEGIN_ARRAY) {
+                            recognised = readArrayOfRows(reader, row)
+                            break
+                        }
+                        reader.skipValue()
+                    }
+                    recognised
+                }
+                else -> false
+            }
+        } catch (e: Exception) {
+            // A truncated or malformed file still yields everything read before the damage, which
+            // is worth far more to the user than refusing the whole import over its last line.
+            Log.w(TAG, "Stopped reading JSON history early", e)
+            false
+        }
+    }
+
+    private fun readArrayOfRows(reader: JsonReader, row: (JsonReader) -> Boolean): Boolean {
+        var recognised = false
+        var count = 0
+        reader.beginArray()
+        while (reader.hasNext() && count < MAX_ENTRIES) {
+            count++
+            if (reader.peek() != JsonToken.BEGIN_OBJECT) {
+                reader.skipValue()
+                continue
+            }
+            if (row(reader)) recognised = true
+        }
+        return recognised
+    }
+
+    private fun JsonReader.nextStringOrNull(): String? =
+        if (peek() == JsonToken.NULL) {
+            nextNull()
+            null
+        } else {
+            nextString().takeIf { it.isNotBlank() }
+        }
+
+    private fun JsonReader.nextLongOrNull(): Long? = when (peek()) {
+        JsonToken.NULL -> {
+            nextNull()
+            null
+        }
+        JsonToken.NUMBER -> nextLong()
+        // Some vintages quote the number.
+        JsonToken.STRING -> nextString().trim().toLongOrNull()
+        else -> {
+            skipValue()
+            null
+        }
+    }
 
     /** Collects plays per track as the walk proceeds, so no file is held in full. */
     private class Accumulator {
@@ -311,9 +498,20 @@ object PlayHistoryArchive {
         var skipped = 0
             private set
 
-        fun skip() { skipped++ }
+        /** @return whether the row was recognised as this source's history at all. */
+        fun accept(outcome: RowOutcome): Boolean = when (outcome) {
+            is RowOutcome.Play -> {
+                add(outcome.artist, outcome.title, outcome.album, outcome.atSeconds)
+                true
+            }
+            RowOutcome.Skip -> {
+                skipped++
+                true
+            }
+            RowOutcome.NotHistory -> false
+        }
 
-        fun add(artist: String, title: String, album: String?, atSeconds: Long) {
+        private fun add(artist: String, title: String, album: String?, atSeconds: Long) {
             val key = TrackKey.exact(artist, title)
             val entry = tracks.getOrPut(key) { Entry(artist, title, album) }
             entry.plays++
@@ -355,22 +553,6 @@ object PlayHistoryArchive {
         )
     }
 
-    private fun String.asJsonArray(): JSONArray? = try {
-        when (val parsed = JSONTokener(this).nextValue()) {
-            is JSONArray -> parsed
-            // Some Takeout variants wrap the list in an object with a single key.
-            is JSONObject -> parsed.keys().asSequence()
-                .mapNotNull { parsed.optJSONArray(it) }
-                .firstOrNull()
-            else -> null
-        }
-    } catch (e: Exception) {
-        null
-    }
-
-    private fun JSONObject.optStringOrNull(key: String): String? =
-        if (isNull(key)) null else optString(key).takeIf { it.isNotBlank() }
-
     /**
      * ISO-8601 as every one of these writes it, which is not quite the same in any two.
      *
@@ -378,8 +560,8 @@ object PlayHistoryArchive {
      * and Takeout are proper instants. A timestamp that cannot be read costs only the accuracy of
      * LastPlayedDate, so it degrades to zero rather than dropping the play.
      */
-    private fun String.toEpochSeconds(): Long {
-        val trimmed = trim()
+    internal fun String?.toEpochSecondsOrZero(): Long {
+        val trimmed = this?.trim().orEmpty()
         if (trimmed.isEmpty()) return 0L
         runCatching { return Instant.parse(trimmed).epochSecond }
         runCatching { return Instant.parse(trimmed.replace(' ', 'T') + ":00Z").epochSecond }
@@ -401,12 +583,24 @@ object PlayHistoryArchive {
     }
 
     /** The picker often reports a generic type, so the magic decides rather than the name. */
-    private fun looksLikeZip(uri: Uri, context: Context): Boolean = try {
+    private fun looksLikeZip(context: Context, uri: Uri): Boolean = try {
         context.contentResolver.openInputStream(uri)?.use { stream ->
             val magic = ByteArray(2)
             stream.read(magic) == 2 && magic[0] == 'P'.code.toByte() && magic[1] == 'K'.code.toByte()
         } == true
     } catch (e: Exception) {
         false
+    }
+
+    /** A UTF-8 export often carries one, and it would otherwise be part of the first header name. */
+    private const val BYTE_ORDER_MARK = "﻿"
+
+    /** Keeps a parser's reader from closing the archive the entry came out of. */
+    private class ShieldedInputStream(private val delegate: InputStream) : InputStream() {
+        override fun read(): Int = delegate.read()
+        override fun read(b: ByteArray, off: Int, len: Int): Int = delegate.read(b, off, len)
+        override fun available(): Int = delegate.available()
+        override fun skip(n: Long): Long = delegate.skip(n)
+        override fun close() = Unit
     }
 }

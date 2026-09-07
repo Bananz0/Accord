@@ -91,6 +91,9 @@ class JellyfinLibraryLoader(
         idMap.load()
         favouriteLocalIds.clear()
 
+        // A refresh is allowed to improve presentation metadata, never to erase a confirmed image
+        // merely because one Jellyfin page omitted its optional image fields this time.
+        val previousRows = dao?.getAll()?.associateBy(CachedSong::jellyfinId).orEmpty()
         val rows = mutableListOf<CachedSong>()
         var startIndex = 0
         var total = -1
@@ -103,7 +106,8 @@ class JellyfinLibraryLoader(
             if (items.isEmpty()) break
 
             for (item in items) {
-                val row = toCachedSong(item) ?: continue
+                val fresh = toCachedSong(item) ?: continue
+                val row = retainCachedArtwork(fresh, previousRows[fresh.jellyfinId])
                 if (row.isFavourite) favouriteLocalIds.add(row.localId)
                 rows += row
             }
@@ -118,7 +122,7 @@ class JellyfinLibraryLoader(
                 val now = System.currentTimeMillis()
                 if (now - lastPartialAt >= PARTIAL_EMIT_INTERVAL_MS) {
                     lastPartialAt = now
-                    onPartial(LibraryGrouper.group(rows.map { cachedToEntry(it) }))
+                    onPartial(LibraryGrouper.group(inheritAlbumArtwork(rows).map { cachedToEntry(it) }))
                 }
             }
 
@@ -127,10 +131,11 @@ class JellyfinLibraryLoader(
 
         // Written once, after every ID for this sync has been allocated.
         idMap.flush()
-        dao?.replaceAll(rows)
+        val completeRows = inheritAlbumArtwork(rows)
+        dao?.replaceAll(completeRows)
         Log.d(TAG, "Loaded ${rows.size} songs from Jellyfin")
 
-        return LibraryGrouper.group(rows.map { cachedToEntry(it) })
+        return LibraryGrouper.group(completeRows.map { cachedToEntry(it) })
     }
 
     /** What an incremental sync did, so the caller knows whether to rebuild anything. */
@@ -192,14 +197,20 @@ class JellyfinLibraryLoader(
         Log.d(TAG, "Album probe: ${changed.size} changed, ${removed.size} removed")
 
         idMap.load()
+        val previousRows = dao.getAll().associateBy(CachedSong::jellyfinId)
         val freshRows = mutableListOf<CachedSong>()
         for (albumId in changed.keys) {
             val items = fetchAlbumTracks(albumId) ?: return SyncOutcome.NeedsFullSync
-            items.forEach { item -> toCachedSong(item)?.let(freshRows::add) }
+            items.forEach { item ->
+                toCachedSong(item)?.let { fresh ->
+                    freshRows += retainCachedArtwork(fresh, previousRows[fresh.jellyfinId])
+                }
+            }
         }
         idMap.flush()
 
-        dao.replaceAlbums((changed.keys + removed).toList(), freshRows)
+        val completeFreshRows = inheritAlbumArtwork(freshRows)
+        dao.replaceAlbums((changed.keys + removed).toList(), completeFreshRows)
         stateDao.deleteByAlbumIds(removed.toList())
         stateDao.upsertAll(changed.values.toList())
 
@@ -209,7 +220,7 @@ class JellyfinLibraryLoader(
         return SyncOutcome.Updated(
             library = library,
             changedAlbumIds = changed.keys + removed,
-            staleStreamKeys = freshRows.map { streamUrl(it) }.filter { it.isNotEmpty() }.toSet(),
+            staleStreamKeys = completeFreshRows.map { streamUrl(it) }.filter { it.isNotEmpty() }.toSet(),
         )
     }
 
@@ -404,7 +415,14 @@ class JellyfinLibraryLoader(
                     .setGenre(row.genre)
                     .setReleaseYear(row.albumYear)
                     .setRecordingYear(row.albumYear)
+                    // Duration is first-class Media3 metadata. Keeping it only in the legacy
+                    // extras bundle made Cast/MediaSession classify every track as an unknown-
+                    // length stream, so Android omitted its elapsed time and seek bar.
+                    .apply { row.durationMs?.takeIf { it > 0L }?.let(::setDurationMs) }
                     .setExtras(Bundle().apply {
+                        // Stable across every Accord client for this server, unlike the interned
+                        // local mediaId. Cast uses it to let another phone adopt the same queue.
+                        putString(EXTRA_JELLYFIN_ITEM_ID, row.jellyfinId)
                         row.artistId?.let { putLong("ArtistId", it) }
                         row.albumId?.let { putLong("AlbumId", it) }
                         row.genreId?.let { putLong("GenreId", it) }
@@ -537,6 +555,8 @@ class JellyfinLibraryLoader(
                 itemId = UUID.fromString(albumGuid.toDashedUuid()),
                 imageType = ImageType.PRIMARY,
                 tag = albumTag,
+                maxWidth = COVER_MAX_WIDTH,
+                quality = COVER_QUALITY,
             )
         }
         val ownTag = row.ownImageTag ?: return null
@@ -544,12 +564,39 @@ class JellyfinLibraryLoader(
             itemId = UUID.fromString(row.jellyfinId.toDashedUuid()),
             imageType = ImageType.PRIMARY,
             tag = ownTag,
+            maxWidth = COVER_MAX_WIDTH,
+            quality = COVER_QUALITY,
         )
+    }
+
+    /** Keeps a last-known-good image only while the item still describes the same album. */
+    private fun retainCachedArtwork(fresh: CachedSong, previous: CachedSong?): CachedSong {
+        if (previous == null) return fresh
+        val sameAlbum = fresh.albumJellyfinId == previous.albumJellyfinId &&
+            fresh.album == previous.album && fresh.albumArtist == previous.albumArtist
+        return fresh.copy(
+            albumImageTag = fresh.albumImageTag
+                ?: previous.albumImageTag.takeIf { sameAlbum },
+            ownImageTag = fresh.ownImageTag ?: previous.ownImageTag,
+        )
+    }
+
+    /** Jellyfin sometimes puts an album tag on only some Audio rows; one proven tag serves all. */
+    private fun inheritAlbumArtwork(rows: List<CachedSong>): List<CachedSong> {
+        val tags = rows.asSequence()
+            .filter { it.albumJellyfinId != null && it.albumImageTag != null }
+            .associate { it.albumJellyfinId!! to it.albumImageTag!! }
+        if (tags.isEmpty()) return rows
+        return rows.map { row ->
+            if (row.albumImageTag != null) row
+            else row.copy(albumImageTag = row.albumJellyfinId?.let(tags::get))
+        }
     }
 
     companion object {
         /** Extras carrying Jellyfin's server-side listening history onto each MediaItem. */
         const val EXTRA_PLAY_COUNT = "JellyfinPlayCount"
+        const val EXTRA_JELLYFIN_ITEM_ID = "JellyfinItemId"
         const val EXTRA_SOURCE_CONTAINER = "JellyfinSourceContainer"
         const val EXTRA_IS_FAVOURITE = "JellyfinIsFavourite"
         const val EXTRA_LAST_PLAYED = "JellyfinLastPlayed"
@@ -559,6 +606,24 @@ class JellyfinLibraryLoader(
         const val EXTRA_ALBUM_ARTIST_IDS = "JellyfinAlbumArtistIds"
 
         private const val TAG = "JellyfinLibraryLoader"
+
+        /**
+         * Caps what Jellyfin sends for song and album artwork.
+         *
+         * Asking for an image without a size returns the *original source file*, which for a
+         * library mastered from 3K/5K covers is several megabytes of JPEG. Every track change
+         * fetched one, and okio buffers a response body as `byte[]` on the Java heap - so skipping
+         * through a queue walked the heap into its 256 MB ceiling and the process died on whatever
+         * allocated next (usually okio itself, mid-read). It also filled Coil's disk cache with
+         * originals nothing ever displayed at that size.
+         *
+         * 1440 is comfortably above the largest surface that draws this URI - the full player's
+         * cover, 932 px on a 1080p phone - and leaves headroom for a tablet. The backdrops sample
+         * it far smaller still. Playlists and credits already capped theirs; this is the same idea
+         * applied to the artwork that actually changes on every track.
+         */
+        private const val COVER_MAX_WIDTH = 1440
+        private const val COVER_QUALITY = 90
         /**
          * How often a sync in progress may publish what it has.
          *

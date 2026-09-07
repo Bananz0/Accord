@@ -19,6 +19,7 @@ import androidx.security.crypto.MasterKey
  */
 class LidarrCredentialStore(context: Context) {
 
+    private val appContext = context.applicationContext
     private val prefs: SharedPreferences = openPreferences(context)
 
     /** Base address, without a trailing slash. */
@@ -37,12 +38,26 @@ class LidarrCredentialStore(context: Context) {
      * defaults because profile ids and root paths belong to one particular Lidarr instance.
      */
     fun updateServer(serverUrl: String, apiKey: String) {
+        updateServer(serverUrl, apiKey, syncedThroughPlugin = false)
+    }
+
+    /** Saves credentials supplied by the authenticated Jellyfin plugin endpoint. */
+    fun updateServerFromPlugin(serverUrl: String, apiKey: String) {
+        updateServer(serverUrl, apiKey, syncedThroughPlugin = true)
+    }
+
+    private fun updateServer(
+        serverUrl: String,
+        apiKey: String,
+        syncedThroughPlugin: Boolean,
+    ) {
         val normalizedUrl = serverUrl.trim().trimEnd('/')
         val normalizedKey = apiKey.trim()
         val serverChanged = this.serverUrl != normalizedUrl || this.apiKey != normalizedKey
         prefs.edit().apply {
             putString(KEY_SERVER_URL, normalizedUrl)
             putString(KEY_API_KEY, normalizedKey)
+            putBoolean(KEY_SYNCED_THROUGH_PLUGIN, syncedThroughPlugin)
             if (serverChanged) {
                 remove(KEY_ROOT_FOLDER)
                 remove(KEY_QUALITY_PROFILE)
@@ -51,7 +66,12 @@ class LidarrCredentialStore(context: Context) {
                 remove(KEY_METADATA_PROFILE_NAME)
             }
         }.apply()
+        publishConfiguredFlag(appContext)
     }
+
+    /** True when the active address and key came from the Jellyfin plugin, not manual entry. */
+    val isSyncedThroughPlugin: Boolean
+        get() = prefs.getBoolean(KEY_SYNCED_THROUGH_PLUGIN, false)
 
     /**
      * Where Lidarr should put new music, and how it should grade it.
@@ -102,6 +122,7 @@ class LidarrCredentialStore(context: Context) {
         PreferenceManager.getDefaultSharedPreferences(context.applicationContext)
             .edit()
             .putBoolean(KEY_IS_CONFIGURED, isConfigured())
+            .putBoolean(KEY_SYNCED_THROUGH_PLUGIN, isSyncedThroughPlugin)
             .commit()
     }
 
@@ -136,11 +157,16 @@ class LidarrCredentialStore(context: Context) {
         private const val KEY_METADATA_PROFILE = "metadata_profile"
         private const val KEY_QUALITY_PROFILE_NAME = "quality_profile_name"
         private const val KEY_METADATA_PROFILE_NAME = "metadata_profile_name"
+        private const val KEY_SYNCED_THROUGH_PLUGIN = "lidarr_synced_through_plugin"
 
         private const val KEY_IS_CONFIGURED = "lidarr_is_configured"
 
         fun isConfigured(context: Context): Boolean =
             PreferenceManager.getDefaultSharedPreferences(context.applicationContext)
                 .getBoolean(KEY_IS_CONFIGURED, false)
+
+        fun isSyncedThroughPlugin(context: Context): Boolean =
+            PreferenceManager.getDefaultSharedPreferences(context.applicationContext)
+                .getBoolean(KEY_SYNCED_THROUGH_PLUGIN, false)
     }
 }

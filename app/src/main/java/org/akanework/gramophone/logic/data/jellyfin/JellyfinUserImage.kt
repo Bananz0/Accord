@@ -10,7 +10,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinReporter.Companion.toDashedUuid
+import org.jellyfin.sdk.api.client.extensions.imageApi
 import org.jellyfin.sdk.api.client.extensions.userApi
+import org.jellyfin.sdk.model.UUID
 
 /**
  * The signed-in user's Jellyfin profile picture.
@@ -42,9 +45,8 @@ object JellyfinUserImage {
      */
     suspend fun refresh() {
         val api = JellyfinClientHolder.api()
-        val server = JellyfinClientHolder.credentials.serverUrl?.trimEnd('/')
         val userId = JellyfinClientHolder.credentials.userId
-        if (api == null || server == null || userId == null) {
+        if (api == null || userId == null) {
             _urlFlow.value = null
             return
         }
@@ -55,7 +57,12 @@ object JellyfinUserImage {
             Log.w(TAG, "Could not read the current user", it)
             return
         }
-        _urlFlow.value = tag?.let { "$server/UserImage?userId=$userId&tag=$it" }
+        _urlFlow.value = tag?.let {
+            api.imageApi.getUserImageUrl(
+                userId = UUID.fromString(userId.toDashedUuid()),
+                tag = it,
+            )
+        }
     }
 
     /**
@@ -85,13 +92,19 @@ object JellyfinUserImage {
 
     /** Removes the picture, leaving the app's default glyph in its place. */
     suspend fun remove(): Boolean {
-        val session = session() ?: return false
-        val request = Request.Builder()
-            .url("${session.server}/UserImage?userId=${session.userId}")
-            .header("Authorization", session.authHeader)
-            .delete()
-            .build()
-        return send(request, "Removing the profile picture")
+        val api = JellyfinClientHolder.api() ?: return false
+        val userId = JellyfinClientHolder.credentials.userId ?: return false
+        val accepted = withContext(Dispatchers.IO) {
+            runCatching {
+                api.imageApi.deleteUserImage(UUID.fromString(userId.toDashedUuid()))
+                true
+            }.getOrElse {
+                Log.w(TAG, "Removing the profile picture failed", it)
+                false
+            }
+        }
+        refresh()
+        return accepted
     }
 
     private suspend fun send(request: Request, what: String): Boolean {

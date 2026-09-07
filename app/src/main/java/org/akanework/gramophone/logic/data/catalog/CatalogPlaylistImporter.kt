@@ -1,30 +1,34 @@
-package org.akanework.gramophone.logic.data.spotify
+package org.akanework.gramophone.logic.data.catalog
 
 import android.content.Context
 import android.util.Log
 import androidx.media3.common.MediaItem
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinPlaylists
+import org.akanework.gramophone.logic.data.matching.MusicText
 
 /**
- * Recreates a Spotify playlist on Jellyfin out of the user's own Jellyfin tracks.
+ * Recreates an outside playlist on Jellyfin out of the user's own Jellyfin tracks.
  *
- * Nothing is copied from Spotify but names: each track is looked up in the library, and the playlist
- * that results points at files the user already owns. Anything not in the library is simply reported
- * as missing.
+ * Nothing is copied from the source but names: each track is looked up in the library, and the
+ * playlist that results points at files the user already owns. Anything not in the library is
+ * reported as missing, so it can be requested.
+ *
+ * The source is deliberately not named anywhere below - it takes [ExternalTrack], so a Deezer or
+ * Apple Music playlist imports through exactly this code.
  */
-object SpotifyPlaylistImporter {
+object CatalogPlaylistImporter {
 
-    private const val TAG = "SpotifyPlaylistImporter"
+    private const val TAG = "CatalogPlaylistImporter"
 
     /**
      * [missingTracks] carries the tracks that found no local match, so the caller can offer to
-     * request them from Lidarr - the whole point of noticing they are missing.
+     * request them - the whole point of noticing they are missing.
      */
     data class Result(
         val playlistName: String,
         val matched: Int,
         val missing: Int,
-        val missingTracks: List<SpotifyClient.Track> = emptyList(),
+        val missingTracks: List<ExternalTrack> = emptyList(),
         val remotePlaylistId: String? = null,
     )
 
@@ -33,23 +37,23 @@ object SpotifyPlaylistImporter {
      *
      * Runs blocking database work, so call it off the main thread.
      */
-    fun import(
+    suspend fun import(
         context: Context,
         playlistName: String,
-        tracks: List<SpotifyClient.Track>,
+        tracks: List<ExternalTrack>,
         library: List<MediaItem>,
         replaceExisting: Boolean = false,
     ): Result {
         val index = buildIndex(library)
         val matched = LinkedHashSet<String>()
-        val missingTracks = mutableListOf<SpotifyClient.Track>()
+        val missingTracks = mutableListOf<ExternalTrack>()
 
         tracks.forEach { track ->
             val mediaId = index.find(track)
             if (mediaId == null) {
                 missingTracks += track
             } else {
-                // A Spotify playlist can list the same track twice; an imported playlist should not.
+                // A source playlist can list the same track twice; an imported playlist should not.
                 matched.add(mediaId)
             }
         }
@@ -98,7 +102,7 @@ object SpotifyPlaylistImporter {
      * Metadata-based lookup into the library.
      *
      * Jellyfin can legitimately contain the same recording on several releases. Keep all those
-     * candidates and rank them using Spotify's release metadata; a map keyed only by artist/title
+     * candidates and rank them using the source's release metadata; a map keyed only by artist/title
      * silently made whichever edition Jellyfin returned first win every playlist import.
      */
     private class LibraryIndex(library: List<MediaItem>) {
@@ -113,7 +117,7 @@ object SpotifyPlaylistImporter {
                 .groupBy { it.title.recordingKey() }
         }
 
-        fun find(track: SpotifyClient.Track): String? = selectMatch(
+        fun find(track: ExternalTrack): String? = selectMatch(
             track,
             byRecordingTitle[track.title.recordingKey()].orEmpty(),
         )
@@ -161,7 +165,7 @@ object SpotifyPlaylistImporter {
 
     /** Chooses a release deterministically, or refuses to guess when the best evidence is tied. */
     internal fun selectMatch(
-        track: SpotifyClient.Track,
+        track: ExternalTrack,
         candidates: List<LibraryTrack>,
     ): String? {
         if (candidates.isEmpty()) return null
@@ -187,7 +191,7 @@ object SpotifyPlaylistImporter {
         return best.first.mediaId
     }
 
-    private fun score(track: SpotifyClient.Track, candidate: LibraryTrack) = MatchScore(
+    private fun score(track: ExternalTrack, candidate: LibraryTrack) = MatchScore(
         title = if (track.title.strictKey() == candidate.title.strictKey()) 0 else 1,
         artist = artistScore(track.artist, candidate.artist),
         album = albumScore(track.album, candidate.album),
@@ -257,7 +261,7 @@ object SpotifyPlaylistImporter {
         }
     }
 
-    private fun positionScore(track: SpotifyClient.Track, candidate: LibraryTrack): Int {
+    private fun positionScore(track: ExternalTrack, candidate: LibraryTrack): Int {
         val trackMatches = track.trackNumber != null && track.trackNumber == candidate.trackNumber
         val discMatches = track.discNumber != null && track.discNumber == candidate.discNumber
         return when {
@@ -275,32 +279,11 @@ object SpotifyPlaylistImporter {
         else -> 3
     }
 
-    /** Only remove spelling/credit noise; live, acoustic and remix markers identify real versions. */
-    private fun String.recordingKey(): String = lowercase()
-        .replace(FEATURE_CREDIT, "")
-        .replace(REMASTER_CREDIT, "")
-        .strictKey()
+    private fun String.recordingKey(): String = MusicText.recordingKey(this)
 
-    private fun String.albumFamilyKey(): String = lowercase()
-        .replace(EDITION_CREDIT, "")
-        .strictKey()
+    private fun String.albumFamilyKey(): String = MusicText.releaseFamilyKey(this)
 
-    private fun String?.isPreferredEdition(): Boolean =
-        this?.contains(PREFERRED_EDITION) == true
+    private fun String?.isPreferredEdition(): Boolean = MusicText.isPreferredEdition(this)
 
-    private fun String.strictKey(): String = lowercase().filter(Char::isLetterOrDigit)
-
-    private val FEATURE_CREDIT = Regex(
-        """(?i)\s*(?:\(|\[|-)?\s*(?:feat\.?|ft\.?|featuring)\s+.*?(?:\)|\]|$)"""
-    )
-    private val REMASTER_CREDIT = Regex(
-        """(?i)\s*(?:\(|\[|-)?\s*(?:(?:19|20)\d{2}\s+)?remaster(?:ed)?(?:\s+(?:19|20)\d{2})?\s*(?:\)|\])?"""
-    )
-    private val EDITION_CREDIT = Regex(
-        """(?i)\s*(?:\(|\[|-)?\s*(?:deluxe|expanded|anniversary|special|complete|bonus(?:\s+track)?|platinum)\s*(?:edition|version)?\s*(?:\)|\])?"""
-    )
-    private val PREFERRED_EDITION = Regex(
-        """\b(deluxe|expanded|anniversary|special edition|complete edition|bonus track|platinum)\b""",
-        RegexOption.IGNORE_CASE,
-    )
+    private fun String.strictKey(): String = MusicText.compactKey(this)
 }

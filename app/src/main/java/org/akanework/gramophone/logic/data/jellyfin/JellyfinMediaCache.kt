@@ -41,8 +41,16 @@ object JellyfinMediaCache {
      */
     private const val PREF_KEY_CACHE_LIMIT = "cache_size_limit"
 
-    /** Matches the first entry of `@array/cache_limit_val`; 0 there means "no ceiling". */
-    private const val DEFAULT_CACHE_LIMIT_BYTES = 0L
+    /**
+     * 5 GB, matching the fifth entry of `@array/cache_limit_val` and the preference's own default.
+     *
+     * Deliberately not 0. Zero is the array's "no ceiling" option, and defaulting to it meant
+     * [trimToLimit] returned immediately on every fresh install - the eviction was written and
+     * correct but nothing ever asked for it, so a streamed library grew on disk without bound
+     * until somebody found this setting. Downloads are exempt from the sweep, so a ceiling costs
+     * nothing that was explicitly kept offline.
+     */
+    private const val DEFAULT_CACHE_LIMIT_BYTES = 5_368_709_120L
 
     @Volatile
     private var cache: SimpleCache? = null
@@ -93,12 +101,24 @@ object JellyfinMediaCache {
      * @param quality what to ask the server for. Evaluated per request rather than captured, so
      *   changing the setting or walking off wifi takes effect on the next track instead of
      *   requiring the library to be rebuilt.
+     *
+     *   Null rather than a default lambda, and this is not a style choice. A Kotlin default
+     *   argument is evaluated inside the callee, so `= { streamingQuality(context) }` captured the
+     *   *parameter* - which at both playback call sites is `GramophonePlaybackService` itself. The
+     *   lambda is handed to [StreamQualityResolver.factory], which stores it in a
+     *   `ResolvingDataSource.Factory`, which `ProgressiveMediaSource` keeps, which is reachable
+     *   from the `Timeline` that media3's `MediaSessionStub` holds in `lastOriginalTimeline`. A
+     *   binder stub outlives the service by design, so the service survived every
+     *   `Service#onDestroy()` - which is the leak LeakCanary reported five times.
      */
     fun dataSourceFactory(
         context: Context,
-        quality: () -> StreamQuality = { StreamQuality.streamingQuality(context) },
+        quality: (() -> StreamQuality)? = null,
     ): DataSource.Factory {
         val appContext = context.applicationContext
+        // Resolved here, against the Application, so nothing longer-lived than the process ends up
+        // inside a data source factory.
+        val streamQuality = quality ?: { StreamQuality.streamingQuality(appContext) }
         val cacheFactory = CacheDataSource.Factory()
             .setCache(get(appContext))
             .setUpstreamDataSourceFactory(
@@ -116,8 +136,37 @@ object JellyfinMediaCache {
         return StreamQualityResolver.factory(
             context = appContext,
             upstream = cacheFactory,
-            quality = quality,
+            quality = streamQuality,
+            cachedVariant = { itemId -> cachedVariantFor(appContext, itemId) },
         )
+    }
+
+    /**
+     * The variant of [itemId] this device already holds, or null if it holds none.
+     *
+     * Local always beats the network. The downloader and the player write and read the same
+     * [SimpleCache], so a track being downloaded right now is readable as it lands - media3 serves
+     * the written spans and only fetches the holes, from the same variant. Before this, playback
+     * keyed strictly on the *streaming* quality while the download keyed on the *download* quality;
+     * whenever those two settings differed the two were separate cache entries and a track could be
+     * fetched a second time over the network while a perfectly good copy of it was on disk.
+     *
+     * The download quality is tried first because that is the variant a deliberate download chose.
+     * Cached spans rather than a completed download, so a partial entry counts: half a track on
+     * disk is still half a track that does not need fetching.
+     *
+     * One consequence worth knowing: an item already cached at a higher quality will be finished at
+     * that quality even on a metered connection. That is the instruction - prefer what is local -
+     * and it only ever applies to a track this device already started keeping.
+     */
+    fun cachedVariantFor(context: Context, itemId: String): StreamQuality? {
+        val appContext = context.applicationContext
+        val cache = get(appContext)
+        val preferred = StreamQuality.downloadQuality(appContext)
+        val ordered = listOf(preferred) + StreamQuality.entries.filter { it != preferred }
+        return ordered.firstOrNull {
+            cache.getCachedSpans(StreamQualityResolver.cacheKey(itemId, it)).isNotEmpty()
+        }
     }
 
     fun currentSizeBytes(context: Context): Long = get(context).cacheSpace

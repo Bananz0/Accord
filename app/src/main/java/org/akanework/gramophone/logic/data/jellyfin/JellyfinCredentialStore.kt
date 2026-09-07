@@ -24,6 +24,22 @@ class JellyfinCredentialStore(context: Context) {
         get() = prefs.getString(KEY_SERVER_URL, null)
         set(value) = prefs.edit().putString(KEY_SERVER_URL, value).apply()
 
+    /** Tested address used on the same Wi-Fi/LAN as the Jellyfin server. */
+    var localServerUrl: String?
+        get() = prefs.getString(KEY_LOCAL_SERVER_URL, null)
+            ?: serverUrl?.takeIf(JellyfinEndpoints::isLocalAddress)
+        set(value) = prefs.edit().putString(KEY_LOCAL_SERVER_URL, value).apply()
+
+    /** Tested public, VPN or reverse-proxy address used away from the server's LAN. */
+    var remoteServerUrl: String?
+        get() = prefs.getString(KEY_REMOTE_SERVER_URL, null)
+            ?: serverUrl?.takeUnless(JellyfinEndpoints::isLocalAddress)
+        set(value) = prefs.edit().putString(KEY_REMOTE_SERVER_URL, value).apply()
+
+    var localNetworkName: String?
+        get() = prefs.getString(KEY_LOCAL_NETWORK_NAME, null)
+        set(value) = prefs.edit().putString(KEY_LOCAL_NETWORK_NAME, value).apply()
+
     var accessToken: String?
         get() = prefs.getString(KEY_ACCESS_TOKEN, null)
         set(value) = prefs.edit().putString(KEY_ACCESS_TOKEN, value).apply()
@@ -57,13 +73,25 @@ class JellyfinCredentialStore(context: Context) {
      * calling exitProcess() - would discard the session and drop the user back on this screen with
      * no explanation.
      */
-    fun saveSession(context: Context, serverUrl: String, accessToken: String, userId: String, serverName: String?) {
+    fun saveSession(
+        context: Context,
+        serverUrl: String,
+        accessToken: String,
+        userId: String,
+        serverName: String?,
+        localServerUrl: String? = null,
+        remoteServerUrl: String? = null,
+        localNetworkName: String? = null,
+    ) {
         @Suppress("ApplySharedPref")
         prefs.edit()
             .putString(KEY_SERVER_URL, serverUrl)
             .putString(KEY_ACCESS_TOKEN, accessToken)
             .putString(KEY_USER_ID, userId)
             .putString(KEY_SERVER_NAME, serverName)
+            .putString(KEY_LOCAL_SERVER_URL, localServerUrl)
+            .putString(KEY_REMOTE_SERVER_URL, remoteServerUrl)
+            .putString(KEY_LOCAL_NETWORK_NAME, localNetworkName)
             .commit()
         publishSessionFlag(context)
     }
@@ -87,6 +115,9 @@ class JellyfinCredentialStore(context: Context) {
             .remove(KEY_ACCESS_TOKEN)
             .remove(KEY_USER_ID)
             .remove(KEY_SERVER_NAME)
+            .remove(KEY_LOCAL_SERVER_URL)
+            .remove(KEY_REMOTE_SERVER_URL)
+            .remove(KEY_LOCAL_NETWORK_NAME)
             .apply()
     }
 
@@ -115,6 +146,9 @@ class JellyfinCredentialStore(context: Context) {
         private const val FALLBACK_PREFS_NAME = "jellyfin_credentials_plain"
 
         private const val KEY_SERVER_URL = "server_url"
+        private const val KEY_LOCAL_SERVER_URL = "local_server_url"
+        private const val KEY_REMOTE_SERVER_URL = "remote_server_url"
+        private const val KEY_LOCAL_NETWORK_NAME = "local_network_name"
         private const val KEY_ACCESS_TOKEN = "access_token"
         private const val KEY_USER_ID = "user_id"
         private const val KEY_SERVER_NAME = "server_name"

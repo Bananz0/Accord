@@ -2,7 +2,14 @@ package org.akanework.gramophone.logic.data.jellyfin
 
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.Build
+import android.util.Log
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import uk.akane.accord.BuildConfig
 import org.jellyfin.sdk.Jellyfin
@@ -25,9 +32,11 @@ import kotlin.time.Duration.Companion.seconds
  */
 object JellyfinClientHolder {
 
-    private const val CLIENT_NAME = "Accord"
+    private const val CLIENT_NAME = "Fincord"
 
     private lateinit var appContext: Context
+    private val endpointScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var networkCallbackRegistered = false
 
     /** Shared connection pool; [mediaHttpClient] hands the same one to media3. */
     private val okHttpFactory = OkHttpFactory()
@@ -42,7 +51,20 @@ object JellyfinClientHolder {
      */
     fun init(context: Context) {
         appContext = context.applicationContext
+        if (!networkCallbackRegistered) {
+            val connectivity = appContext.getSystemService(ConnectivityManager::class.java)
+            runCatching {
+                connectivity?.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
+                    override fun onAvailable(network: Network) {
+                        endpointScope.launch { JellyfinEndpoints.selectReachableStoredEndpoint() }
+                    }
+                })
+                networkCallbackRegistered = connectivity != null
+            }.onFailure { Log.d(CLIENT_NAME, "Could not watch network changes", it) }
+        }
     }
+
+    internal fun context(): Context = appContext
 
     /** Opens the credential store on first use. Must be touched off the main thread first. */
     val credentials: JellyfinCredentialStore by lazy { JellyfinCredentialStore(appContext) }
@@ -88,6 +110,16 @@ object JellyfinClientHolder {
      */
     fun createUnauthenticatedApi(serverUrl: String): ApiClient =
         jellyfin.createApi(baseUrl = serverUrl)
+
+    /** A short-lived unauthenticated client used only to prove that a candidate base URL answers. */
+    fun createEndpointProbeApi(serverUrl: String): ApiClient = jellyfin.createApi(
+        baseUrl = serverUrl,
+        httpClientOptions = HttpClientOptions(
+            connectTimeout = 4.seconds,
+            socketTimeout = 4.seconds,
+            requestTimeout = 5.seconds,
+        ),
+    )
 
     /**
      * Server discovery and address resolution.
@@ -135,4 +167,5 @@ object JellyfinClientHolder {
                 .also { cachedApiHttpClient = it }
         }
     }
+
 }
