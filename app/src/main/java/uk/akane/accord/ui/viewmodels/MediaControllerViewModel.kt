@@ -219,10 +219,12 @@ class MediaControllerViewModel(application: Application) : AndroidViewModel(appl
 }
 
 fun Player.registerLifecycleCallback(lifecycle: Lifecycle, callback: Player.Listener) {
+    if (lifecycle.currentState == Lifecycle.State.DESTROYED) return
     addListener(callback)
     lifecycle.addObserver(object : DefaultLifecycleObserver {
         override fun onDestroy(owner: LifecycleOwner) {
             removeListener(callback)
+            owner.lifecycle.removeObserver(this)
         }
     })
 }

@@ -26,7 +26,9 @@ import org.akanework.gramophone.logic.data.playcounts.TrackKey
  * Qualifying plays are written to the local queue *first* and only removed once Last.fm confirms
  * them, so losing signal delays a scrobble instead of losing it.
  */
-class LastFmScrobbler(private val context: Context) {
+class LastFmScrobbler(context: Context) {
+
+    private val context = context.applicationContext
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 

@@ -22,6 +22,7 @@ class LifecycleCallbackListImpl<T>(lifecycle: Lifecycle? = null) : LifecycleCall
     }
 
     override fun addCallback(lifecycle: Lifecycle?, callback: T) {
+        if (lifecycle?.currentState == Lifecycle.State.DESTROYED) return
         if (list.containsKey(callback)) throw IllegalArgumentException("cannot add same callback twice")
         list[callback] = lifecycle?.let { CallbackLifecycleObserver(it, callback) }
     }

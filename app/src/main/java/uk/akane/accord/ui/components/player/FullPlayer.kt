@@ -1,6 +1,8 @@
 package uk.akane.accord.ui.components.player
 
 import android.Manifest
+import uk.akane.accord.ui.viewmodels.MediaControllerViewModel
+import uk.akane.accord.ui.viewmodels.registerLifecycleCallback
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
@@ -940,9 +942,12 @@ class FullPlayer @JvmOverloads constructor(
             }
         }
 
-        activity.controllerViewModel.addControllerCallback(activity.lifecycle) { _, _ ->
+        activity.controllerViewModel.addControllerCallback(activity.lifecycle) { player, controllerLifecycle ->
             firstTime = true
-            instance?.addListener(this@FullPlayer)
+            player.registerLifecycleCallback(
+                MediaControllerViewModel.LifecycleIntersection(activity.lifecycle, controllerLifecycle).lifecycle,
+                this@FullPlayer,
+            )
             onRepeatModeChanged(instance?.repeatMode ?: Player.REPEAT_MODE_OFF)
             onShuffleModeEnabledChanged(instance?.shuffleModeEnabled == true)
             onPlaybackStateChanged(instance?.playbackState ?: Player.STATE_IDLE)
@@ -5306,6 +5311,14 @@ class FullPlayer @JvmOverloads constructor(
         remoteTargetsWarmupJob = null
         stopPositionUpdates()
         removeCallbacks(hideControlsRunnable)
+        lyricsRefreshJob?.cancel()
+        lyricsRefreshJob = null
+        qualityFlashAnimator?.removeAllListeners()
+        qualityFlashAnimator?.cancel()
+        qualityFlashAnimator = null
+        qualityFlashing = false
+        volumeUpdateAnimator?.cancel()
+        coverPauseAnimator?.cancel()
         controlsAnimator?.cancel()
         controlsAnimator = null
         contentTypeAnimator?.cancel()

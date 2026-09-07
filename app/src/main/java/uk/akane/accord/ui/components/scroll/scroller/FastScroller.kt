@@ -66,6 +66,21 @@ class FastScroller<T>(private val view: T) where T : View, T : FastScrollerTarge
         }
     }
 
+    init {
+        view.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: View) = Unit
+
+            override fun onViewDetachedFromWindow(v: View) {
+                handler.removeCallbacksAndMessages(null)
+                widthAnimator.cancel()
+                alphaAnimator.cancel()
+                isDragging = false
+                shouldIntercept = false
+                lastY = Float.NaN
+            }
+        })
+    }
+
     fun show() {
         val targetValue = if (isDragging) activeScrollerAlpha else idleScrollerAlpha
         if (alphaAnimator.targetValue == targetValue) return

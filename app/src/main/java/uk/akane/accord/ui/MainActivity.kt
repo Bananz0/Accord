@@ -768,6 +768,7 @@ class MainActivity : AppCompatActivity() {
 
     /** A bottom-nav item names its root, not whichever detail was left on that tab's stack. */
     private fun returnToDestinationRoot(onComplete: (() -> Unit)? = null) {
+        if (isFinishing || isDestroyed) return
         if (fragmentSwitcherView.isNavigationInProgress) {
             fragmentSwitcherView.postDelayed({ returnToDestinationRoot(onComplete) }, 32L)
             return
@@ -786,6 +787,7 @@ class MainActivity : AppCompatActivity() {
         attempt: Int = 0,
         query: String? = null,
     ) {
+        if (isFinishing || isDestroyed) return
         if (searchFragment.isVisible && !searchFragment.isHidden) {
             if (query.isNullOrBlank()) searchFragment.focusSearch()
             else searchFragment.showQuery(query)
@@ -809,6 +811,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun continueStackUnwind() {
+        if (isFinishing || isDestroyed) {
+            stackUnwindTarget = null
+            stackUnwindComplete = null
+            return
+        }
         val target = stackUnwindTarget ?: return
         if (fragmentSwitcherView.isNavigationInProgress) {
             fragmentSwitcherView.postDelayed(::continueStackUnwind, 32L)

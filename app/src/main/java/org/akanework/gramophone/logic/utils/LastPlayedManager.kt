@@ -35,6 +35,9 @@ import androidx.media3.session.MediaSession.MediaItemsWithStartPosition
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.CancellationException
 import uk.akane.accord.BuildConfig
 import org.akanework.gramophone.logic.use
 import org.akanework.gramophone.logic.utils.exoplayer.EndedWorkaroundPlayer
@@ -62,7 +65,8 @@ class LastPlayedManager(context: Context,
     }
 
     var allowSavingState = true
-    private val prefs by lazy { context.getSharedPreferences("LastPlayedManager", 0) }
+    private val prefs = context.applicationContext.getSharedPreferences("LastPlayedManager", 0)
+    private val restoreScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val saveHandler = Handler(Looper.getMainLooper())
 
@@ -120,9 +124,16 @@ class LastPlayedManager(context: Context,
 
     /** Writes immediately - for shutdown, where a debounced save would never run. */
     fun saveNow() {
-        if (!allowSavingState) return
         saveHandler.removeCallbacks(saveRunnable)
+        if (!allowSavingState) return
         performSave()
+    }
+
+    /** Stops work that can access a retired player; already captured saves may finish. */
+    fun release() {
+        allowSavingState = false
+        saveHandler.removeCallbacksAndMessages(null)
+        restoreScope.cancel()
     }
 
     private fun performSave() {
@@ -143,6 +154,8 @@ class LastPlayedManager(context: Context,
         val playbackParameters = controller.playbackParameters
         val persistent = controller.shufflePersistent
         val ended = controller.playbackState == Player.STATE_ENDED
+        // The disk write may outlive the service, but must not retain this manager or its player.
+        val prefs = this.prefs
         CoroutineScope(Dispatchers.Default).launch {
             if (BuildConfig.DEBUG) {
                 Log.d(TAG, "saving playlist (${items?.size ?: -1} items, repeat $repeatMode, " +
@@ -214,9 +227,11 @@ class LastPlayedManager(context: Context,
         if (BuildConfig.DEBUG) {
             Log.d(TAG, "decoding playlist...")
         }
-        CoroutineScope(Dispatchers.Default).launch {
+        restoreScope.launch {
             val seed = try {
                 CircularShuffleOrder.Persistent.deserialize(prefs.getString("shuffle_persist", null))
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 eraseShuffleOrder()
                 throw e
@@ -346,6 +361,8 @@ class LastPlayedManager(context: Context,
                     data
                 }
                 return@launch
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e(TAG, Log.getStackTraceString(e))
                 runCallback(callback, seed) { null }
@@ -353,14 +370,14 @@ class LastPlayedManager(context: Context,
             }
         }
     }
-}
 
-@OptIn(UnstableApi::class)
-private inline fun runCallback(crossinline callback: (MediaItemsWithStartPosition?,
-                                                      CircularShuffleOrder.Persistent) -> Unit,
-                               seed: CircularShuffleOrder.Persistent,
-                               noinline parameter: () -> MediaItemsWithStartPosition?) {
-    CoroutineScope(Dispatchers.Main).launch { callback(parameter(), seed) }
+    private fun runCallback(
+        callback: (MediaItemsWithStartPosition?, CircularShuffleOrder.Persistent) -> Unit,
+        seed: CircularShuffleOrder.Persistent,
+        parameter: () -> MediaItemsWithStartPosition?,
+    ) {
+        restoreScope.launch(Dispatchers.Main) { callback(parameter(), seed) }
+    }
 }
 
 private class SafeDelimitedStringConcat(private val delimiter: String) {

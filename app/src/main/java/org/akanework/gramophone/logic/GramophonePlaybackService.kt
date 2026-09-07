@@ -317,6 +317,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
     private var timerDuration = 0
         set(value) {
             field = value
+            handler.removeCallbacks(timer)
             if (value > 0) {
                 handler.postDelayed(timer, value.toLong())
             } else {
@@ -486,6 +487,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         lastPlayedManager.allowSavingState = false
 
         localPlayer = player
+        startPlaybackClockProbe()
         finnectPlayer = JellyfinRemotePlayer(Looper.getMainLooper(), serviceScope)
         val sessionPlayer = buildCastAwarePlayer(player)
 
@@ -763,7 +765,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         warmingTimeout = null
 
         if (old == null) {
-            player.release()
+            releaseLocalPlayer(player)
             return
         }
 
@@ -779,7 +781,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         localPlayer = player
         // Saving is suspended across the swap: the old manager still points at a player that is
         // about to be released, and persisting from it would write the wrong queue.
-        lastPlayedManager.allowSavingState = false
+        lastPlayedManager.release()
         lastPlayedManager = LastPlayedManager(this, player)
         lastPlayedManager.allowSavingState = false
 
@@ -795,7 +797,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         mediaSession?.player = player
         player.playWhenReady = wasPlaying
         retiringPlayerSink = true
-        old.release()
+        releaseLocalPlayer(old)
         retiringPlayerSink = false
 
         lastPlayedManager.allowSavingState = true
@@ -810,7 +812,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
     private fun discardWarmingPlayer() {
         warmingTimeout?.let(handler::removeCallbacks)
         warmingTimeout = null
-        warmingPlayer?.release()
+        warmingPlayer?.let(::releaseLocalPlayer)
         warmingPlayer = null
     }
 
@@ -836,9 +838,19 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
      *
      * Inert unless the tag is enabled: one post a second and an immediate return.
      */
-    private fun startPlaybackClockProbe(exoPlayer: androidx.media3.exoplayer.ExoPlayer) {
+    private var playbackClockProbe: Runnable? = null
+
+    private fun stopPlaybackClockProbe() {
+        playbackClockProbe?.let(handler::removeCallbacks)
+        playbackClockProbe = null
+    }
+
+    private fun startPlaybackClockProbe() {
+        stopPlaybackClockProbe()
         val tick = object : Runnable {
             override fun run() {
+                if (playbackClockProbe !== this) return
+                val exoPlayer = localPlayer?.exoPlayer ?: return
                 if (PlaybackClockProbe.isEnabled) {
                     if (exoPlayer.isPlaying) {
                         PlaybackClockProbe.sample(
@@ -849,14 +861,21 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
                         PlaybackClockProbe.reset()
                     }
                 }
-                handler.postDelayed(this, 1_000L)
+                if (playbackClockProbe === this) handler.postDelayed(this, 1_000L)
             }
         }
+        playbackClockProbe = tick
         handler.post(tick)
     }
 
-    /** The render factory behind the local player, kept only so [onDestroy] can detach it. */
-    private var localRenderFactory: GramophoneRenderFactory? = null
+    /** Both active and warming players own callbacks that must be detached when retired. */
+    private val localRenderFactories = mutableMapOf<EndedWorkaroundPlayer, GramophoneRenderFactory>()
+
+    private fun releaseLocalPlayer(player: EndedWorkaroundPlayer) {
+        localRenderFactories.remove(player)?.detach()
+        player.audioTrackProvider = null
+        player.release()
+    }
 
     private fun buildLocalPlayer(): EndedWorkaroundPlayer {
         /*
@@ -888,7 +907,6 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
             configurationListener = ::onAudioSinkInputFormatChanged,
             audioSinkListener = afFormatTracker::setAudioSink,
         )
-        localRenderFactory = renderFactory
         val player =
             EndedWorkaroundPlayer(
                 ExoPlayer.Builder(
@@ -935,11 +953,11 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
                     .setPlaybackLooper(internalPlaybackThread.looper)
                     .build()
             )
+        localRenderFactories[player] = renderFactory
         player.exoPlayer.addAnalyticsListener(afFormatTracker)
         // Lets the forwarding player run its position on the audio hardware's clock rather than
         // media3's. Measured, media3's is the worst clock in the stack; see HardwareClockPosition.
         player.audioTrackProvider = { afFormatTracker.probeAudioTrack }
-        startPlaybackClockProbe(player.exoPlayer)
         // Keep the cover the file itself carries.
         //
         // This hangs off the ExoPlayer rather than the MediaController the rest of the service
@@ -1064,11 +1082,13 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
     }
 
     override fun onDestroy() {
+        stopPlaybackClockProbe()
+        handler.removeCallbacksAndMessages(null)
         // Before anything else tears down: media3's binder stub keeps the timeline, and through it
         // the renderers and this factory, alive well past this point. Whatever else happens below,
         // the factory must stop pointing back at this service.
-        localRenderFactory?.detach()
-        localRenderFactory = null
+        localRenderFactories.values.forEach { it.detach() }
+        afFormatTracker.formatChangedCallback = null
         cancelPendingLocalLyricsFallback()
         automixTransitions?.release()
         automixTransitions = null
@@ -1091,6 +1111,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         // Important: this must happen before sending stop() as that changes state ENDED -> IDLE.
         // Immediately, not debounced: nothing will be around to run a delayed save.
         lastPlayedManager.saveNow()
+        lastPlayedManager.release()
         prefs.unregisterOnSharedPreferenceChangeListener(this)
         usbHiFiManager.release()
         mediaSession!!.player.stop()
@@ -1116,13 +1137,15 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         castQueuePlayer = null
         remoteCastPlayer?.release()
         remoteCastPlayer = null
-        localPlayer?.release()
+        localPlayer?.let(::releaseLocalPlayer)
         localPlayer = null
         mediaSession = null
         internalPlaybackThread.quitSafely()
         lyrics = null
         unregisterReceiver(headSetReceiver)
         unregisterReceiver(btCodecReceiver)
+        // Player teardown can synchronously enqueue final listener notifications and saves.
+        handler.removeCallbacksAndMessages(null)
         super.onDestroy()
     }
 

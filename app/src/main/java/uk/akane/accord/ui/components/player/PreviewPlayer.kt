@@ -1,6 +1,8 @@
 package uk.akane.accord.ui.components.player
 
 import android.content.Context
+import uk.akane.accord.ui.viewmodels.MediaControllerViewModel
+import uk.akane.accord.ui.viewmodels.registerLifecycleCallback
 import android.graphics.BlendMode
 import android.graphics.Canvas
 import android.graphics.RenderEffect
@@ -153,8 +155,11 @@ class PreviewPlayer @JvmOverloads constructor(
             floatingPanelLayout.showPlayerPopupFromPreview(it)
         }
 
-        activity.controllerViewModel.addControllerCallback(activity.lifecycle) { controller, _ ->
-            controller.addListener(playerListener)
+        activity.controllerViewModel.addControllerCallback(activity.lifecycle) { controller, controllerLifecycle ->
+            controller.registerLifecycleCallback(
+                MediaControllerViewModel.LifecycleIntersection(activity.lifecycle, controllerLifecycle).lifecycle,
+                playerListener,
+            )
             updatePlaybackControls(controller.playbackState)
             updateTitle(controller)
             updatePanelVisibility(controller)
