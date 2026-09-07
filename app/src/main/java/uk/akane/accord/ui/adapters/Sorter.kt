@@ -111,50 +111,50 @@ class Sorter<T>(
         return WrappingHintedComparator(type, when (type) {
             Type.ByTitleDescending -> {
                 SupportComparator.createAlphanumericComparator(true, {
-                    sortingHelper.getTitle(it) ?: ""
+                    sortingHelper.getTitle(it)
                 }, null)
             }
 
             Type.ByTitleAscending -> {
                 SupportComparator.createAlphanumericComparator(false, {
-                    sortingHelper.getTitle(it) ?: ""
+                    sortingHelper.getTitle(it)
                 }, null)
             }
 
             Type.ByArtistDescending -> {
                 SupportComparator.createAlphanumericComparator(true, {
-                    sortingHelper.getArtist(it) ?: ""
+                    sortingHelper.getArtist(it)
                 }, getComparator(if (rawOrderExposed)
                     Type.NativeOrderDescending else Type.ByTitleDescending))
             }
 
             Type.ByArtistAscending -> {
                 SupportComparator.createAlphanumericComparator(false, {
-                    sortingHelper.getArtist(it) ?: ""
+                    sortingHelper.getArtist(it)
                 }, getComparator(if (rawOrderExposed) Type.NativeOrder else Type.ByTitleAscending))
             }
 
             Type.ByAlbumTitleDescending -> {
                 SupportComparator.createAlphanumericComparator(true, {
-                    sortingHelper.getAlbumTitle(it) ?: ""
+                    sortingHelper.getAlbumTitle(it)
                 }, getComparator(Type.ByDiscAndTrack))
             }
 
             Type.ByAlbumTitleAscending -> {
                 SupportComparator.createAlphanumericComparator(false, {
-                    sortingHelper.getAlbumTitle(it) ?: ""
+                    sortingHelper.getAlbumTitle(it)
                 }, getComparator(Type.ByDiscAndTrack))
             }
 
             Type.ByAlbumArtistDescending -> {
                 SupportComparator.createAlphanumericComparator(true, {
-                    sortingHelper.getAlbumArtist(it) ?: ""
+                    sortingHelper.getAlbumArtist(it)
                 }, getComparator(Type.ByAlbumTitleDescending))
             }
 
             Type.ByAlbumArtistAscending -> {
                 SupportComparator.createAlphanumericComparator(false, {
-                    sortingHelper.getAlbumArtist(it) ?: ""
+                    sortingHelper.getAlbumArtist(it)
                 }, getComparator(Type.ByAlbumTitleAscending))
             }
 

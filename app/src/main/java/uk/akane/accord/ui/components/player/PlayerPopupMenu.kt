@@ -12,9 +12,11 @@ import uk.akane.accord.logic.dp
 import uk.akane.accord.ui.MainActivity
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinDownloadManager
+import uk.akane.accord.ui.components.GlobalTapHaptics
 
 object PlayerPopupMenu {
     private val popupAnchorOffset = 12.dp.px.toInt()
@@ -84,6 +86,55 @@ object PlayerPopupMenu {
             .build()
     }
 
+    /** The one pending cold open, so a second press does not queue a second menu behind the first. */
+    private var pendingOpen: Job? = null
+
+    /**
+     * Answers the press that asked for the menu, or nobody.
+     *
+     * Whether the song is downloaded has to be read off the disk index, and on a cold index that
+     * takes long enough for the user to give up and go somewhere else. A menu that arrives then is
+     * unasked-for: it opened over whatever screen the next tap had just reached, listing the
+     * playing song, and the tap that seemed to summon it had nothing to do with it. A touch landing
+     * while the answer is still out says plainly that the press has been abandoned, so the count of
+     * touches is read when the press is handled and compared when the answer comes back - the same
+     * test [uk.akane.accord.ui.components.TrackRowMenu] applies to the identical wait.
+     *
+     * Abandoning still runs [onDismiss]: the three dots are a checked button, and dropping the menu
+     * without telling the caller leaves them lit for a menu that never came.
+     */
+    private fun prepare(
+        anchorView: View,
+        onDismiss: (() -> Unit)?,
+        present: (MainActivity, PopupHelper.PopupEntries) -> Unit,
+    ) {
+        val activity = anchorView.context.findMainActivity()
+        val item = activity?.getPlayer()?.currentMediaItem
+        if (activity == null || item == null) return
+        pendingOpen?.cancel()
+        val openedAt = GlobalTapHaptics.touchGeneration
+        pendingOpen = activity.lifecycleScope.launch {
+            val downloaded = withContext(Dispatchers.IO) {
+                JellyfinDownloadManager.isDownloaded(activity, item)
+            }
+            pendingOpen = null
+            if (!anchorView.isAttachedToWindow ||
+                GlobalTapHaptics.touchGeneration != openedAt
+            ) {
+                onDismiss?.invoke()
+                return@launch
+            }
+            present(
+                activity,
+                build(
+                    anchorView.resources,
+                    PlayerMenuActions.isFavourite(item),
+                    downloaded,
+                )
+            )
+        }
+    }
+
     fun show(
         host: PopupMenuHost,
         anchorView: View,
@@ -91,19 +142,7 @@ object PlayerPopupMenu {
         backgroundView: View? = null,
         onDismiss: (() -> Unit)? = null
     ) {
-        val activity = anchorView.context.findMainActivity()
-        val item = activity?.getPlayer()?.currentMediaItem
-        if (activity == null || item == null) return
-        activity.lifecycleScope.launch {
-            val downloaded = withContext(Dispatchers.IO) {
-                JellyfinDownloadManager.isDownloaded(activity, item)
-            }
-            if (!anchorView.isAttachedToWindow) return@launch
-            val entries = build(
-                anchorView.resources,
-                PlayerMenuActions.isFavourite(item),
-                downloaded,
-            )
+        prepare(anchorView, onDismiss) { activity, entries ->
             val anchorOffsetY = if (showBelow) popupAnchorOffset else 0
             val belowGap = if (showBelow) popupBelowGap else 0
             host.showPopupMenuFromAnchor(
@@ -128,19 +167,7 @@ object PlayerPopupMenu {
         backgroundView: View? = null,
         onDismiss: (() -> Unit)? = null
     ) {
-        val activity = anchorView.context.findMainActivity()
-        val item = activity?.getPlayer()?.currentMediaItem
-        if (activity == null || item == null) return
-        activity.lifecycleScope.launch {
-            val downloaded = withContext(Dispatchers.IO) {
-                JellyfinDownloadManager.isDownloaded(activity, item)
-            }
-            if (!anchorView.isAttachedToWindow) return@launch
-            val entries = build(
-                anchorView.resources,
-                PlayerMenuActions.isFavourite(item),
-                downloaded,
-            )
+        prepare(anchorView, onDismiss) { activity, entries ->
             val anchorOffsetY = if (showBelow) popupAnchorOffset else 0
             val belowGap = if (showBelow) popupBelowGap else 0
             host.showPopupMenuFromAnchorRect(

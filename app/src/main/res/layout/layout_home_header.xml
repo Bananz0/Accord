@@ -30,7 +30,7 @@
         android:textSize="15sp"
         android:includeFontPadding="false" />
 
-    <androidx.recyclerview.widget.RecyclerView
+    <uk.akane.accord.ui.components.TwoAxisRecyclerView
         android:id="@+id/banner_carousel"
         android:layout_width="match_parent"
         android:layout_height="280dp"

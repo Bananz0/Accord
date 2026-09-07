@@ -1,6 +1,8 @@
 package uk.akane.accord.ui.fragments.browse
 
 import android.os.Bundle
+import org.akanework.gramophone.logic.data.jellyfin.QueuePrefetcher
+import coil3.imageLoader
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -117,7 +119,9 @@ class AlbumDetailFragment : SwitcherPostponeFragment() {
         TrackSwipeActions.attach(
             recyclerView = recyclerView,
             activity = activity,
-            trackAt = { index -> currentTracks.getOrNull(index) },
+            // Adapter position, not track index: a disc header occupies a row and is not a track,
+            // so the two stop lining up the moment an album has more than one disc.
+            trackAt = { position -> trackAdapter.trackAt(position) },
         )
 
         val headerHeight = (resources.displayMetrics.heightPixels * 0.7f).toInt()
@@ -176,8 +180,13 @@ class AlbumDetailFragment : SwitcherPostponeFragment() {
                             ArtistCredits.primaryArtist(song).equals(albumArtist, ignoreCase = true)
                         }
                     }
+                    // Disc first, because track 1 of disc 2 is not a second track 1 - it comes
+                    // after the whole of disc 1. An untagged track is disc one: a single-disc
+                    // album usually carries no disc number at all, and treating that as unknown
+                    // would file it after every numbered disc on the one album that mixes both.
                     val sorted = filtered.sortedWith(
-                        compareBy<MediaItem> { it.mediaMetadata.trackNumber ?: Int.MAX_VALUE }
+                        compareBy<MediaItem> { it.discNumber() }
+                            .thenBy { it.mediaMetadata.trackNumber ?: Int.MAX_VALUE }
                             .thenBy { it.mediaMetadata.title?.toString().orEmpty() }
                     )
                     updateAlbumDetails(sorted)
@@ -197,6 +206,7 @@ class AlbumDetailFragment : SwitcherPostponeFragment() {
     private fun updateAlbumDetails(tracks: List<MediaItem>) {
         currentTracks = tracks
         trackAdapter.submitList(tracks)
+        QueuePrefetcher.warmArtwork(requireContext(), tracks, requireContext().imageLoader)
         refreshDownloadState(tracks)
 
         val first = tracks.firstOrNull()
@@ -270,33 +280,61 @@ class AlbumDetailFragment : SwitcherPostponeFragment() {
         }
     }
 
-    private inner class AlbumTrackAdapter : RecyclerView.Adapter<AlbumTrackAdapter.ViewHolder>() {
-        private val items = mutableListOf<MediaItem>()
+    private inner class AlbumTrackAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+        private var rows: List<AlbumTrackPlan.Entry> = emptyList()
+        private val tracks = mutableListOf<MediaItem>()
 
-        fun submitList(tracks: List<MediaItem>) {
-            items.clear()
-            items.addAll(tracks)
+        fun submitList(newTracks: List<MediaItem>) {
+            tracks.clear()
+            tracks.addAll(newTracks)
+            rows = AlbumTrackPlan.of(newTracks.map { it.discNumber() })
             notifyDataSetChanged()
         }
 
-        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
-            val view = LayoutInflater.from(parent.context)
-                .inflate(R.layout.layout_album_track_item, parent, false)
-            return ViewHolder(view)
+        /** The track at an adapter position, or null where that position is a disc heading. */
+        fun trackAt(position: Int): MediaItem? =
+            (rows.getOrNull(position) as? AlbumTrackPlan.Entry.Track)?.let { tracks.getOrNull(it.index) }
+
+        override fun getItemCount(): Int = rows.size
+
+        override fun getItemViewType(position: Int): Int = when (rows[position]) {
+            is AlbumTrackPlan.Entry.Disc -> VIEW_TYPE_DISC_HEADER
+            is AlbumTrackPlan.Entry.Track -> VIEW_TYPE_TRACK
         }
 
-        override fun onBindViewHolder(holder: ViewHolder, position: Int) {
-            val item = items[position]
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
+            val inflater = LayoutInflater.from(parent.context)
+            return if (viewType == VIEW_TYPE_DISC_HEADER) {
+                DiscHeaderViewHolder(
+                    inflater.inflate(R.layout.layout_album_disc_header, parent, false)
+                )
+            } else {
+                ViewHolder(inflater.inflate(R.layout.layout_album_track_item, parent, false))
+            }
+        }
+
+        override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
+            when (val row = rows[position]) {
+                is AlbumTrackPlan.Entry.Disc -> (holder as DiscHeaderViewHolder).title.text =
+                    holder.itemView.context.getString(R.string.album_disc_header, row.disc)
+
+                is AlbumTrackPlan.Entry.Track -> bindTrack(holder as ViewHolder, row)
+            }
+        }
+
+        private fun bindTrack(holder: ViewHolder, row: AlbumTrackPlan.Entry.Track) {
+            val item = tracks.getOrNull(row.index) ?: return
             val title = item.mediaMetadata.title?.toString()?.trim().orEmpty()
             val trackNumber = item.mediaMetadata.trackNumber?.takeIf { it > 0 }
 
-            holder.trackNumber?.text = (trackNumber ?: (position + 1)).toString()
+            holder.trackNumber?.text = (trackNumber ?: (row.index + 1)).toString()
             holder.title?.text = title
+            holder.divider?.visibility = if (row.endsDisc) View.GONE else View.VISIBLE
 
             holder.itemView.setOnClickListener {
                 val mediaController = activity.getPlayer() ?: return@setOnClickListener
-                if (items.isEmpty()) return@setOnClickListener
-                mediaController.setMediaItems(items, position, C.TIME_UNSET)
+                if (tracks.isEmpty()) return@setOnClickListener
+                mediaController.setMediaItems(tracks, row.index, C.TIME_UNSET)
                 mediaController.prepare()
                 mediaController.play()
             }
@@ -304,18 +342,27 @@ class AlbumDetailFragment : SwitcherPostponeFragment() {
             holder.menu?.setOnClickListener { anchor -> TrackRowMenu.show(anchor, item) }
         }
 
-        override fun getItemCount(): Int = items.size
-
         inner class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
             val trackNumber: TextView? = view.findViewById(R.id.track_number)
             val title: TextView? = view.findViewById(R.id.title)
             val menu: View? = view.findViewById(R.id.menu_btn)
+            val divider: View? = view.findViewById(R.id.divider)
+        }
+
+        inner class DiscHeaderViewHolder(view: View) : RecyclerView.ViewHolder(view) {
+            val title: TextView = view.findViewById(R.id.disc_title)
         }
     }
+
+    /** Which disc a track is on; untagged counts as the first, see the sort for why. */
+    private fun MediaItem.discNumber(): Int =
+        mediaMetadata.discNumber?.takeIf { it > 0 } ?: 1
 
     companion object {
         private const val ARG_TITLE = "album_title"
         private const val ARG_ARTIST = "album_artist"
+        private const val VIEW_TYPE_TRACK = 0
+        private const val VIEW_TYPE_DISC_HEADER = 1
 
         fun newInstance(title: String, artist: String): AlbumDetailFragment {
             return AlbumDetailFragment().apply {

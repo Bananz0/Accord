@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.akanework.gramophone.logic.data.acquisition.AcquisitionProviders
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinDownloadManager
 import uk.akane.accord.R
 import uk.akane.accord.logic.dp
@@ -80,6 +81,7 @@ class ArtistDetailFragment : SwitcherPostponeFragment() {
 
         headerArt = rootView.findViewById(R.id.ivHeaderArt)
         artistNameView = rootView.findViewById(R.id.tvArtistName)
+        artistNameView.isSelected = true
         playButton = rootView.findViewById(R.id.btnPlay)
         latestCard = rootView.findViewById(R.id.latestCard)
         latestCover = rootView.findViewById(R.id.ivLatestCover)
@@ -123,6 +125,10 @@ class ArtistDetailFragment : SwitcherPostponeFragment() {
                     withAlbum = true,
                     withDownload = !collectionDownloaded,
                     withRemoveDownload = collectionDownloaded,
+                    // Read when the menu opens, so setting the downloader up makes the entry
+                    // appear without leaving this page.
+                    withFindMoreReleases = AcquisitionProviders.active(requireContext())
+                        .readiness(requireContext()).canSearch,
                 )
             },
             onClick = { entry ->

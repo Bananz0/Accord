@@ -155,7 +155,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginHorizontal="18dp"
-                        android:hint="@string/jellyfin_server_url"
+                        android:hint="@string/jellyfin_local_server_url"
                         app:boxBackgroundMode="none"
                         app:endIconContentDescription="@string/paste_from_clipboard"
                         app:endIconDrawable="@drawable/ic_paste"
@@ -167,11 +167,101 @@
                             android:layout_height="wrap_content"
                             android:fontFamily="@font/inter_regular"
                             android:importantForAutofill="no"
+                            android:imeOptions="actionNext"
+                            android:inputType="textUri"
+                            android:paddingVertical="12dp"
+                            android:singleLine="true" />
+                    </com.google.android.material.textfield.TextInputLayout>
+
+                    <!--
+                        Each address carries its own result line and its own Test button. The two
+                        fail independently - a reverse proxy can be down while the LAN answers, and
+                        away from home the LAN cannot answer at all - so proving one of them has to
+                        be possible without the other standing in the way.
+                    -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingStart="18dp"
+                        android:paddingEnd="10dp">
+
+                        <TextView
+                            android:id="@+id/local_server_status"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:fontFamily="@font/inter_regular"
+                            android:textColor="@color/onSurfaceColorInactive"
+                            android:textSize="13sp"
+                            android:visibility="gone" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/local_server_test"
+                            style="@style/Widget.Material3.Button.TextButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="40dp"
+                            android:fontFamily="@font/inter_semibold"
+                            android:minWidth="0dp"
+                            android:text="@string/jellyfin_test_address"
+                            android:textColor="@color/accentColor"
+                            android:textSize="14sp" />
+                    </LinearLayout>
+
+                    <com.google.android.material.textfield.TextInputLayout
+                        android:id="@+id/remote_server_url_layout"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginHorizontal="18dp"
+                        android:layout_marginTop="8dp"
+                        android:hint="@string/jellyfin_remote_server_url"
+                        app:boxBackgroundMode="none"
+                        app:endIconContentDescription="@string/paste_from_clipboard"
+                        app:endIconDrawable="@drawable/ic_paste"
+                        app:endIconMode="custom">
+
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/remote_server_url"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:fontFamily="@font/inter_regular"
+                            android:importantForAutofill="no"
                             android:imeOptions="actionDone"
                             android:inputType="textUri"
                             android:paddingVertical="12dp"
                             android:singleLine="true" />
                     </com.google.android.material.textfield.TextInputLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingStart="18dp"
+                        android:paddingEnd="10dp">
+
+                        <TextView
+                            android:id="@+id/remote_server_status"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:fontFamily="@font/inter_regular"
+                            android:textColor="@color/onSurfaceColorInactive"
+                            android:textSize="13sp"
+                            android:visibility="gone" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/remote_server_test"
+                            style="@style/Widget.Material3.Button.TextButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="40dp"
+                            android:fontFamily="@font/inter_semibold"
+                            android:minWidth="0dp"
+                            android:text="@string/jellyfin_test_address"
+                            android:textColor="@color/accentColor"
+                            android:textSize="14sp" />
+                    </LinearLayout>
 
                 </LinearLayout>
 
@@ -183,7 +273,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="64dp"
                 android:layout_marginTop="22dp"
-                android:text="@string/jellyfin_connect" />
+                android:text="@string/jellyfin_test_and_connect" />
 
             <com.google.android.material.progressindicator.LinearProgressIndicator
                 android:id="@+id/server_progress"

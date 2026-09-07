@@ -19,9 +19,41 @@ val jellyfinSdkVersion = "1.9.0-beta.3"
 
 plugins {
     id("com.android.application")
-    kotlin("android")
     kotlin("plugin.parcelize")
     id("com.google.devtools.ksp")
+}
+
+// Release identity is supplied by the person building Fincord. Values may live in the ignored
+// root keystore.properties file, Gradle properties, or FINCORD_RELEASE_* environment variables.
+// Keeping all key material outside the repository avoids inheriting an upstream signing identity.
+val localSigningProperties = Properties().apply {
+    rootProject.file("keystore.properties")
+        .takeIf { it.isFile }
+        ?.inputStream()
+        ?.use(::load)
+}
+
+fun releaseSigningValue(name: String): String? =
+    providers.gradleProperty(name).orNull
+        ?: localSigningProperties.getProperty(name)
+        ?: System.getenv(name)
+
+val releaseStoreFile = releaseSigningValue("FINCORD_RELEASE_STORE_FILE")
+val releaseStorePassword = releaseSigningValue("FINCORD_RELEASE_STORE_PASSWORD")
+val releaseKeyAlias = releaseSigningValue("FINCORD_RELEASE_KEY_ALIAS")
+val releaseKeyPassword = releaseSigningValue("FINCORD_RELEASE_KEY_PASSWORD")
+val releaseSigningValues = listOf(
+    releaseStoreFile,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+)
+val hasReleaseSigning = releaseSigningValues.all { !it.isNullOrBlank() }
+
+if (!hasReleaseSigning && releaseSigningValues.any { !it.isNullOrBlank() }) {
+    throw GradleException(
+        "Fincord release signing is incomplete. Set all four FINCORD_RELEASE_* values."
+    )
 }
 
 android {
@@ -31,8 +63,8 @@ android {
     }
 
     namespace = "uk.akane.accord"
-    compileSdk = 36
-    buildToolsVersion = "36.0.0"
+    compileSdk = 37
+    buildToolsVersion = "37.0.0"
     ndkVersion = "28.0.13004108"
 
     androidResources {
@@ -78,7 +110,10 @@ android {
     }
 
     defaultConfig {
-        applicationId = "uk.akane.accord"
+        // The installed/package identity. The internal namespace intentionally remains the
+        // historical uk.akane.accord so the Accord source lineage is preserved without a brittle
+        // package-wide rewrite; Android does not require namespace and applicationId to match.
+        applicationId = "com.bananz0.fincord"
         // Reasons to not support KK include me.zhanghai.android.fastscroll, WindowInsets for
         // bottom sheet padding, ExoPlayer requiring multidex for KK and poor SD card support
         // That said, supporting Android 5.0 barely costs any tech debt and we plan to keep support
@@ -135,11 +170,11 @@ android {
 
     signingConfigs {
         create("release") {
-            if (project.hasProperty("AKANE_RELEASE_KEY_ALIAS")) {
-                storeFile = file(project.properties["AKANE_RELEASE_STORE_FILE"].toString())
-                storePassword = project.properties["AKANE_RELEASE_STORE_PASSWORD"].toString()
-                keyAlias = project.properties["AKANE_RELEASE_KEY_ALIAS"].toString()
-                keyPassword = project.properties["AKANE_RELEASE_KEY_PASSWORD"].toString()
+            if (hasReleaseSigning) {
+                storeFile = rootProject.file(releaseStoreFile!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
             }
         }
     }
@@ -174,15 +209,12 @@ android {
                 isMinifyEnabled = false
                 isProfileable = true
             }
-            if (project.hasProperty("AKANE_RELEASE_KEY_ALIAS")) {
+            if (hasReleaseSigning) {
                 signingConfig = signingConfigs["release"]
             }
         }
         debug {
             applicationIdSuffix = ".debug"
-            if (project.hasProperty("AKANE_RELEASE_KEY_ALIAS")) {
-                signingConfig = signingConfigs["release"]
-            }
         }
     }
 
@@ -200,7 +232,7 @@ android {
 // Gradle 9 dropped the `archivesBaseName` project property, so the APK name is set through the base
 // plugin instead.
 base {
-    archivesName = "Accord-${android.defaultConfig.versionName}"
+    archivesName = "Fincord-${android.defaultConfig.versionName}"
 }
 
 // https://stackoverflow.com/a/77745844
@@ -249,38 +281,63 @@ configurations.configureEach {
 }
 
 dependencies {
-    val media3Version = "1.9.0"
-    val roomVersion = "2.7.0-rc02"
+    val media3Version = "1.11.0"
+    val roomVersion = "2.8.4"
     val slf4jVersion = "2.0.18"
+
+    // The Apple-style liquid album backdrop: one AGSL RuntimeShader that domain-warps a
+    // Kawase-blurred cover and crossfades between covers on a track change. LGPL-3.0, which
+    // this GPL-3.0 app can link; itself an AGSL port of MIT-licensed @kawarp/core. Renders only
+    // on API 33+ (AGSL), so FlowingGradientView stays as the fallback for 31-32.
+    // Pinned to a commit: the project publishes no tags or releases yet, and this is the revision
+    // JitPack has actually built (HEAD as of 2026-08-31).
+    implementation("com.github.meowarex:kawarp-agsl:30715d619a")
+
+    // Google Cast. The framework registers itself as an AndroidX MediaRouter provider, so Cast
+    // devices and speaker groups arrive in the same route list the output picker already renders
+    // rather than needing a second, competing route stack beside it.
+    implementation("com.google.android.gms:play-services-cast-framework:22.3.1")
 
     ksp("androidx.room:room-compiler:$roomVersion")
     implementation("androidx.room:room-runtime:$roomVersion")
     implementation("androidx.room:room-ktx:$roomVersion")
-    implementation("androidx.core:core-ktx:1.15.0")
+    implementation("androidx.core:core-ktx:1.19.0")
     implementation("androidx.activity:activity-ktx:1.10.1")
     implementation("androidx.concurrent:concurrent-futures-ktx:1.2.0")
     implementation("androidx.transition:transition-ktx:1.5.1") // <-- for predictive back
-    implementation("androidx.fragment:fragment-ktx:1.8.6")
-    implementation("androidx.core:core-splashscreen:1.2.0-beta01")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.9.0-alpha12")
-    implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("androidx.fragment:fragment-ktx:1.9.0")
+    implementation("androidx.core:core-splashscreen:1.2.0")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.11.0")
+    implementation("androidx.appcompat:appcompat:1.8.0")
     implementation("androidx.constraintlayout:constraintlayout:2.2.1")
+    // Compile-only annotations media3's own sources carry. Needed because three of its classes
+    // are vendored under app/src/main/java/androidx/media3/exoplayer (see CLAUDE.md); media3
+    // declares these the same way and neither reaches the APK.
+    compileOnly("org.checkerframework:checker-qual:3.51.0")
+    compileOnly("com.google.errorprone:error_prone_annotations:2.42.0")
     implementation("androidx.media3:media3-exoplayer:$media3Version")
     implementation("androidx.media3:media3-exoplayer-midi:$media3Version")
     implementation("androidx.media3:media3-session:$media3Version")
+    // CastPlayer is one of the three Players the playback service swaps into its MediaLibrarySession.
+    // It pulls play-services-cast-framework 22.1.0 transitively; the explicit 22.3.1 above wins.
+    implementation("androidx.media3:media3-cast:$media3Version")
     implementation("androidx.preference:preference-ktx:1.2.1")
-    implementation("com.google.android.material:material:1.13.0-alpha11")
+    implementation("com.google.android.material:material:1.14.0")
+    // Matches the supplied Accord 2.0 preview. Language ID chooses a source model and Translate
+    // fills only lyric lines for which Jellyfin/the LRC file did not already provide a translation.
+    implementation("com.google.mlkit:language-id:17.0.6")
+    implementation("com.google.mlkit:translate:17.0.3")
     implementation("com.google.android.flexbox:flexbox:3.0.0")
     implementation("me.zhanghai.android.fastscroll:library:1.3.0")
-    implementation("io.coil-kt.coil3:coil:3.1.0")
-    implementation("io.coil-kt.coil3:coil-network-okhttp:3.1.0")
+    implementation("io.coil-kt.coil3:coil:3.6.1")
+    implementation("io.coil-kt.coil3:coil-network-okhttp:3.6.1")
     // Jellyfin: official Kotlin SDK (LGPL-3.0), shares one OkHttp client with media3
     implementation("org.jellyfin.sdk:jellyfin-core:$jellyfinSdkVersion")
     implementation("androidx.media3:media3-datasource-okhttp:$media3Version")
     // Declared explicitly rather than leaned on transitively: LastFmClient talks to OkHttp
     // directly, and a transitive dependency can vanish under a Coil or Jellyfin SDK bump.
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    implementation("com.squareup.okhttp3:okhttp:5.5.0")
+    implementation("androidx.security:security-crypto:1.1.0")
     // The SDK logs through kotlin-logging, which needs an slf4j binding on the classpath or every
     // API call dies with NoClassDefFoundError. Visible while developing, silent in release.
     debugImplementation("org.slf4j:slf4j-simple:$slf4jVersion")
@@ -295,15 +352,17 @@ dependencies {
     implementation(projects.hificore)
     // ALAC playback renderer, wired up by Accord's GramophoneRenderFactory.
     implementation(projects.misc.alacdecoder)
+    // Automix's beat and key analysis, and the vendored aubio behind it.
+    implementation(projects.automix)
     // Accord's output switcher reads the active route through MediaRouter.
     implementation("androidx.mediarouter:mediarouter:1.9.0-alpha01")
     implementation(libs.hiddenapibypass)
     // Spring physics for the iOS-style rubber-band overscroll.
     implementation("androidx.dynamicanimation:dynamicanimation:1.0.0")
-    implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.core:core-ktx:1.19.0")
     // Lyric indexing runs as deferrable background work: thousands of small requests that must
     // wait for charge and wifi, survive the app being killed, and resume rather than restart.
-    implementation("androidx.work:work-runtime-ktx:2.9.1")
+    implementation("androidx.work:work-runtime-ktx:2.11.2")
     // --- below does not apply to release builds ---
     debugImplementation("com.squareup.leakcanary:leakcanary-android:3.0-alpha-8")
     testImplementation("junit:junit:4.13.2")

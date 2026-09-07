@@ -7,6 +7,7 @@ import android.animation.ValueAnimator
 import android.content.ContentResolver
 import android.content.Context
 import android.content.SharedPreferences
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Color
@@ -187,6 +188,29 @@ fun ComponentActivity.enableEdgeToEdgeProperly() {
         val darkScrim = Color.argb(0x80, 0x1b, 0x1b, 0x1b)
         enableEdgeToEdge(navigationBarStyle = SystemBarStyle.light(Color.TRANSPARENT, darkScrim))
     }
+}
+
+/**
+ * Android's tablet boundary, and the same one the player uses to choose its arrangement.
+ *
+ * Below it a window has one usable arrangement for a list: a single column under a bottom bar.
+ */
+const val TABLET_SMALLEST_WIDTH_DP = 600
+
+/** Whether this device is phone-sized, taken from its smallest width rather than the window's. */
+fun Context.isPhoneSized(): Boolean =
+    resources.configuration.smallestScreenWidthDp < TABLET_SMALLEST_WIDTH_DP
+
+/**
+ * Keeps a phone-sized screen upright, and leaves anything larger alone.
+ *
+ * For screens that are a form or a single column and gain nothing from landscape - where turning
+ * the device only trades most of the height for margins the layout has no use for.
+ */
+fun ComponentActivity.lockPortraitOnPhone() {
+    val wanted = if (isPhoneSized()) ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT
+        else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+    if (requestedOrientation != wanted) requestedOrientation = wanted
 }
 
 fun ViewPager2.setCurrentItemInterpolated(

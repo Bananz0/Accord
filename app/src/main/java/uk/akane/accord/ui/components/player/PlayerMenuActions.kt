@@ -14,10 +14,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinDownloadManager
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinLibraryLoader
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinMediaSharer
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinReporter
 import org.akanework.gramophone.logic.data.library.songListSnapshot
 import org.akanework.gramophone.logic.GramophonePlaybackService
 import org.akanework.gramophone.logic.utils.MediaStoreUtils
+import org.akanework.gramophone.logic.utils.LrcUtils
 import uk.akane.accord.R
 import uk.akane.accord.ui.MainActivity
 import uk.akane.accord.ui.fragments.browse.AddToPlaylistFragment
@@ -108,23 +110,22 @@ object PlayerMenuActions {
     }
 
     private fun shareSong(activity: MainActivity, item: MediaItem) {
-        val metadata = item.mediaMetadata
-        val text = activity.getString(
-            R.string.share_song_text,
-            metadata.title?.toString().orEmpty(),
-            metadata.artist?.toString().orEmpty()
-        )
-        // Deliberately text, not the file or its URL: the stream URL carries this user's access
-        // token, and sharing it would hand out their server.
-        activity.startActivity(
-            Intent.createChooser(
-                Intent(Intent.ACTION_SEND).apply {
-                    type = "text/plain"
-                    putExtra(Intent.EXTRA_TEXT, text)
-                },
-                activity.getString(R.string.popup_share_song)
+        toast(activity, activity.getString(R.string.share_song_preparing))
+        activity.lifecycleScope.launch {
+            val shared = runCatching {
+                JellyfinMediaSharer.prepare(activity, item)
+            }.onFailure { Log.w(TAG, "Could not prepare the media file for sharing", it) }
+                .getOrElse {
+                    toast(activity, activity.getString(R.string.share_song_failed))
+                    return@launch
+                }
+            activity.startActivity(
+                Intent.createChooser(
+                    JellyfinMediaSharer.intent(activity, shared),
+                    activity.getString(R.string.popup_share_song),
+                )
             )
-        )
+        }
     }
 
     private fun shareLyrics(activity: MainActivity, item: MediaItem) {
@@ -141,7 +142,7 @@ object PlayerMenuActions {
                     BundleCompat.getParcelableArray(
                         future.get().extras, "lyrics", MediaStoreUtils.Lyric::class.java
                     ) as Array<MediaStoreUtils.Lyric>?
-                }?.mapNotNull { it.content?.takeIf(String::isNotBlank) }
+                }?.mapNotNull { lyric -> formatLyricLine(activity, lyric) }
             }.onFailure { Log.w(TAG, "Could not read lyrics to share", it) }.getOrNull()
 
             if (lines.isNullOrEmpty()) {
@@ -153,11 +154,14 @@ object PlayerMenuActions {
                 item.mediaMetadata.title?.toString().orEmpty(),
                 item.mediaMetadata.artist?.toString().orEmpty()
             )
+            val sharedText = header + "\n\n" + lines.joinToString("\n")
             activity.startActivity(
                 Intent.createChooser(
                     Intent(Intent.ACTION_SEND).apply {
                         type = "text/plain"
-                        putExtra(Intent.EXTRA_TEXT, header + "\n\n" + lines.joinToString("\n"))
+                        putExtra(Intent.EXTRA_SUBJECT, header)
+                        putExtra(Intent.EXTRA_TITLE, header)
+                        putExtra(Intent.EXTRA_TEXT, sharedText)
                     },
                     activity.getString(R.string.popup_share_lyrics)
                 )
@@ -189,6 +193,30 @@ object PlayerMenuActions {
             }
         }
     }
+
+    /** Turns parsed lyrics back into useful, human-readable text for Android's share sheet. */
+    private fun formatLyricLine(
+        activity: MainActivity,
+        lyric: MediaStoreUtils.Lyric,
+    ): String? {
+        val content = lyric.content.cleanSharedLyricText().takeIf(String::isNotBlank) ?: return null
+        val speaker = when (lyric.label) {
+            LrcUtils.Label.Male -> R.string.share_lyrics_speaker_male
+            LrcUtils.Label.Female -> R.string.share_lyrics_speaker_female
+            LrcUtils.Label.Duet -> R.string.share_lyrics_speaker_duet
+            LrcUtils.Label.Background -> R.string.share_lyrics_speaker_background
+            LrcUtils.Label.Voice1 -> R.string.share_lyrics_speaker_voice_one
+            LrcUtils.Label.Voice2 -> R.string.share_lyrics_speaker_voice_two
+            LrcUtils.Label.None -> null
+        }
+        val primary = speaker?.let { "${activity.getString(it)}: $content" } ?: content
+        val translation = lyric.translationContent.cleanSharedLyricText()
+            .takeIf { it.isNotBlank() && it != content }
+        return if (translation == null) primary else "$primary\n$translation"
+    }
+
+    private fun String.cleanSharedLyricText(): String =
+        lineSequence().joinToString("\n") { it.trim() }.trim()
 
     private fun toggleFavourite(activity: MainActivity, item: MediaItem) {
         val next = !isFavourite(item)

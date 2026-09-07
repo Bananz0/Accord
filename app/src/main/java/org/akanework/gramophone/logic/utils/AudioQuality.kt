@@ -36,6 +36,8 @@ enum class AudioQuality(@param:StringRes val label: Int) {
         val codec: String?,
         val bitDepth: Int?,
         val sampleRateHz: Int?,
+        /** Bits per second of the decoded stream, for the badge that names it. Null when unknown. */
+        val bitrateBps: Int?,
     )
 
     companion object {
@@ -90,7 +92,27 @@ enum class AudioQuality(@param:StringRes val label: Int) {
                 codec = codecNameOf(format),
                 bitDepth = bitDepthOf(format),
                 sampleRateHz = format.sampleRate.takeIf { it != Format.NO_VALUE },
+                bitrateBps = bitrateOf(format),
             )
+        }
+
+        /**
+         * Bits per second, as media3 reports it.
+         *
+         * The FLAC extractor fills this in with the *decoded* rate - 16-bit 44.1 kHz stereo comes
+         * out at 1411 kbps, which is the number a listener recognises - so for the lossless formats
+         * this badge covers it is usually there. Where an extractor leaves it unset, the same
+         * product of depth, rate and channels is the honest answer for an uncompressed stream and
+         * the closest available one for a compressed lossless stream.
+         */
+        @OptIn(UnstableApi::class)
+        private fun bitrateOf(format: Format): Int? {
+            format.averageBitrate.takeIf { it != Format.NO_VALUE }?.let { return it }
+            format.peakBitrate.takeIf { it != Format.NO_VALUE }?.let { return it }
+            val depth = bitDepthOf(format) ?: return null
+            val rate = format.sampleRate.takeIf { it != Format.NO_VALUE } ?: return null
+            val channels = format.channelCount.takeIf { it != Format.NO_VALUE && it > 0 } ?: return null
+            return depth * rate * channels
         }
 
         /**

@@ -9,6 +9,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.akanework.gramophone.logic.data.lidarr.LidarrClient
 import org.akanework.gramophone.logic.data.lidarr.LidarrCredentialStore
+import org.akanework.gramophone.logic.data.lidarr.LidarrServerSync
 import uk.akane.accord.R
 
 /**
@@ -40,13 +41,18 @@ object LidarrSetupPrompt {
             onReady()
             return
         }
-        if (store.serverUrl.isNullOrBlank() || store.apiKey.isNullOrBlank()) {
-            // Nothing can be fetched without an address and a key, and those cannot be guessed.
-            Toast.makeText(context, R.string.requests_no_lidarr, Toast.LENGTH_LONG).show()
-            return
-        }
 
         owner.lifecycleScope.launch {
+            if (store.serverUrl.isNullOrBlank() || store.apiKey.isNullOrBlank()) {
+                // The Jellyfin server usually knows both already. Asking it first turns the worst
+                // setup step in the app - find an API key in Lidarr, type it into a phone, get it
+                // subtly wrong - into nothing at all. Only if it will not say do we ask the user.
+                if (!LidarrServerSync.sync(context)) {
+                    Toast.makeText(context, R.string.requests_no_lidarr, Toast.LENGTH_LONG).show()
+                    return@launch
+                }
+            }
+
             val result = autoConfigure(context)
             if (result.isSuccess) onReady()
             else Toast.makeText(

@@ -70,9 +70,11 @@ open class Accord : Application(), SingletonImageLoader.Factory {
     private var libraryRefresh: Job? = null
 
     /** Starts a sync, or returns the one already running rather than starting a second. */
-    fun refreshLibrary(): Job {
+    fun refreshLibrary(force: Boolean = false): Job {
         libraryRefresh?.takeIf { it.isActive }?.let { return it }
-        return libraryScope.launch { reader.refresh() }.also { libraryRefresh = it }
+        return libraryScope.launch {
+            if (force) jellyfinReader.refresh(force = true) else reader.refresh()
+        }.also { libraryRefresh = it }
     }
 
     lateinit var reader: LibraryReader

@@ -5,13 +5,23 @@
     xmlns:tools="http://schemas.android.com/tools"
     tools:parentTag="androidx.constraintlayout.widget.ConstraintLayout">
 
+    <!--
+        Four pills, one spread chain. Every one is 0dp wide, so the chain divides whatever the pane
+        happens to be and they stay identical to each other on a phone, on half a landscape screen
+        and on a tablet alike; every one is 40dp tall and hangs off btnShuffle's top, so they share
+        a centre line. Nothing here is per-form-factor, and it must stay that way - the wide layout
+        moves `queue_container` bodily into the right half and this row has to survive that on its
+        own. The gaps are 6dp rather than the 8dp of the three-pill row: a fourth pill takes its
+        width out of the other three, and this puts some of it back.
+    -->
     <uk.akane.cupertino.widget.button.OverlayPillButton
         android:id="@+id/btnShuffle"
         android:layout_width="0dp"
         android:layout_height="40dp"
         android:layout_marginStart="32dp"
         android:layout_marginTop="16dp"
-        android:layout_marginEnd="8dp"
+        android:layout_marginEnd="6dp"
+        android:contentDescription="@string/shuffle"
         app:icon="@drawable/ic_nowplaying_shuffle"
         app:iconSize="40dp"
         app:cornerRadius="10dp"
@@ -25,8 +35,9 @@
         android:id="@+id/btnRepeat"
         android:layout_width="0dp"
         android:layout_height="40dp"
-        android:layout_marginStart="8dp"
-        android:layout_marginEnd="8dp"
+        android:layout_marginStart="6dp"
+        android:layout_marginEnd="6dp"
+        android:contentDescription="@string/repeat"
         app:icon="@drawable/ic_nowplaying_repeat"
         app:iconSize="40dp"
         app:cornerRadius="10dp"
@@ -39,14 +50,30 @@
         android:id="@+id/btnAutoplay"
         android:layout_width="0dp"
         android:layout_height="40dp"
-        android:layout_marginStart="8dp"
-        android:layout_marginEnd="32dp"
+        android:layout_marginStart="6dp"
+        android:layout_marginEnd="6dp"
+        android:contentDescription="@string/autoplay_label"
         app:icon="@drawable/ic_nowplaying_autoplay"
         app:iconSize="40dp"
         app:cornerRadius="10dp"
         android:checked="true"
         app:layout_constraintTop_toTopOf="@id/btnShuffle"
         app:layout_constraintStart_toEndOf="@id/btnRepeat"
+        app:layout_constraintEnd_toStartOf="@id/btnAutomix"
+        />
+
+    <uk.akane.cupertino.widget.button.OverlayPillButton
+        android:id="@+id/btnAutomix"
+        android:layout_width="0dp"
+        android:layout_height="40dp"
+        android:layout_marginStart="6dp"
+        android:layout_marginEnd="32dp"
+        android:contentDescription="@string/automix_label"
+        app:icon="@drawable/ic_nowplaying_automix"
+        app:iconSize="40dp"
+        app:cornerRadius="10dp"
+        app:layout_constraintTop_toTopOf="@id/btnShuffle"
+        app:layout_constraintStart_toEndOf="@id/btnAutoplay"
         app:layout_constraintEnd_toEndOf="parent"
         />
 

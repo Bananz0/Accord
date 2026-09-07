@@ -170,6 +170,23 @@
             android:paddingHorizontal="40dp"
             android:visibility="gone">
 
+            <!--
+                Shown while a search is in flight. Searching a downloader means several round trips
+                and sometimes a rate-limited metadata service on top, so a bare line of text left
+                the user with no way to tell "working" from "finished, nothing found".
+            -->
+            <com.google.android.material.progressindicator.CircularProgressIndicator
+                android:id="@+id/search_progress"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="14dp"
+                android:indeterminate="true"
+                android:visibility="gone"
+                app:indicatorColor="@color/accentColor"
+                app:indicatorInset="0dp"
+                app:indicatorSize="22dp"
+                app:trackThickness="2dp" />
+
             <TextView
                 android:id="@+id/search_empty"
                 android:layout_width="match_parent"

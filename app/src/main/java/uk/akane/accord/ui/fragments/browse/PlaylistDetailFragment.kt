@@ -3,6 +3,8 @@ package uk.akane.accord.ui.fragments.browse
 import android.content.ContentValues
 import android.net.Uri
 import android.os.Bundle
+import org.akanework.gramophone.logic.data.jellyfin.QueuePrefetcher
+import coil3.imageLoader
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -451,6 +453,7 @@ class PlaylistDetailFragment : SwitcherPostponeFragment() {
         val merged = mergePlaylistSongs(songs)
         playlistSongs = orderPlaylistSongs(merged)
         playlistSongsAdapter.submitList(ArrayList(playlistSongs))
+        QueuePrefetcher.warmArtwork(requireContext(), playlistSongs, requireContext().imageLoader)
         refreshDownloadState(playlistSongs)
         headerAdapter.update(
             headerTitle,

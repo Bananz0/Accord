@@ -20,6 +20,7 @@ import coil3.request.crossfade
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import uk.akane.accord.R
+import uk.akane.accord.logic.utils.BrowseGrid
 import uk.akane.accord.ui.MainActivity
 import uk.akane.accord.ui.components.NavigationBar
 import uk.akane.cupertino.navigation.SwitcherPostponeFragment
@@ -67,26 +68,12 @@ class GenresFragment : SwitcherPostponeFragment() {
         }
 
         recyclerView = rootView.findViewById(R.id.rv)
-        recyclerView.layoutManager = GridLayoutManager(requireContext(), 2)
+        val columns = BrowseGrid.columnCount(requireContext())
+        recyclerView.layoutManager = GridLayoutManager(requireContext(), columns)
         recyclerView.adapter = adapter
-        recyclerView.addItemDecoration(object : RecyclerView.ItemDecoration() {
-            private val outer = (22 * resources.displayMetrics.density).toInt()
-            private val inner = (8 * resources.displayMetrics.density).toInt()
-            override fun getItemOffsets(
-                outRect: android.graphics.Rect,
-                view: View,
-                parent: RecyclerView,
-                state: RecyclerView.State,
-            ) {
-                val position = parent.getChildAdapterPosition(view)
-                if (position == RecyclerView.NO_POSITION) return
-                val column = position % 2
-                outRect.left = if (column == 0) outer else inner
-                outRect.right = if (column == 0) inner else outer
-                outRect.top = inner
-                outRect.bottom = inner
-            }
-        })
+        recyclerView.addItemDecoration(
+            BrowseGrid.spacing(requireContext(), columns, topDp = 8, bottomDp = 8)
+        )
         navigationBar.attach(recyclerView)
 
         rootView.findViewById<EditText?>(R.id.search_input)?.doAfterTextChanged {

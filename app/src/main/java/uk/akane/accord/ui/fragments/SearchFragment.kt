@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.TextView
@@ -27,14 +28,17 @@ import androidx.media3.common.MediaItem
 import androidx.recyclerview.widget.LinearLayoutManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import uk.akane.accord.Accord
+import uk.akane.accord.logic.utils.BrowseGrid
 import uk.akane.accord.ui.MainActivity
 import uk.akane.accord.ui.adapters.SearchResultsAdapter
-import uk.akane.accord.ui.adapters.LidarrSearchResultsAdapter
+import uk.akane.accord.ui.adapters.RequestableReleasesAdapter
 import uk.akane.accord.R
 import uk.akane.accord.logic.dp
 import uk.akane.libphonograph.items.Album
@@ -48,9 +52,20 @@ import uk.akane.accord.ui.components.NavigationBar
 import uk.akane.cupertino.utils.AnimationUtils
 import uk.akane.accord.ui.components.TrackSwipeActions
 import androidx.core.view.updatePadding
-import org.akanework.gramophone.logic.data.lidarr.LidarrClient
-import org.akanework.gramophone.logic.data.lidarr.LidarrCredentialStore
+import org.akanework.gramophone.logic.data.acquisition.AcquirableArtist
+import org.akanework.gramophone.logic.data.acquisition.AcquirableRelease
+import org.akanework.gramophone.logic.data.acquisition.AcquisitionProvider
+import org.akanework.gramophone.logic.data.acquisition.AcquisitionProviders
+import org.akanework.gramophone.logic.data.acquisition.ReleaseAvailability
+import org.akanework.gramophone.logic.data.acquisition.MusicRequestService
+import org.akanework.gramophone.logic.data.catalog.CatalogResolution
+import org.akanework.gramophone.logic.data.catalog.MusicCatalogProviders
+import org.akanework.gramophone.logic.data.matching.MusicText
+import org.akanework.gramophone.logic.data.matching.ReleaseMatcher
+import org.akanework.gramophone.logic.data.matching.ScoredRelease
+import org.akanework.gramophone.logic.data.matching.ReleaseQuery
 import org.akanework.gramophone.ui.fragments.settings.LidarrSettingsFragment
+import uk.akane.accord.ui.components.LibraryReleaseIndex
 import uk.akane.accord.ui.components.LidarrSetupPrompt
 import uk.akane.accord.ui.components.performPressHaptic
 
@@ -74,10 +89,11 @@ class SearchFragment: Fragment() {
     private lateinit var searchStatus: View
     private lateinit var searchEmpty: TextView
     private lateinit var searchStatusAction: TextView
+    private lateinit var searchProgress: View
     private lateinit var recentsHeader: View
     private lateinit var recentsDivider: View
     private lateinit var resultsAdapter: SearchResultsAdapter
-    private lateinit var lidarrResultsAdapter: LidarrSearchResultsAdapter
+    private lateinit var requestResultsAdapter: RequestableReleasesAdapter
 
     /** Immutable, pre-normalised snapshots keep a keystroke from rebuilding 30,000 strings. */
     @Volatile
@@ -146,7 +162,8 @@ class SearchFragment: Fragment() {
             insets
         }
 
-        recyclerView.layoutManager = GridLayoutManager(context, 2)
+        recyclerView.layoutManager =
+            GridLayoutManager(context, BrowseGrid.columnCount(requireContext()))
         recyclerView.adapter = SearchAdapter(requireContext(), this) {
             // Genres are already visible, so this cannot truthfully be an empty library. Do not
             // rely on a one-shot fade whose end state can be restored with alpha > 0 later.
@@ -166,6 +183,7 @@ class SearchFragment: Fragment() {
         searchStatus = detailedSearchContainer.findViewById(R.id.search_status)
         searchEmpty = detailedSearchContainer.findViewById(R.id.search_empty)
         searchStatusAction = detailedSearchContainer.findViewById(R.id.search_status_action)
+        searchProgress = detailedSearchContainer.findViewById(R.id.search_progress)
         recentsHeader = detailedSearchContainer.findViewById(R.id.recently_searched_header)
         recentsDivider = detailedSearchContainer.findViewById(R.id.recently_searched_divider)
         detailedSearchContainer.findViewById<TextView>(R.id.recently_searched_clear)
@@ -177,6 +195,7 @@ class SearchFragment: Fragment() {
         resultsAdapter = SearchResultsAdapter(
             player = { (activity as? MainActivity)?.getPlayer() },
             onAlbum = { album ->
+                finishSearchSelection()
                 rememberQuery()
                 push(
                     AlbumDetailFragment.newInstance(
@@ -186,6 +205,7 @@ class SearchFragment: Fragment() {
                 )
             },
             onArtist = { artist ->
+                finishSearchSelection()
                 rememberQuery()
                 push(ArtistDetailFragment.newInstance(artist.title.orEmpty(), artist.id))
             },
@@ -196,11 +216,18 @@ class SearchFragment: Fragment() {
                 searchInputDetail.setSelection(query.length)
             },
             onTrackSelected = {
-                hideKeyboard(searchInputDetail)
-                searchInputDetail.clearFocus()
+                finishSearchSelection()
             },
         )
-        lidarrResultsAdapter = LidarrSearchResultsAdapter(::requestLidarrAlbum)
+        requestResultsAdapter = RequestableReleasesAdapter(
+            onReleaseClick = ::requestRelease,
+            isInLibrary = libraryReleases::isInLibrary,
+            onArtistClick = { artist ->
+                finishSearchSelection()
+                rememberQuery()
+                push(RequestArtistFragment.newInstance(artist))
+            },
+        )
         searchResults.layoutManager = LinearLayoutManager(requireContext())
         searchResults.adapter = resultsAdapter
         // This list is not the one the navigation bar is attached to, so nothing was leaving
@@ -228,16 +255,27 @@ class SearchFragment: Fragment() {
                 iconRes = R.drawable.ic_download,
                 colorRes = R.color.accentColor,
                 enabledAt = { index ->
-                    !isAppleTabSelected && lidarrResultsAdapter.itemAt(index) != null
+                    !isAppleTabSelected && requestResultsAdapter.itemAt(index) != null
                 },
                 onAction = { index ->
-                    lidarrResultsAdapter.itemAt(index)?.let { requestLidarrAlbum(it) }
+                    requestResultsAdapter.itemAt(index)?.let { requestRelease(it) }
                 },
             ),
         )
 
         observeLibrary()
         searchInputDetail.doAfterTextChanged { runQuery(it?.toString().orEmpty()) }
+        searchInputDetail.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_SEARCH || actionId == EditorInfo.IME_ACTION_DONE) {
+                hideKeyboard(searchInputDetail)
+                searchInputDetail.clearFocus()
+                // Enter is an explicit submission, so do not make it wait for the typing debounce.
+                runQuery(searchInputDetail.text?.toString().orEmpty(), debounce = false)
+                true
+            } else {
+                false
+            }
+        }
 
         searchBarNav.setOnClickListener { enterSearchMode() }
         searchInputNav.setOnClickListener { enterSearchMode() }
@@ -299,6 +337,16 @@ class SearchFragment: Fragment() {
         if (isSearchExpanded) focusDetailedSearch() else enterSearchMode()
     }
 
+    /** Opens the normal search UI with an Assistant/deep-link query already applied. */
+    fun showQuery(query: String) {
+        if (!isAdded || view == null) return
+        if (!isSearchExpanded) enterSearchMode()
+        searchInputNav.setText(query)
+        searchInputDetail.setText(query)
+        searchInputDetail.setSelection(query.length)
+        focusDetailedSearch()
+    }
+
     private fun observeLibrary() {
         val reader = (requireActivity().application as Accord).reader
         viewLifecycleOwner.lifecycleScope.launch {
@@ -338,6 +386,14 @@ class SearchFragment: Fragment() {
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 reader.albumListFlow.collectLatest { albums ->
+                    // Results already on screen can become "in your library" the moment a sync
+                    // finishes, so the index follows the library rather than only the query.
+                    if (libraryReleases.onLibraryChanged(albums) && !isAppleTabSelected) {
+                        requestResultsAdapter.notifyItemRangeChanged(
+                            0,
+                            requestResultsAdapter.itemCount,
+                        )
+                    }
                     albumSearchIndex = withContext(Dispatchers.Default) {
                         albums.map { album ->
                             AlbumSearchEntry(
@@ -393,29 +449,29 @@ class SearchFragment: Fragment() {
         pendingQuery?.cancel()
         val query = rawQuery.trim().lowercase()
         if (query.isEmpty()) {
-            lidarrResultsAdapter.submit(emptyList())
+            requestResultsAdapter.submit(emptyList())
             // An empty box is exactly when a broken Lidarr is worth saying out loud - waiting for a
             // query to report it means the user types something first and blames the search.
-            if (isAppleTabSelected) {
-                hideStatus()
-                showRecents()
-            } else {
-                resultsAdapter.submit(emptyList())
-                setRecentsVisible(false)
-                showLidarrSetupStatusIfNeeded()
-            }
+            if (isAppleTabSelected) hideStatus() else showLidarrSetupStatusIfNeeded()
+            showRecents()
             return
         }
         setRecentsVisible(false)
+        showResultsFor(recents = false)
         pendingQuery = viewLifecycleOwner.lifecycleScope.launch {
-            if (debounce) delay(SEARCH_DEBOUNCE_MS)
+            if (debounce) {
+                // Local search is cheap. Lidarr search is several real network calls, and sending
+                // one after every 100 ms pause flooded its metadata proxy with abandoned queries,
+                // making the final query and its artwork arrive later rather than sooner.
+                delay(if (isAppleTabSelected) SEARCH_DEBOUNCE_MS else LIDARR_SEARCH_DEBOUNCE_MS)
+            }
             if (isAppleTabSelected) {
                 val rows = withContext(Dispatchers.Default) { buildResults(query) }
                 resultsAdapter.submit(rows)
                 if (rows.isEmpty()) showStatus(getString(R.string.search_no_results))
                 else hideStatus()
             } else {
-                searchLidarr(query)
+                searchForRequests(query)
             }
         }
     }
@@ -429,7 +485,22 @@ class SearchFragment: Fragment() {
     private fun showRecents() {
         val recent = RecentSearches.recent(requireContext())
         setRecentsVisible(recent.isNotEmpty())
+        showResultsFor(recents = true)
         resultsAdapter.submit(recent.map { SearchResultsAdapter.Row.Recent(it) })
+    }
+
+    /**
+     * Puts the right list in front of the user for what is about to be shown.
+     *
+     * There is one history behind both tabs - what you looked for is what you looked for, and
+     * having to remember which tab you typed it on would be a strange thing to ask. Only the Apple
+     * adapter can draw a bare query, though, so it takes the screen for recents whichever tab is
+     * selected, and the request adapter comes back the moment there is something to search for.
+     */
+    private fun showResultsFor(recents: Boolean) {
+        val target: RecyclerView.Adapter<*> =
+            if (recents || isAppleTabSelected) resultsAdapter else requestResultsAdapter
+        if (searchResults.adapter !== target) searchResults.adapter = target
     }
 
     private fun setRecentsVisible(visible: Boolean) {
@@ -623,11 +694,24 @@ class SearchFragment: Fragment() {
      * Everything that can leave this screen with nothing to show goes through here so the list and
      * the message can never both be visible, and so a dead end always offers the way out of it.
      */
+    /**
+     * Reports a search in progress: the spinner and a line saying what is being waited on.
+     *
+     * Kept apart from [showStatus] because the two mean opposite things. A status is a conclusion;
+     * this is a promise that one is coming.
+     */
+    private fun showSearching(message: CharSequence) {
+        showStatus(message)
+        searchProgress.visibility = View.VISIBLE
+    }
+
     private fun showStatus(
         message: CharSequence,
         actionText: CharSequence? = null,
         action: (() -> Unit)? = null,
     ) {
+        // Any conclusion ends the wait, so nothing can leave the spinner running by forgetting.
+        searchProgress.visibility = View.GONE
         searchEmpty.text = message
         if (actionText != null && action != null) {
             searchStatusAction.text = actionText
@@ -644,6 +728,7 @@ class SearchFragment: Fragment() {
     }
 
     private fun hideStatus() {
+        searchProgress.visibility = View.GONE
         searchStatus.visibility = View.GONE
         searchStatusAction.setOnClickListener(null)
     }
@@ -657,23 +742,28 @@ class SearchFragment: Fragment() {
      * @return true if a message was shown.
      */
     private fun showLidarrSetupStatusIfNeeded(): Boolean {
-        val store = LidarrCredentialStore(requireContext())
-        return when {
-            store.serverUrl.isNullOrBlank() || store.apiKey.isNullOrBlank() -> {
+        val provider = AcquisitionProviders.active(requireContext())
+        return when (provider.readiness(requireContext())) {
+            AcquisitionProvider.Readiness.UNCONFIGURED -> {
                 showStatus(
                     getString(R.string.search_lidarr_not_configured),
                     getString(R.string.search_lidarr_set_up),
                 ) { openLidarrSettings() }
                 true
             }
-            !store.isConfigured() -> {
+
+            AcquisitionProvider.Readiness.INCOMPLETE -> {
+                // Searching works without a root folder and profiles, so this is a notice rather
+                // than a wall: the query below still runs, and the missing settings are asked for
+                // at the moment something is actually requested.
                 showStatus(
                     getString(R.string.search_lidarr_incomplete),
                     getString(R.string.search_lidarr_open_settings),
                 ) { openLidarrSettings() }
-                true
+                false
             }
-            else -> {
+
+            AcquisitionProvider.Readiness.READY -> {
                 hideStatus()
                 false
             }
@@ -685,20 +775,57 @@ class SearchFragment: Fragment() {
             ?.addFragmentToCurrentStack(LidarrSettingsFragment())
     }
 
-    private suspend fun searchLidarr(query: String) {
-        lidarrResultsAdapter.submit(emptyList())
+    /**
+     * The request tab: a phrase searches the downloader, a link is followed to whatever it names.
+     *
+     * Pasting an album link is the shortest path from "I heard this somewhere" to owning it, and it
+     * used to be refused unless the link happened to be a playlist. Now the link is resolved, the
+     * record it names is matched on identity, and the row that appears is the right one rather than
+     * the best of five guesses.
+     */
+    private suspend fun searchForRequests(query: String) {
+        requestResultsAdapter.submit(emptyList())
         if (showLidarrSetupStatusIfNeeded()) return
+        showSearching(getString(R.string.requests_searching))
 
-        val store = LidarrCredentialStore(requireContext())
-        val result = withContext(Dispatchers.IO) {
-            runCatching { LidarrClient(store).searchAlbums(query) }
+        val provider = AcquisitionProviders.active(requireContext())
+        if (MusicCatalogProviders.looksLikeLink(query)) {
+            showReleasesBehind(query, provider)
+            return
         }
-        result.onSuccess { albums ->
-            lidarrResultsAdapter.submit(albums)
-            if (albums.isEmpty()) showStatus(getString(R.string.requests_no_results))
-            else hideStatus()
+
+        val result = withContext(Dispatchers.IO) {
+            runCatching {
+                // Artists and releases answer the same question and are asked for together, so the
+                // slower of the two sets the wait rather than the sum of both.
+                coroutineScope {
+                    val artists = async { matchingArtists(provider, query) }
+                    val releases = async {
+                        MusicRequestService.find(
+                            context = requireContext(),
+                            query = ReleaseQuery.freeText(query),
+                            provider = provider,
+                            // Not on every keystroke: the metadata service behind the fallback is
+                            // rate limited to one call a second, and half-typed words would spend
+                            // them all.
+                            useMetadataFallback = false,
+                        )
+                    }
+                    artists.await() to releases.await()
+                }
+            }
+        }
+        result.onSuccess { (artists, ranked) ->
+            if (MusicRequestService.needsSecondOpinion(ranked)) {
+                // Near-misses are held back rather than flashed up and replaced half a second
+                // later. The second pass returns them anyway, below whatever it finds, so nothing
+                // is lost by waiting for the answer that is actually worth showing.
+                askMetadataServiceFor(query, provider, artists)
+            } else {
+                showRows(artists, ranked.map(ScoredRelease<AcquirableRelease>::release))
+            }
         }.onFailure { error ->
-            lidarrResultsAdapter.submit(emptyList())
+            requestResultsAdapter.submit(emptyList())
             showStatus(
                 getString(
                     R.string.search_lidarr_unreachable,
@@ -709,36 +836,194 @@ class SearchFragment: Fragment() {
         }
     }
 
-    private fun requestLidarrAlbum(album: LidarrClient.AlbumResult) {
-        if (album.alreadyAdded) {
-            Toast.makeText(requireContext(), R.string.requests_already_added, Toast.LENGTH_SHORT)
-                .show()
+    /**
+     * The second pass, once typing has stopped and the downloader has admitted it has nothing.
+     *
+     * Worth the wait: Lidarr's text search returns nothing at all for records its metadata service
+     * holds perfectly well, so "no results" is frequently a failure of the search box rather than
+     * an absence in the catalogue. The pause before asking is what keeps a rate-limited service
+     * from being spent on half-typed words - and this coroutine is cancelled by the next keystroke,
+     * so an abandoned query never gets there.
+     */
+    private suspend fun askMetadataServiceFor(
+        query: String,
+        provider: AcquisitionProvider,
+        artists: List<AcquirableArtist>,
+    ) {
+        showSearching(getString(R.string.requests_searching_deeper))
+        delay(METADATA_FALLBACK_DELAY_MS)
+        val found = withContext(Dispatchers.IO) {
+            runCatching {
+                MusicRequestService.find(requireContext(), ReleaseQuery.freeText(query), provider)
+                    .map(ScoredRelease<AcquirableRelease>::release)
+            }.getOrDefault(emptyList())
+        }
+        showRows(artists, found)
+    }
+
+    /**
+     * Artists worth putting at the top of the results.
+     *
+     * The downloader returns ten for any phrase and most are noise - "Chxrry" brings back four
+     * Cherrys - so they go through the same matcher as everything else, and only a couple of the
+     * closest survive. An artist row is a doorway, not an answer, and a list of doorways to the
+     * wrong people is worse than none.
+     */
+    private suspend fun matchingArtists(
+        provider: AcquisitionProvider,
+        query: String,
+    ): List<AcquirableArtist> = runCatching {
+        provider.searchArtists(requireContext(), query)
+            .map { it to MusicText.similarity(query, it.name) }
+            .filter { it.second >= ARTIST_MATCH_FLOOR }
+            .sortedByDescending { it.second }
+            .take(MAX_ARTIST_ROWS)
+            .map { it.first }
+    }.getOrDefault(emptyList())
+
+    private suspend fun showRows(
+        artists: List<AcquirableArtist>,
+        releases: List<AcquirableRelease>,
+    ) {
+        // Indexed before the rows are submitted, so every row is bound once with its final label.
+        libraryReleases.index(releases)
+        requestResultsAdapter.submitRows(
+            artists.map(RequestableReleasesAdapter.Row::Artist) +
+                releases.map(RequestableReleasesAdapter.Row::Release)
+        )
+        if (artists.isEmpty() && releases.isEmpty()) {
+            showStatus(getString(R.string.requests_no_results))
+        } else {
+            hideStatus()
+        }
+    }
+
+    /** The link branch of [searchForRequests], kept separate because it cannot be re-ranked. */
+    private suspend fun showReleasesBehind(url: String, provider: AcquisitionProvider) {
+        showSearching(getString(R.string.requests_reading_link))
+        val result = withContext(Dispatchers.IO) {
+            runCatching { releasesBehindLink(provider, url) }
+        }
+        result.onSuccess { releases ->
+            requestResultsAdapter.submit(releases)
+            if (releases.isEmpty()) showStatus(getString(R.string.requests_no_results))
+            else hideStatus()
+        }.onFailure { error ->
+            requestResultsAdapter.submit(emptyList())
+            showStatus(
+                getString(
+                    R.string.search_lidarr_unreachable,
+                    error.message ?: getString(R.string.requests_failed),
+                ),
+                getString(R.string.search_lidarr_retry),
+            ) { runQuery(searchInputDetail.text?.toString().orEmpty()) }
+        }
+    }
+
+    /**
+     * What a pasted link resolves to, as releases this downloader could fetch.
+     *
+     * Only convincing matches are shown. A link is a precise statement about one record, so
+     * answering it with approximations would throw away the precision that made pasting it useful.
+     */
+    private suspend fun releasesBehindLink(
+        provider: AcquisitionProvider,
+        url: String,
+    ): List<AcquirableRelease> {
+        val queries = when (val resolution = MusicCatalogProviders.resolve(requireContext(), url)) {
+            is CatalogResolution.Resolved ->
+                resolution.releases.map { it.toReleaseQuery() }
+                    .ifEmpty { resolution.tracks.map { it.toReleaseQuery() } }
+
+            is CatalogResolution.Failed -> throw IllegalStateException(resolution.reason)
+            is CatalogResolution.Unsupported ->
+                throw IllegalStateException(resolution.provider + ": " + resolution.reason)
+
+            CatalogResolution.Unrecognised ->
+                throw IllegalStateException(getString(R.string.requests_unknown_link))
+        }
+        return MusicRequestService.collapse(queries)
+            .take(MAX_LINK_RELEASES)
+            .mapNotNull { query ->
+                ReleaseMatcher.best(query, provider.search(requireContext(), query))?.release
+            }
+            .distinctBy(AcquirableRelease::id)
+    }
+
+    /**
+     * Which results the user already owns, worked out once per list rather than per row.
+     *
+     * See [LibraryReleaseIndex]: doing this from the adapter meant matching against the whole
+     * library on every bind, which is what made the list stutter while scrolling.
+     */
+    private val libraryReleases = LibraryReleaseIndex()
+
+    private fun requestRelease(release: AcquirableRelease) {
+        // Choosing a result ends the typing. Leaving the keyboard up covered the row that was just
+        // acted on, so its own status - the only feedback there is - was hidden behind it.
+        finishSearchSelection()
+
+        when (requestResultsAdapter.requestState(release.id)) {
+            RequestableReleasesAdapter.RequestState.SENDING -> return
+            RequestableReleasesAdapter.RequestState.REQUESTED -> {
+                showStatus(getString(R.string.requests_row_requested))
+                return
+            }
+            else -> Unit
+        }
+
+        // Owning it already makes the row a way into the library, not a request. This is the whole
+        // point of telling the two states apart.
+        libraryReleases.match(release)?.let { album ->
+            // This row leaves the search screen like any other result, so it owes the keyboard the
+            // same courtesy. It was the one destination that did not, because it is reached from
+            // the request handler rather than from a result callback.
+            finishSearchSelection()
+            rememberQuery()
+            push(
+                AlbumDetailFragment.newInstance(
+                    album.title.orEmpty(),
+                    album.albumArtist.orEmpty(),
+                )
+            )
             return
         }
-        if (!LidarrCredentialStore(requireContext()).isConfigured()) {
+        if (release.alreadyPresent) {
+            showStatus(
+                getString(
+                    when (release.availability) {
+                        ReleaseAvailability.DOWNLOADING -> R.string.requests_row_downloading
+                        ReleaseAvailability.DOWNLOADED -> R.string.requests_row_downloaded
+                        else -> R.string.requests_already_added
+                    }
+                )
+            )
+            return
+        }
+        val provider = AcquisitionProviders.active(requireContext())
+        if (!provider.readiness(requireContext()).canRequest) {
             LidarrSetupPrompt.ensureConfigured(requireContext(), viewLifecycleOwner) {
-                requestLidarrAlbum(album)
+                requestRelease(release)
             }
             return
         }
+        // The row says what is happening to it. This app suppresses system toasts, so before this
+        // a tap produced no visible response at all until the list reloaded seconds later.
+        requestResultsAdapter.setState(release.id, RequestableReleasesAdapter.RequestState.SENDING)
         viewLifecycleOwner.lifecycleScope.launch {
             val added = withContext(Dispatchers.IO) {
-                runCatching {
-                    LidarrClient(LidarrCredentialStore(requireContext())).addAlbum(album)
-                }
+                runCatching { provider.request(requireContext(), release) }
             }
-            Toast.makeText(
-                requireContext(),
-                added.fold(
-                    onSuccess = {
-                        if (it) getString(R.string.requests_added, album.title)
-                        else getString(R.string.requests_failed)
-                    },
-                    onFailure = { it.message ?: getString(R.string.requests_failed) },
-                ),
-                Toast.LENGTH_LONG,
-            ).show()
-            if (added.getOrDefault(false)) runQuery(searchInputDetail.text?.toString().orEmpty())
+            val succeeded = added.getOrDefault(false)
+            requestResultsAdapter.setState(
+                release.id,
+                if (succeeded) RequestableReleasesAdapter.RequestState.REQUESTED
+                else RequestableReleasesAdapter.RequestState.FAILED,
+            )
+            // Only a failure needs more than the row: it carries a reason worth reading.
+            added.exceptionOrNull()?.let {
+                showStatus(it.message ?: getString(R.string.requests_failed))
+            }
         }
     }
 
@@ -924,8 +1209,9 @@ class SearchFragment: Fragment() {
         tabContainer.performPressHaptic()
         updateTabSelection()
         updateTabIndicator(true)
-        searchResults.adapter = if (isAppleTabSelected) resultsAdapter else lidarrResultsAdapter
         searchResults.scrollToPosition(0)
+        // Leaves the adapter to runQuery, which knows whether what is about to be drawn is a set
+        // of results or the shared history.
         runQuery(searchInputDetail.text?.toString().orEmpty())
     }
 
@@ -974,12 +1260,36 @@ class SearchFragment: Fragment() {
         imm.hideSoftInputFromWindow(target.windowToken, 0)
     }
 
+    /** Every result destination leaves the query intact but gives the screen back to its content. */
+    private fun finishSearchSelection() {
+        hideKeyboard(searchInputDetail)
+        searchInputDetail.clearFocus()
+    }
+
     private companion object {
         /** Long enough that a fast typist scans the library once, short enough to feel immediate. */
         const val SEARCH_DEBOUNCE_MS = 100L
 
+        /** Lets a word settle before spending three downloader/metadata round trips on it. */
+        const val LIDARR_SEARCH_DEBOUNCE_MS = 350L
+
         /** The list is scrolled, not read whole; past this it is cheaper to refine the query. */
         const val SEARCH_RESULT_LIMIT = 200
+
+        /**
+         * A pasted artist link can name a hundred records, and each one costs a lookup. Show the
+         * first handful rather than making the user wait on a discography they did not ask for.
+         */
+        const val MAX_LINK_RELEASES = 12
+
+        /** Long enough to mean "they stopped typing", short enough not to feel like a hang. */
+        const val METADATA_FALLBACK_DELAY_MS = 450L
+
+        /** Below this an artist row is a doorway to the wrong person. */
+        const val ARTIST_MATCH_FLOOR = 0.7
+
+        /** Two is a disambiguation; ten is the downloader's unfiltered guess list. */
+        const val MAX_ARTIST_ROWS = 2
 
         /**
          * Deliberately small. These sections sit above the songs, and a hundred artists between the

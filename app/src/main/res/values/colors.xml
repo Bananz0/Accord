@@ -179,6 +179,7 @@
     <color name="launcher_background_gradient_end">#FA233B</color>
     <color name="onAccentColor">#FFFFFF</color>
     <color name="accentColorFainted">#1AFA233B</color>
+    <color name="autofillHighlightColor">#14FA233B</color>
     <color name="onAccentColorFainted">#1AFFFFFF</color>
     <color name="coverBorder">#1A000000</color>
     <color name="surfaceColor">#FFFFFF</color>

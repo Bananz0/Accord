@@ -6,11 +6,12 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.akanework.gramophone.logic.data.lidarr.LidarrRequester
+import org.akanework.gramophone.logic.data.acquisition.MusicRequestService
+import org.akanework.gramophone.logic.data.catalog.CatalogPlaylistImporter
+import org.akanework.gramophone.logic.data.catalog.ExternalTrack
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinPlaylists
 import org.akanework.gramophone.logic.data.spotify.SpotifyClient
 import org.akanework.gramophone.logic.data.spotify.SpotifyCredentialStore
-import org.akanework.gramophone.logic.data.spotify.SpotifyPlaylistImporter
 import org.akanework.gramophone.logic.data.library.songListSnapshot
 import uk.akane.accord.R
 import uk.akane.accord.ui.MainActivity
@@ -99,7 +100,7 @@ class SpotifyPlaylistImportController(
                         val tracks = client.playlistTracks(
                             context, playlist.id, System.currentTimeMillis()
                         )
-                        SpotifyPlaylistImporter.import(
+                        CatalogPlaylistImporter.import(
                             context,
                             playlist.name,
                             tracks,
@@ -122,7 +123,7 @@ class SpotifyPlaylistImportController(
         }
     }
 
-    private fun offerRequest(missing: List<SpotifyClient.Track>) {
+    private fun offerRequest(missing: List<ExternalTrack>) {
         if (missing.isEmpty()) return
         MaterialAlertDialogBuilder(context)
             .setTitle(R.string.lidarr_request_missing)
@@ -140,19 +141,18 @@ class SpotifyPlaylistImportController(
             .show()
     }
 
-    private fun request(missing: List<SpotifyClient.Track>) {
+    private fun request(missing: List<ExternalTrack>) {
         Toast.makeText(context, R.string.lidarr_requesting, Toast.LENGTH_SHORT).show()
         fragment.viewLifecycleOwner.lifecycleScope.launch {
             val outcome = withContext(Dispatchers.IO) {
-                LidarrRequester.request(
-                    context,
-                    missing.map { LidarrRequester.Wanted(it.artist, it.album, it.title) },
-                )
+                MusicRequestService.requestTracks(context, missing)
             }
             if (!fragment.isAdded) return@launch
             Toast.makeText(
                 context,
-                if (outcome.requested == 0) context.getString(R.string.lidarr_no_matches)
+                // Tracks the downloader already tracks are not a failure, and saying "nothing
+                // matched" when it in fact matched everything is how this looked broken.
+                if (!outcome.didSomething) context.getString(R.string.lidarr_no_matches)
                 else context.resources.getQuantityString(
                     R.plurals.lidarr_requested, outcome.requested, outcome.requested
                 ),

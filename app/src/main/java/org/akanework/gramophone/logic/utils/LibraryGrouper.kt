@@ -30,6 +30,7 @@ import org.akanework.gramophone.logic.utils.MediaStoreUtils.LibraryStoreClass
 import org.akanework.gramophone.logic.utils.MediaStoreUtils.Playlist
 import org.akanework.gramophone.logic.utils.MediaStoreUtils.RecentlyAdded
 import java.io.File
+import java.util.IdentityHashMap
 import java.util.PriorityQueue
 
 /**
@@ -42,6 +43,26 @@ import java.util.PriorityQueue
  * behaviour from every comparator in `logic/comparators` and every adapter downstream.
  */
 object LibraryGrouper {
+
+    /**
+     * The running order of a record: disc, then track, then name for anything untagged.
+     *
+     * Albums arrive from the server sorted by name, because that is what a *library* listing wants
+     * and one query serves both. An album is not a library listing though - it has an order the
+     * artist chose - so it is put back here, once, where every screen and every "play this album"
+     * inherits it rather than each rediscovering it. Before this only the album detail screen
+     * sorted, so opening a record showed it correctly while playing it from anywhere else - a
+     * home card, the album grid, the collection menu - played it alphabetically.
+     *
+     * Disc leads, because track 1 of disc 2 belongs after the whole of disc 1 rather than beside
+     * track 1 of disc 1. An untagged disc counts as the first: single-disc releases usually carry
+     * no disc number at all, and reading that as "unknown, file last" would break the one album
+     * that tags some of its tracks and not others.
+     */
+    private val TRACK_ORDER: Comparator<MediaItem> =
+        compareBy<MediaItem> { it.mediaMetadata.discNumber?.takeIf { disc -> disc > 0 } ?: 1 }
+            .thenBy { it.mediaMetadata.trackNumber?.takeIf { track -> track > 0 } ?: Int.MAX_VALUE }
+            .thenBy { it.mediaMetadata.title?.toString().orEmpty() }
 
     /** A Jellyfin credit whose stable identity must not be inferred from its display name. */
     data class ArtistCredit(val id: Long?, val name: String)
@@ -111,6 +132,13 @@ object LibraryGrouper {
         val folderArray = mutableListOf<String>()
         val root = FileNode("storage")
         val shallowRoot = FileNode("shallow")
+        // Worked out before grouping, so a name split out of a composite credit lands on the
+        // artist the server already knows under that name rather than beside them with no id.
+        val canonicalArtistIds = hashMapOf<String, Long>()
+        for (entry in entries) {
+            entry.trackArtists.forEach { it.rememberIfAtomic(canonicalArtistIds) }
+            entry.albumArtists.forEach { it.rememberIfAtomic(canonicalArtistIds) }
+        }
         val recentlyAddedMap = PriorityQueue<Pair<Long, MediaItem>>(
             // PriorityQueue throws if initialCapacity < 1
             entries.size.coerceAtLeast(1),
@@ -130,12 +158,16 @@ object LibraryGrouper {
             }.songList.add(song)
             artistCacheMap.putIfAbsentSupport(entry.artist, entry.artistId)
 
-            val trackCredits = entry.trackArtists.distinctCredits()
-            val albumCredits = entry.albumArtists.distinctCredits()
+            val trackCredits = entry.trackArtists
+                .flatMap { it.expand(canonicalArtistIds) }
+                .distinctCredits()
+            val albumCredits = entry.albumArtists
+                .flatMap { it.expand(canonicalArtistIds) }
+                .distinctCredits()
             val primary = albumCredits.firstOrNull() ?: trackCredits.firstOrNull()
-                ?: entry.artist?.takeIf(String::isNotBlank)?.let {
-                    ArtistCredit(entry.artistId, it)
-                }
+                ?: entry.artist?.takeIf(String::isNotBlank)
+                    ?.let { ArtistCredit(entry.artistId, it).expand(canonicalArtistIds) }
+                    ?.firstOrNull()
 
             // Build these once with the library. Browse, search and artist details then consume a
             // few hundred Artist objects instead of reparsing every one of thousands of songs.
@@ -210,12 +242,30 @@ object LibraryGrouper {
             if (it.artistId == null) {
                 it.artistId = artistCacheMap[it.artist]
             }
+            it.songList.sortWith(TRACK_ORDER)
             artistMap[it.artistId]?.albumList?.add(it)
         }.toMutableList<Album>()
         // Structured credits are authoritative for Jellyfin. MediaStore entries do not carry
         // them, so retain the legacy grouping as a compatibility fallback.
         val artistList = (allCreditArtists.values.takeIf { it.isNotEmpty() }
             ?: artistMap.values).toMutableList()
+        // The credit-built lists only ever collected songs. Their album lists stayed empty, so
+        // anything asking an artist how many records they have - search, which prints the count
+        // next to the name - answered none, about artists whose page then opened full of albums.
+        val albumOfSong = hashMapOf<String, Album>()
+        albumList.forEach { album -> album.songList.forEach { albumOfSong[it.mediaId] = album } }
+        listOf(allCreditArtists, primaryArtists, featuredArtists).forEach { credited ->
+            credited.values.forEach { artist ->
+                if (artist.albumList.isNotEmpty()) return@forEach
+                // By identity, not equality: Album is a data class holding its whole song list, so
+                // comparing two of them walks every track in both.
+                val seen = IdentityHashMap<Album, Unit>()
+                artist.songList.forEach { song ->
+                    val album = albumOfSong[song.mediaId] ?: return@forEach
+                    if (seen.put(album, Unit) == null) artist.albumList.add(album)
+                }
+            }
+        }
         val albumArtistList = albumArtistMap.entries.map { (artist, albumsAndSongs) ->
             Artist(artistCacheMap[artist], artist, albumsAndSongs.second, albumsAndSongs.first)
         }.toMutableList()
@@ -259,6 +309,35 @@ object LibraryGrouper {
     private fun Iterable<ArtistCredit>.distinctCredits(): List<ArtistCredit> =
         distinctBy { credit -> credit.key() }
 
+    /**
+     * Records the id a name carries when it stands on its own, for [expand] to hand back.
+     *
+     * Only atomic credits count. A composite's id belongs to the whole string, so adopting it for
+     * either half would file both halves under one artist.
+     */
+    private fun ArtistCredit.rememberIfAtomic(into: HashMap<String, Long>) {
+        val artistId = id ?: return
+        val parts = name.splitArtistTag()
+        if (parts.size == 1) into.putIfAbsentSupport(parts[0].lowercase(), artistId)
+    }
+
+    /**
+     * Splits one credit into the acts it actually names.
+     *
+     * Jellyfin makes one artist entity per value in a track's artist field, so a file whose single
+     * ARTIST tag reads "Asake; DJ Snake" arrives as one artist of that exact name, holding an id
+     * of its own. That composite is not an act. It put Asake in the artist list three further
+     * times under three further names, and kept his guests out of the featured list entirely,
+     * because the server id made the string look atomic and stopped anything from reading it.
+     * Split it on the delimiters no artist name contains, and give each part the id the same name
+     * carries alone, so the halves land on the artist already there instead of beside them.
+     */
+    private fun ArtistCredit.expand(canonicalIds: Map<String, Long>): List<ArtistCredit> {
+        val parts = name.splitArtistTag()
+        if (parts.size <= 1) return listOf(this)
+        return parts.map { part -> ArtistCredit(canonicalIds[part.lowercase()], part) }
+    }
+
     private fun MutableMap<ArtistKey, Artist>.addSong(
         credit: ArtistCredit,
         song: MediaItem,
@@ -271,6 +350,21 @@ object LibraryGrouper {
         artist.songList.add(song)
     }
 }
+
+/**
+ * The two ways a tagger crams several artists into one field.
+ *
+ * ',' and '&' are deliberately absent: "Tyler, The Creator" and "Earth, Wind & Fire" are one act
+ * each, and a rule that split them would invent more artists than it merged.
+ */
+private val ARTIST_TAG_DELIMITER =
+    Regex("""\s*;\s*|\s+(?:featuring|feat|ft)\.?\s+""", RegexOption.IGNORE_CASE)
+
+/** The acts one artist credit names; the credit itself when it names only one. */
+internal fun String.splitArtistTag(): List<String> =
+    split(ARTIST_TAG_DELIMITER)
+        .map(String::trim)
+        .filter(String::isNotBlank)
 
 /**
  * Splits a genre tag into the genres it actually names.

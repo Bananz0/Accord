@@ -13,6 +13,7 @@ import com.google.android.material.textfield.TextInputLayout
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.akanework.gramophone.logic.GramophoneApplication
 import uk.akane.accord.R
 import org.akanework.gramophone.logic.data.lidarr.LidarrClient
 import org.akanework.gramophone.logic.data.lidarr.LidarrCredentialStore
@@ -43,6 +44,15 @@ class LidarrSettingsTopFragment : BasePreferenceFragment() {
     override fun onResume() {
         super.onResume()
         refreshSummaries()
+        // Someone opening this screen to set Lidarr up is exactly who should not have to: the
+        // Jellyfin server usually knows the address and key already. Filling them in silently
+        // costs one request and only ever writes into empty fields.
+        viewLifecycleOwner.lifecycleScope.launch {
+            (requireActivity().application as GramophoneApplication)
+                .syncLidarrFromPlugin()
+                .join()
+            if (isAdded) refreshSummaries()
+        }
     }
 
     override fun onPreferenceTreeClick(preference: Preference): Boolean {
@@ -62,9 +72,18 @@ class LidarrSettingsTopFragment : BasePreferenceFragment() {
                 listOf(store.serverUrl, store.rootFolderPath, store.qualityProfileName,
                     store.metadataProfileName)
             }
+            val syncedThroughPlugin = withContext(Dispatchers.IO) {
+                store.isSyncedThroughPlugin
+            }
             if (!isAdded) return@launch
             findPreference<Preference>("lidarr_server")?.summary =
-                state[0]?.takeIf { it.isNotBlank() } ?: getString(R.string.lidarr_server_summary)
+                state[0]?.takeIf { it.isNotBlank() }?.let {
+                    if (syncedThroughPlugin) {
+                        getString(R.string.lidarr_synced_through_plugin_summary, it)
+                    } else {
+                        it
+                    }
+                } ?: getString(R.string.lidarr_server_summary)
             findPreference<Preference>("lidarr_root_folder")?.summary =
                 state[1]?.takeIf { it.isNotBlank() } ?: getString(R.string.lidarr_not_set)
             findPreference<Preference>("lidarr_quality_profile")?.summary =

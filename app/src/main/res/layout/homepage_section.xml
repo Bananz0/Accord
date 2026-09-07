@@ -32,7 +32,7 @@
         android:textColor="@color/contrast_colorOnSurfaceSecondary"
         android:textSize="14sp" />
 
-    <androidx.recyclerview.widget.RecyclerView
+    <uk.akane.accord.ui.components.TwoAxisRecyclerView
         android:id="@+id/section_items"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"

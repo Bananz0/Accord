@@ -35,12 +35,44 @@ internal object ProceduralMotionTicker {
         /** False once the view is off-window; the ticker drops it rather than holding a leak. */
         fun isMotionAttached(): Boolean
 
+        /**
+         * False while the host is attached but cannot be seen - a hidden fragment, a `GONE`
+         * ancestor, a card recycled off screen.
+         *
+         * Distinct from [isMotionAttached] on purpose: an unattached host is *dropped*, and only
+         * `onAttachedToWindow` puts it back, so folding visibility into that would silently kill a
+         * card's motion the first time it was hidden and never restart it. An invisible host stays
+         * registered and merely stops being drawn.
+         */
+        fun isMotionVisible(): Boolean
+
         fun invalidateMotion()
     }
 
     /** Host to the frame time its current cycle began at; zero means "not started yet". */
     private val startedAt = LinkedHashMap<Host, Long>()
     private var ticking = false
+
+    /**
+     * Set while something opaque covers every host - the expanded player, which fills the window.
+     *
+     * Occlusion by a sibling is invisible to [Host.isMotionVisible]: a card under the open player
+     * is still `isShown`, so it kept invalidating at the display's full rate behind a surface that
+     * hid it completely. Each of those invalidations dragged the blurred backdrop through another
+     * GPU pass, which is what left no headroom for a track change.
+     */
+    private var paused = false
+
+    fun setPaused(value: Boolean) {
+        if (paused == value) return
+        paused = value
+        // Hosts keep their phase across the pause; restarting the clock below resumes from it
+        // rather than snapping back to the start of the loop.
+        if (!value) {
+            startedAt.keys.forEach { startedAt[it] = 0L }
+            ensureTicking()
+        }
+    }
 
     fun register(host: Host) {
         if (startedAt.containsKey(host)) return
@@ -68,10 +100,21 @@ internal object ProceduralMotionTicker {
 
     private val callback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
+            if (paused) {
+                ticking = false
+                return
+            }
             // Copied: a host detaching as it is stepped would otherwise mutate the map underneath.
             startedAt.keys.toList().forEach { host ->
                 if (!host.isMotionAttached()) {
                     startedAt.remove(host)
+                    return@forEach
+                }
+                if (!host.isMotionVisible()) {
+                    // Stays registered, but its clock restarts from the phase it holds now, so it
+                    // resumes where it stopped instead of jumping forward by the time it spent
+                    // hidden.
+                    startedAt[host] = 0L
                     return@forEach
                 }
                 val periodNanos = host.motionDurationMs * NANOS_PER_MILLI

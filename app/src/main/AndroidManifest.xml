@@ -7,6 +7,8 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- ExoPlayer uses this to react to connectivity changes while streaming -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Best-effort Wi-Fi name for associating a tested LAN URL; this is a normal permission. -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <!-- Run music playback service -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission
@@ -44,6 +46,24 @@
         android:theme="@style/Theme.Gramophone"
         android:windowSoftInputMode="adjustResize"
         tools:targetApi="upside_down_cake">
+
+        <!--
+            Google Cast reads this reflectively to find Fincord's CastOptions. Without it the
+            framework throws on first use rather than simply finding no devices.
+        -->
+        <meta-data
+            android:name="com.google.android.gms.cast.framework.OPTIONS_PROVIDER_CLASS_NAME"
+            android:value="uk.akane.accord.logic.cast.CastOptionsProvider" />
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.shared-media"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/shared_media_paths" />
+        </provider>
 
         <activity
             android:name="org.akanework.gramophone.ui.BugHandlerActivity"
@@ -98,7 +118,7 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data
                     android:host="spotify-callback"
-                    android:scheme="accord" />
+                    android:scheme="fincord" />
             </intent-filter>
         </activity>
 
@@ -109,7 +129,7 @@
             android:windowSoftInputMode="adjustResize" />
 
         <!--
-            The launcher is now Accord's own activity: a shrinking card holding a Cupertino
+            The launcher is now Fincord's own activity: a shrinking card holding a Cupertino
             FragmentSwitcherView, with the player as a floating panel over it, in place of the
             bottom-sheet-and-BottomNavigationView shell below. It declares
             enableOnBackInvokedCallback because it drives predictive back itself, both to collapse
@@ -123,6 +143,10 @@
             android:launchMode="singleTop"
             android:theme="@style/Theme.Accord.Splash"
             android:windowSoftInputMode="adjustNothing">
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
+
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <action android:name="android.intent.action.MUSIC_PLAYER" />
@@ -130,6 +154,83 @@
                 <category android:name="android.intent.category.LAUNCHER" />
                 <category android:name="android.intent.category.APP_MUSIC" />
                 <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+
+            <!--
+                Fincord in the share sheet. Sharing an album from Spotify, Deezer or Apple Music
+                hands over a plain URL, which the request screen resolves and asks the user's
+                downloader for - the shortest path there is from hearing a record elsewhere to
+                owning it.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+
+            <!-- A saved settings file can be restored by tapping it in a document provider. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data
+                    android:mimeType="application/vnd.fincord.settings"
+                    android:scheme="content" />
+            </intent-filter>
+
+            <!--
+                Cast's remote-control notification opens Fincord with this URI so another sender
+                can join the already-running Fincord receiver session. The same URI and the
+                release package name must be registered for the receiver in the Cast console.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data
+                    android:host="cast"
+                    android:path="/join"
+                    android:scheme="fincord" />
+            </intent-filter>
+
+            <!--
+                Exact playback shortcuts return here.
+
+                Separate from the search filter below, and it has to stay separate. Android merges
+                every <data> element inside one filter combinatorially rather than treating each as
+                a URI pattern of its own, so a single filter holding both of these demanded the
+                /item/ path prefix of the search host too - and fincord://search, which carries no
+                path at all, then matched nothing. That silently killed the Assistant capability:
+                the url-template in shortcuts.xml pointed at a URI the system could not resolve.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data
+                    android:host="play"
+                    android:pathPrefix="/item/"
+                    android:scheme="fincord" />
+            </intent-filter>
+
+            <!-- Assistant GET_THING searches and in-app search links. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data
+                    android:host="search"
+                    android:scheme="fincord" />
             </intent-filter>
         </activity>
 
@@ -141,6 +242,15 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </receiver>
+
+        <!--
+            Required for the system Output Switcher on Android 13+: without this receiver the
+            notification's output picker cannot hand playback between this phone and a receiver,
+            and remote-to-local transfers never reach the app at all.
+        -->
+        <receiver
+            android:name="androidx.mediarouter.media.MediaTransferReceiver"
+            android:exported="true" />
     </application>
 
 </manifest>

@@ -1,10 +1,10 @@
-package org.akanework.gramophone.logic.data.spotify
+package org.akanework.gramophone.logic.data.catalog
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
-class SpotifyPlaylistMatchingTest {
+class CatalogPlaylistMatchingTest {
 
     @Test
     fun meaningfulVersionSuffixIsNotCollapsed() {
@@ -14,7 +14,7 @@ class SpotifyPlaylistMatchingTest {
             library("live", "Flowers (Live)", album = "Live at the Wiltern"),
         )
 
-        assertEquals("live", SpotifyPlaylistImporter.selectMatch(source, candidates))
+        assertEquals("live", CatalogPlaylistImporter.selectMatch(source, candidates))
     }
 
     @Test
@@ -24,7 +24,7 @@ class SpotifyPlaylistMatchingTest {
 
         assertEquals(
             "match",
-            SpotifyPlaylistImporter.selectMatch(source, listOf(candidate)),
+            CatalogPlaylistImporter.selectMatch(source, listOf(candidate)),
         )
     }
 
@@ -58,7 +58,7 @@ class SpotifyPlaylistMatchingTest {
             ),
         )
 
-        assertEquals("deluxe", SpotifyPlaylistImporter.selectMatch(source, candidates))
+        assertEquals("deluxe", CatalogPlaylistImporter.selectMatch(source, candidates))
     }
 
     @Test
@@ -69,7 +69,7 @@ class SpotifyPlaylistMatchingTest {
             library("two", "Intro", album = "Two", durationMs = null),
         )
 
-        assertNull(SpotifyPlaylistImporter.selectMatch(source, candidates))
+        assertNull(CatalogPlaylistImporter.selectMatch(source, candidates))
     }
 
     @Test
@@ -89,7 +89,7 @@ class SpotifyPlaylistMatchingTest {
 
         assertEquals(
             "compilation",
-            SpotifyPlaylistImporter.selectMatch(source, listOf(compilation)),
+            CatalogPlaylistImporter.selectMatch(source, listOf(compilation)),
         )
     }
 
@@ -99,7 +99,7 @@ class SpotifyPlaylistMatchingTest {
         durationMs: Long? = 200_000L,
         releaseYear: Int? = 2024,
         trackNumber: Int? = 1,
-    ) = SpotifyClient.Track(
+    ) = ExternalTrack(
         title = title,
         artist = "Doja Cat",
         album = album,
@@ -118,7 +118,7 @@ class SpotifyPlaylistMatchingTest {
         releaseYear: Int? = 2024,
         trackNumber: Int? = 1,
         albumTrackCount: Int = 12,
-    ) = SpotifyPlaylistImporter.LibraryTrack(
+    ) = CatalogPlaylistImporter.LibraryTrack(
         mediaId = id,
         title = title,
         artist = artist,

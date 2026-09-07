@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">协律</string>
     <string name="home_menu_search">搜索</string>
     <string name="home_menu_shuffle">随机</string>
     <string name="home_menu_settings">设置</string>
@@ -198,9 +197,9 @@
     <string name="default_track">未在播放</string>
     <string name="btn_continue">继续</string>
     <string name="welcome_to">欢迎使用</string>
-    <string name="welcome_page_introduction">在您的安卓设备上无广告播放本地歌曲和播放列表，下载音乐离线收听。通过空间音频，感受环绕音效带来的沉浸式体验。</string>
-    <string name="disclaimer">协律是一款自由且脱机使用的应用程序。协律不会将您的任何数据发送至网络，也不会将其用于任何其他用途。协律的源代码已在线发布，并遵循 GPL-3.0 许可证，但某些限制适用。</string>
-    <string name="check_source_code"><a href="https://github.com/AkaneFoundation/Accord"><u>检查源代码 …</u></a></string>
+    <string name="welcome_page_introduction">在安卓设备上无广告播放您的 Jellyfin 音乐库，下载音乐以供离线收听，并通过空间音频获得沉浸式体验。</string>
+    <string name="disclaimer">Fincord 是采用 GPL-3.0 许可证的自由软件。它只会连接您的 Jellyfin 服务器及您自行配置的服务，不会将数据发送到其他地方。</string>
+    <string name="check_source_code">可在设置中查看制作人员和许可证</string>
     <string name="music">音乐</string>
     <string name="Album">相册</string>
     <string name="popup_view_credits">查看制作人员</string>
@@ -221,5 +220,5 @@
     <string name="explore_more">探索更多</string>
     <string name="browse_by_name">按名称浏览</string>
     <string name="no_tracks_available">无可用歌曲</string>
-    <string name="no_tracks_available_subtitle">Accord 没有在库中发现歌曲。</string>
+    <string name="no_tracks_available_subtitle">Fincord 没有在库中发现歌曲。</string>
 </resources>

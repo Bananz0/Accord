@@ -30,7 +30,7 @@ object CollectionPopupMenu {
         PLAY, SHUFFLE, PLAY_NEXT, ADD_TO_QUEUE, ADD_TO_PLAYLIST,
         DOWNLOAD, REMOVE_DOWNLOAD, GO_TO_ARTIST, GO_TO_ALBUM,
         RENAME, CHANGE_PICTURE, DELETE, DELETE_FROM_SERVER,
-        SAVE_AS_PLAYLIST,
+        SAVE_AS_PLAYLIST, FIND_MORE_RELEASES,
     }
 
     /** The action an entry carries, for screens that handle some of them themselves. */
@@ -51,6 +51,7 @@ object CollectionPopupMenu {
         withRemoveDownload: Boolean = false,
         withServerDelete: Boolean = false,
         withSaveAsPlaylist: Boolean = false,
+        withFindMoreReleases: Boolean = false,
     ): PopupHelper.PopupEntries =
         PopupHelper.PopupMenuBuilder()
             .addMenuEntry(resources, R.drawable.ic_master_play, R.string.play, Action.PLAY)
@@ -99,6 +100,15 @@ object CollectionPopupMenu {
                 if (withAlbum) {
                     addMenuEntry(
                         resources, R.drawable.ic_album, R.string.go_to_album, Action.GO_TO_ALBUM
+                    )
+                }
+                // The library can only answer "what do I have"; the downloader answers "what did
+                // they make". On an artist's page that is the more interesting of the two, and it
+                // was three screens away.
+                if (withFindMoreReleases) {
+                    addMenuEntry(
+                        resources, R.drawable.ic_magnifying_glass,
+                        R.string.collection_find_more_releases, Action.FIND_MORE_RELEASES
                     )
                 }
                 // Only a playlist the user made can be renamed, re-covered or deleted.
@@ -204,6 +214,7 @@ object CollectionPopupMenu {
                     )
                 }
             }
+            Action.FIND_MORE_RELEASES -> FindMoreReleases.open(activity, title)
             // Handled by the playlist screen itself, which owns the file being renamed or deleted.
             Action.RENAME, Action.CHANGE_PICTURE, Action.DELETE, Action.DELETE_FROM_SERVER,
             Action.SAVE_AS_PLAYLIST -> Unit

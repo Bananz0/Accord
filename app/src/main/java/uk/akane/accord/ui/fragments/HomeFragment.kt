@@ -13,7 +13,6 @@ import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import androidx.media3.common.MediaItem
 import androidx.recyclerview.widget.ConcatAdapter
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.PagerSnapHelper
@@ -22,7 +21,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.akanework.gramophone.logic.data.jellyfin.JellyfinLibraryLoader
 import org.akanework.gramophone.ui.home.HomeCard
 import org.akanework.gramophone.ui.home.HomeCardTarget
 import org.akanework.gramophone.ui.home.HomeFeed
@@ -40,7 +38,6 @@ import uk.akane.accord.ui.components.NavigationBar
 import uk.akane.accord.ui.components.CollageArtView
 import uk.akane.accord.ui.fragments.browse.AlbumDetailFragment
 import uk.akane.accord.ui.fragments.browse.StationDetailFragment
-import java.time.LocalDate
 
 class HomeFragment: Fragment() {
     private lateinit var navigationBar: NavigationBar
@@ -185,7 +182,7 @@ class HomeFragment: Fragment() {
                         HomeFeed.build(requireContext(), songs, artists)
                     }
                     val bannerItems = withContext(Dispatchers.Default) {
-                        buildBannerItems(requireContext(), songs, artists)
+                        HomeFeed.banners(requireContext(), songs, artists)
                     }
                     if (!isAdded) return@collect
                     if (bannerItems.isNotEmpty()) {
@@ -219,102 +216,6 @@ class HomeFragment: Fragment() {
                 }
             }
         }
-    }
-
-    private fun buildBannerItems(
-        context: Context,
-        library: List<MediaItem>,
-        artists: List<HomeFeed.ArtistInput>
-    ): List<BannerItem> {
-        if (library.isEmpty()) return emptyList()
-        val items = mutableListOf<BannerItem>()
-
-        // Deterministic daily seed so the artist summary is stable per day and doesn't re-randomize every second
-        val daySeed = runCatching { LocalDate.now().toString().hashCode() }.getOrDefault(12345)
-
-        // 1. Daily Shuffle Procedural Station Banner (Deterministic per day)
-        val shuffleSongs = if (library.isNotEmpty()) {
-            library.sortedBy { (it.mediaId.hashCode() xor daySeed) }.take(50)
-        } else emptyList()
-
-        val shuffleArtists = shuffleSongs.mapNotNull { it.mediaMetadata.artist?.toString() }
-            .distinct().take(5).joinToString("、")
-        items.add(
-            BannerItem(
-                id = "daily_shuffle",
-                title = context.getString(R.string.mix_daily_shuffle),
-                artistsSummary = shuffleArtists.ifEmpty { context.getString(R.string.mix_daily_shuffle_subtitle) },
-                cover = shuffleSongs.firstOrNull()?.mediaMetadata?.artworkUri,
-                songs = shuffleSongs
-            )
-        )
-
-        // 2. Heavy Rotation / Most Played Procedural Banner
-        val played = library.filter { (it.mediaMetadata.extras?.getInt(JellyfinLibraryLoader.EXTRA_PLAY_COUNT, 0) ?: 0) > 0 }
-            .sortedByDescending { it.mediaMetadata.extras?.getInt(JellyfinLibraryLoader.EXTRA_PLAY_COUNT, 0) ?: 0 }
-            .take(50)
-        val heavySongs = if (played.size >= 5) played else library.take(50)
-        val heavyArtists = heavySongs.mapNotNull { it.mediaMetadata.artist?.toString() }
-            .distinct().take(5).joinToString("、")
-        items.add(
-            BannerItem(
-                id = "heavy_rotation",
-                title = context.getString(R.string.mix_most_played),
-                artistsSummary = heavyArtists.ifEmpty { "Top played tracks & artists" },
-                cover = heavySongs.firstOrNull()?.mediaMetadata?.artworkUri,
-                songs = heavySongs
-            )
-        )
-
-        // 3. Favorites Mix Procedural Banner
-        val favourites = library.filter { it.mediaMetadata.extras?.getBoolean(JellyfinLibraryLoader.EXTRA_IS_FAVOURITE, false) == true }.take(50)
-        val favSongs = if (favourites.isNotEmpty()) favourites else library.take(50)
-        val favArtists = favSongs.mapNotNull { it.mediaMetadata.artist?.toString() }
-            .distinct().take(5).joinToString("、")
-        items.add(
-            BannerItem(
-                id = "favourites_mix",
-                title = context.getString(R.string.mix_favourites),
-                artistsSummary = favArtists.ifEmpty { "Your favorited tracks" },
-                cover = favSongs.firstOrNull()?.mediaMetadata?.artworkUri,
-                songs = favSongs
-            )
-        )
-
-        // 4. Recently Added Procedural Banner
-        val recentSongs = library.sortedByDescending { it.mediaMetadata.extras?.getLong("AddDate", 0L) ?: 0L }.take(50)
-        val recentArtists = recentSongs.mapNotNull { it.mediaMetadata.artist?.toString() }
-            .distinct().take(5).joinToString("、")
-        items.add(
-            BannerItem(
-                id = "recently_added",
-                title = context.getString(R.string.mix_recently_added),
-                artistsSummary = recentArtists.ifEmpty { "Recently added albums" },
-                cover = recentSongs.firstOrNull()?.mediaMetadata?.artworkUri,
-                songs = recentSongs
-            )
-        )
-
-        // 5. Top Artist Mixes as Procedural Banners
-        artists.sortedBy { it.title?.lowercase().orEmpty() }.take(4).forEach { artist ->
-            val artistTitle = artist.title ?: return@forEach
-            val artistSongs = artist.songList.take(50)
-            if (artistSongs.isNotEmpty()) {
-                val albumSummary = artistSongs.mapNotNull { it.mediaMetadata.albumTitle?.toString() }
-                    .distinct().take(4).joinToString("、")
-                items.add(
-                    BannerItem(
-                        id = "artist_mix_$artistTitle",
-                        title = context.getString(R.string.home_artist_mix, artistTitle),
-                        artistsSummary = albumSummary.ifEmpty { artistTitle },
-                        cover = artistSongs.firstOrNull()?.mediaMetadata?.artworkUri,
-                        songs = artistSongs
-                    )
-                )
-            }
-        }
-
-        return items
     }
 
     private fun fetchSimilarArtists(artists: List<HomeFeed.ArtistInput>) {

@@ -58,6 +58,8 @@ class StationArtView @JvmOverloads constructor(
 
     override fun isMotionAttached(): Boolean = isAttachedToWindow
 
+    override fun isMotionVisible(): Boolean = isShown
+
     override fun invalidateMotion() = invalidate()
 
     override fun onAttachedToWindow() {

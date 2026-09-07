@@ -17,13 +17,14 @@
 
     <uk.akane.accord.ui.components.player.PreviewPlayer
         android:id="@+id/preview_player"
-        android:layout_width="match_parent"
+        android:layout_width="0dp"
         android:layout_height="@dimen/preview_player_height"
         android:layout_marginHorizontal="@dimen/preview_player_horizontal_margin"
         android:layout_marginBottom="@dimen/bottom_nav_height_raw"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintWidth_max="@dimen/preview_player_max_width"
         />
 
 </merge>

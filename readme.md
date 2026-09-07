@@ -6,18 +6,18 @@
 [![Issues][issues-shield]][issues-url]
 [![GPL-3.0][license-shield]][license-url]
 
-# Accord
+# Fincord
 
 > [!NOTE]
 > **Personal development fork**
 > 
-> This repository is a modified fork of [Accord](https://github.com/emylfy/Accord) (no longer maintained) that I use for my own daily use with small personal tweaks and adjustments.
+> Fincord is a modified fork of [Accord](https://github.com/emylfy/Accord) (no longer maintained) that I use for my own daily use with personal improvements and Jellyfin integration.
 > I use this fork to make minor changes to the app so it better fits my daily usage.
 > For testing, I run the app on a Google Pixel 5 emulator on my PC, a Samsung Galaxy A56 running the stock ROM, and a Samsung Galaxy A05s running Evolution X v9.9.3 (GSI). This helps me ensure that everything works properly across different environments.
 
-A local music player for Android with an Apple-inspired design. Supports synced lyrics (LRC/SRT), gapless playback, and third-party equalizers.
+A Jellyfin music client for Android with an Apple-inspired design, installed as `com.bananz0.fincord`.
 
-Fork of [Accord](https://github.com/emylfy/Accord), which itself is based on [Gramophone](https://github.com/AkaneTan/Gramophone) and [AccordLegacy](https://github.com/FoedusProgramme/AccordLegacy), with small personal adjustments for daily use, bug fixes, and updated dependencies.
+Fincord continues [Accord](https://github.com/emylfy/Accord), which itself is based on [Gramophone](https://github.com/FoedusProgramme/Gramophone) and [AccordLegacy](https://github.com/FoedusProgramme/AccordLegacy). Those projects and their developers remain credited below.
 
 ## Screenshots
 
@@ -34,7 +34,8 @@ Fork of [Accord](https://github.com/emylfy/Accord), which itself is based on [Gr
 
 ## Installation
 
-Download the original Accord-APK (no longer maintained) from [GitHub Releases](https://github.com/emylfy/Accord/releases/latest).
+Build Fincord from this repository. The old [Accord releases](https://github.com/emylfy/Accord/releases/latest)
+remain upstream reference artifacts and install as a different application.
 
 ## Required Setup
 
@@ -55,16 +56,18 @@ This is required for Gradle to correctly recognize the build type and allow comp
 ## Building
 
 ```bash
-git clone https://github.com/emylfy/Accord.git
-cd Accord
 ./gradlew assembleRelease
 ```
 
 APK will be in `app/build/outputs/apk/release/`.
 
+Release signing is intentionally local. Copy `keystore.properties.example` to
+`keystore.properties`, fill in your own Fincord keystore values, and never commit that populated
+file or the keystore. Debug builds continue to use Android's normal local debug certificate.
+
 ## Credits
 
-Based on [Accord](https://github.com/emylfy/Accord) by [@emylfy](https://github.com/emylfy), which is itself a fork of [Gramophone](https://github.com/AkaneTan/Gramophone) and [AccordLegacy](https://github.com/FoedusProgramme/AccordLegacy).
+Based on [Accord](https://github.com/emylfy/Accord) by [@emylfy](https://github.com/emylfy), which is itself a fork of [Gramophone](https://github.com/FoedusProgramme/Gramophone) and [AccordLegacy](https://github.com/FoedusProgramme/AccordLegacy).
 
 Original developers: [@AkaneTan](https://github.com/AkaneTan), [@lightsummer233](https://github.com/lightsummer233), [@123Duo3](https://github.com/123Duo3)
 

@@ -17,6 +17,7 @@ import com.google.android.material.textfield.TextInputLayout
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.akanework.gramophone.logic.GramophoneApplication
 import org.akanework.gramophone.logic.data.lastfm.LastFmCredentialStore
 import org.akanework.gramophone.logic.data.lidarr.LidarrClient
 import org.akanework.gramophone.logic.data.lidarr.LidarrCredentialStore
@@ -65,6 +66,25 @@ class ServicesPageFragment : Fragment() {
     override fun onResume() {
         super.onResume()
         refreshState()
+        syncLidarrFromPlugin()
+    }
+
+    /** Joins the application-owned plugin sync; no Lidarr row tap is required. */
+    private fun syncLidarrFromPlugin() {
+        val context = context ?: return
+        val store = LidarrCredentialStore(context)
+        if (store.isConfigured() && store.isSyncedThroughPlugin) return
+
+        lidarrButton.isEnabled = false
+        lidarrSubtitle.setText(R.string.setup_services_lidarr_syncing_plugin)
+        viewLifecycleOwner.lifecycleScope.launch {
+            (requireActivity().application as GramophoneApplication)
+                .syncLidarrFromPlugin()
+                .join()
+            if (!isAdded) return@launch
+            lidarrButton.isEnabled = true
+            refreshState()
+        }
     }
 
     private fun refreshState() {
@@ -76,8 +96,12 @@ class ServicesPageFragment : Fragment() {
             if (lidarrReady) R.string.setup_services_connected else R.string.setup_services_connect
         )
         lidarrSubtitle.setText(
-            if (lidarrReady) R.string.setup_services_lidarr_ready
-            else R.string.setup_services_lidarr_desc
+            when {
+                lidarrReady && lidarr.isSyncedThroughPlugin ->
+                    R.string.lidarr_synced_through_plugin
+                lidarrReady -> R.string.setup_services_lidarr_ready
+                else -> R.string.setup_services_lidarr_desc
+            }
         )
 
         val lastfmReady = LastFmCredentialStore(context).hasApplicationCredentials()

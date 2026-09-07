@@ -12,6 +12,30 @@
         <item>2</item>
     </string-array>
 
+    <string-array name="quality_badge_content_entries" translatable="false">
+        <item>@string/settings_quality_badge_content_label</item>
+        <item>@string/settings_quality_badge_content_codec</item>
+    </string-array>
+
+    <string-array name="quality_badge_content_values" translatable="false">
+        <item>label</item>
+        <item>codec</item>
+    </string-array>
+
+    <string-array name="replaygain_mode_entries" translatable="false">
+        <item>@string/replaygain_mode_off</item>
+        <item>@string/replaygain_mode_track</item>
+        <item>@string/replaygain_mode_album</item>
+        <item>@string/replaygain_mode_smart</item>
+    </string-array>
+
+    <string-array name="replaygain_mode_values" translatable="false">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+    </string-array>
+
     <string-array name="cache_limit">
         <item>@string/cache_limit_none</item>
         <item>512 MB</item>

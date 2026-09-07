@@ -63,7 +63,7 @@
             app:iconSpaceReserved="false" />
 
         <DropDownPreference
-            android:defaultValue="0"
+            android:defaultValue="5368709120"
             android:entries="@array/cache_limit"
             android:entryValues="@array/cache_limit_val"
             android:key="cache_size_limit"

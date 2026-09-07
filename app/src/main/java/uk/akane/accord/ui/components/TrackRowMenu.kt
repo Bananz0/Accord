@@ -8,6 +8,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinDownloadManager
@@ -53,6 +54,9 @@ object TrackRowMenu {
      * @param onRemoveFromPlaylist supplied only by a playlist, which is the one place removing the
      *   row from what is being looked at means anything.
      */
+    /** The one pending cold open, so a second tap does not queue a second menu behind the first. */
+    private var pendingOpen: Job? = null
+
     fun show(
         anchor: View,
         item: MediaItem,
@@ -60,14 +64,43 @@ object TrackRowMenu {
     ) {
         val activity = anchor.context.findMainActivity() ?: return
         val host = activity.findViewById<FloatingPanelLayout>(R.id.floating) ?: return
-        val resources = anchor.resources
         anchor.performPressHaptic()
+        pendingOpen?.cancel()
+        pendingOpen = null
 
-        activity.lifecycleScope.launch {
+        // The warm path, which is every open after the first: the answer is already known, so the
+        // menu belongs to the tap that asked for it and opens in the same frame.
+        JellyfinDownloadManager.cachedCompletedIds()?.let { downloaded ->
+            present(activity, host, anchor, item, item.mediaId in downloaded, onRemoveFromPlaylist)
+            return
+        }
+
+        // The cold path has to build the download manager and open its index, which on a large
+        // cache takes long enough to lose the user. Whatever it finds is only worth showing if
+        // this is still the tap being answered - hence the touch generation: another touch landing
+        // in the meantime is the user saying they moved on, and a menu opening then arrives
+        // unasked-for over whatever they actually pressed.
+        val openedAt = GlobalTapHaptics.touchGeneration
+        pendingOpen = activity.lifecycleScope.launch {
             val isDownloaded = withContext(Dispatchers.IO) {
                 JellyfinDownloadManager.isDownloaded(activity, item)
             }
-            if (!anchor.isAttachedToWindow) return@launch
+            pendingOpen = null
+            if (!anchor.isAttachedToWindow || !anchor.isShown) return@launch
+            if (GlobalTapHaptics.touchGeneration != openedAt) return@launch
+            present(activity, host, anchor, item, isDownloaded, onRemoveFromPlaylist)
+        }
+    }
+
+    private fun present(
+        activity: MainActivity,
+        host: FloatingPanelLayout,
+        anchor: View,
+        item: MediaItem,
+        isDownloaded: Boolean,
+        onRemoveFromPlaylist: (() -> Unit)?,
+    ) {
+            val resources = anchor.resources
             val isFavourite = item.mediaMetadata.extras
                 ?.getBoolean(JellyfinLibraryLoader.EXTRA_IS_FAVOURITE, false) == true
 
@@ -132,7 +165,6 @@ object TrackRowMenu {
                     handle(activity, entry, item, isFavourite, onRemoveFromPlaylist)
                 },
             )
-        }
     }
 
     private fun handle(

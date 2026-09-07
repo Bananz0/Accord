@@ -6,8 +6,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.RectF
 import android.graphics.Rect
-import android.graphics.RenderEffect
-import android.graphics.Shader
+import android.graphics.Bitmap
 import android.graphics.drawable.Drawable
 import android.animation.ValueAnimator
 import android.content.BroadcastReceiver
@@ -18,6 +17,7 @@ import android.media.MediaRoute2Info
 import android.media.MediaRouter2
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
 import android.util.AttributeSet
 import android.util.Log
 import android.view.MotionEvent
@@ -39,6 +39,7 @@ import androidx.core.view.marginRight
 import androidx.core.view.marginTop
 import androidx.core.view.updateLayoutParams
 import androidx.media3.common.C
+import androidx.media3.common.DeviceInfo
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
@@ -65,6 +66,8 @@ import androidx.media3.common.Tracks
 import androidx.annotation.DrawableRes
 import androidx.lifecycle.findViewTreeLifecycleOwner
 import androidx.lifecycle.lifecycleScope
+import org.akanework.gramophone.logic.data.automix.Automix
+import org.akanework.gramophone.logic.data.automix.AutomixQueueOrdering
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinItemResolver
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinKaraoke
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinRemoteTargets
@@ -119,13 +122,24 @@ import uk.akane.accord.logic.utils.CalculationUtils.lerp
 import uk.akane.accord.ui.adapters.QueueItemTouchHelperCallback
 import uk.akane.accord.logic.UserQueue
 import uk.akane.accord.ui.adapters.QueuePreviewAdapter
+import androidx.core.view.updatePaddingRelative
+import com.google.android.gms.cast.CastDevice
+import com.google.android.gms.cast.CastMediaControlIntent
+import com.google.android.gms.cast.MediaStatus
+import uk.akane.accord.logic.cast.FincordCast
+import uk.akane.accord.logic.player.OutputRouting
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import uk.akane.accord.logic.cast.CastOptionsProvider
 import uk.akane.accord.ui.components.Haptics
+import uk.akane.accord.ui.components.ProceduralMotionTicker
 import uk.akane.accord.ui.components.QueueSectionDecoration
 import uk.akane.accord.ui.MainActivity
 import uk.akane.accord.ui.adapters.QueueItem
 import uk.akane.accord.ui.adapters.browse.PlaylistAdapter
 import uk.akane.accord.ui.components.FadingVerticalEdgeLayout
 import uk.akane.accord.ui.components.ResistiveSwipeHaptics
+import uk.akane.accord.ui.components.SplitTintImageView
+import uk.akane.accord.ui.components.SplitTintTextView
 import uk.akane.accord.ui.components.performPressHaptic
 import uk.akane.accord.ui.components.resistedSwipeDistance
 import uk.akane.accord.ui.components.lyrics.LyricsViewModel
@@ -150,7 +164,10 @@ import android.animation.AnimatorListenerAdapter
 import android.view.animation.Interpolator
 import android.view.animation.PathInterpolator
 import android.view.animation.OvershootInterpolator
+import androidx.core.animation.doOnEnd
 import androidx.preference.PreferenceManager
+import org.akanework.gramophone.logic.data.jellyfin.QueuePrefetcher
+import org.akanework.gramophone.logic.data.EmbeddedArtworkStore
 import org.akanework.gramophone.logic.data.library.songListSnapshot
 import org.akanework.gramophone.logic.data.lyrics.AutomaticLyricsTranslator
 import org.akanework.gramophone.logic.data.AutoplayQueue
@@ -175,6 +192,7 @@ class FullPlayer @JvmOverloads constructor(
     private var initialMargin = IntArray(4)
 
     private var meshGradientView: FlowingGradientView
+    private var liquidGradientView: dev.kawarp.KawarpView
     private var blendView: BlendView
     private var overlayDivider: OverlayDivider
     private var fadingEdgeLayout: FadingVerticalEdgeLayout
@@ -199,14 +217,38 @@ class FullPlayer @JvmOverloads constructor(
     private var nextButton: AnimatedVectorButton
     private var ellipsisButton: OverlayBackgroundButton
     private var qualityBadge: TextView
+    private var bitrateBadge: TextView
     private var qualityAvailableHint: TextView
     private var currentQualityDetails: AudioQuality.Details? = null
+    /** How far through the two-second announcement the badge is; 1 whenever it is permanent. */
+    private var qualityFlashAlpha = 1F
+    private var qualityFlashing = false
+    private var qualityFlashAnimator: ValueAnimator? = null
     private var currentUsbHiFiStatus: UsbHiFiStatus? = null
     private var currentAfFormatInfo: AfFormatInfo? = null
     private var currentBtCodecInfo: BtCodecInfo? = null
     /** Rebinds an open Play on sheet when the service reports a new codec/HAL route. */
     private var outputPickerFormatChanged: (() -> Unit)? = null
     private var outputPickerDialog: BottomSheetDialog? = null
+    /** Re-binds the open output picker to the current track; null when no sheet is up. */
+    private var outputPickerRefresh: (() -> Unit)? = null
+    private var castSessionJob: kotlinx.coroutines.Job? = null
+
+    /**
+     * True while something other than this phone's speaker is playing.
+     *
+     * Asked of the controller rather than of Cast or Finnect directly, and deliberately so. The
+     * playback service puts whichever player owns the output in front of the session, so the
+     * controller already describes the thing that is actually playing - its position, its queue,
+     * its volume. Reading a receiver's state around the side of the session is what used to leave
+     * the expanded player showing one thing and the notification, the mini bar and every other app
+     * showing another.
+     */
+    private val remoteOutputActive: Boolean
+        get() = instance?.deviceInfo?.playbackType == DeviceInfo.PLAYBACK_TYPE_REMOTE
+    /** True while a finger is on one of the picker's volume sliders; see `renderRows`. */
+    private var outputVolumeDragging = false
+    private var outputPickerPhoneVolumeSlider: OverlaySlider? = null
     private var outputPickerOpening = false
     private var outputDeviceIcon: ImageView
     private var outputDeviceName: TextView
@@ -220,6 +262,20 @@ class FullPlayer @JvmOverloads constructor(
     private var audioDeviceCallback: AudioDeviceCallback? = null
     private val outputRouteSelector = MediaRouteSelector.Builder()
         .addControlCategory(MediaControlIntent.CATEGORY_LIVE_AUDIO)
+        .apply {
+            // Cast registers itself as a MediaRouter provider, so adding its category is all it
+            // takes for Chromecasts and speaker groups to arrive in the list the picker already
+            // renders - one route stack rather than a second one competing beside it. Added only
+            // when the framework actually came up, so a device without Play Services does not
+            // advertise a category nothing can serve.
+            if (FincordCast.isAvailable) {
+                addControlCategory(
+                    CastMediaControlIntent.categoryForCast(
+                        CastOptionsProvider.RECEIVER_APPLICATION_ID
+                    )
+                )
+            }
+        }
         .build()
     private val outputMediaRouter by lazy(LazyThreadSafetyMode.NONE) {
         MediaRouter.getInstance(context)
@@ -244,6 +300,7 @@ class FullPlayer @JvmOverloads constructor(
     private var queueShuffleButton: OverlayPillButton
     private var queueRepeatButton: OverlayPillButton
     private var queueAutoplayButton: OverlayPillButton
+    private var queueAutomixButton: OverlayPillButton
     private var queueTextView: OverlayTextView
     private var queueRecyclerView: RecyclerView
     private var queueItemTouchHelper: ItemTouchHelper? = null
@@ -272,6 +329,30 @@ class FullPlayer @JvmOverloads constructor(
     private var coverSlideAnimator: ValueAnimator? = null
     private val coverSwipeHaptics = ResistiveSwipeHaptics()
     private var pendingCoverReleaseVelocity = 0F
+    /** The item the cover currently shows, so a same-track playlist replacement can skip the slide. */
+    private var lastTransitionMediaId: String? = null
+
+    /**
+     * Re-requests the cover when a swipe left the current track without one.
+     *
+     * Swiping through several tracks cancels each load as the next transition arrives, which is
+     * right - that artwork is no longer wanted. What it cannot know is which track the finger
+     * finally stops on: if that one's request was the last to be cancelled, nothing re-issues it
+     * and the cover stays on the placeholder for the rest of the song.
+     *
+     * Deliberately keyed on the identity rather than a flag. It fires only when the current track
+     * is neither showing its artwork nor waiting on a live request for it, so a load still in
+     * flight is left alone rather than restarted.
+     */
+    private val coverIntegrityCheck = Runnable {
+        val item = instance?.currentMediaItem ?: return@Runnable
+        val artwork = item.mediaMetadata.artworkUri ?: return@Runnable
+        val identity = "${item.mediaId}:$artwork"
+        if (appliedArtworkIdentity != identity && loadedArtworkIdentity != identity) {
+            Log.d(TAG, "COVERDBG integrity retry for ${item.mediaMetadata.title}") // TEMP-COVERDBG
+            loadCoverForImageView()
+        }
+    }
 
     /** Brings the cover back even if the artwork has not arrived; see [startCoverSlideOut]. */
     private val coverSlideInDeadline = Runnable {
@@ -279,6 +360,24 @@ class FullPlayer @JvmOverloads constructor(
             coverSlideArtReady = true
             slideCoverInIfReady()
         }
+    }
+
+    /**
+     * Points the artwork at the side it will leave by, with a deadline.
+     *
+     * The direction has to be set before the seek, because the transition it describes can arrive
+     * in the same frame. The backstop is what makes that safe: a skip the player declines to make
+     * emits no transition at all, and without it the direction stays armed until something else
+     * causes one - by which time it describes a movement nobody asked for.
+     *
+     * A swipe passes the shorter [COVER_SLIDE_BACKSTOP_MS] because its cover is already displaced
+     * and has to snap back promptly. A button press has moved nothing yet, so it can afford to
+     * wait long enough for a receiver on the other side of the network to answer.
+     */
+    private fun armCoverSlide(direction: Int, timeoutMs: Long = COVER_SLIDE_ARM_TIMEOUT_MS) {
+        pendingCoverSlide = direction
+        removeCallbacks(coverSlideBackstop)
+        postDelayed(coverSlideBackstop, timeoutMs)
     }
 
     /** Puts the cover back if a requested skip turned out not to happen. */
@@ -304,8 +403,29 @@ class FullPlayer @JvmOverloads constructor(
     private var coverSlideInFlight = false
     private var coverSlideOutDone = false
     private var coverSlideArtReady = false
+    /**
+     * True once the returning cover has been given its drawable, which is the moment after which
+     * late artwork belongs on the view rather than in [pendingCoverDrawable].
+     *
+     * [coverSlideArtReady] cannot answer that question: the deadline sets it to mean "stop waiting",
+     * not "the artwork is here", and it fires at 90 ms while the cover can still be sliding out at
+     * 180 ms. Artwork landing in that window was written straight to the view - correctly, as far
+     * as the old test could tell - and then painted over with the placeholder when the slide-out
+     * finished and found nothing pending. The big cover kept the empty sleeve for the rest of the
+     * track while the mini bar, the toolbar and the backdrop all showed the real one.
+     */
+    private var coverSlideInStarted = false
     /** Last artwork applied, also used to seed the transition layer created on first layout. */
     private var appliedCoverBitmap: android.graphics.Bitmap? = null
+    /** The artwork the backdrop is currently built from, so an unchanged cover leaves it running. */
+    private var lastBackdropArtwork: Uri? = null
+    /** The artwork [applyCover] is currently delivering, used to key the backdrop. */
+    private var currentArtworkUri: Uri? = null
+    /**
+     * The identity [appliedCoverBitmap] actually holds, as opposed to [loadedArtworkIdentity],
+     * which names the load most recently *started*. The two differ for the length of every load.
+     */
+    private var appliedArtworkIdentity: String? = null
     /**
      * The incoming artwork, held back until the outgoing cover has left.
      *
@@ -330,7 +450,10 @@ class FullPlayer @JvmOverloads constructor(
                 "android.media.VOLUME_CHANGED_ACTION",
                 "android.media.MASTER_VOLUME_CHANGED_ACTION",
                 "android.media.MASTER_MUTE_CHANGED_ACTION",
-                "android.media.STREAM_MUTE_CHANGED_ACTION" -> updateVolumeSlider()
+                "android.media.STREAM_MUTE_CHANGED_ACTION" -> {
+                    updateVolumeSlider()
+                    updatePhoneOutputSlider()
+                }
             }
         }
     }
@@ -347,7 +470,48 @@ class FullPlayer @JvmOverloads constructor(
         inflate(context, R.layout.layout_full_player, this)
 
         meshGradientView = findViewById(R.id.mesh_gradient)
+        liquidGradientView = findViewById(R.id.liquid_gradient)
         blendView = findViewById(R.id.blend_view)
+        liquidGradientView.engine?.apply {
+            // The crossfade between covers, so a track change dissolves the backdrop instead of
+            // cutting to the next one. Matched to the app's own longer transitions rather than the
+            // cover slide, which is a much faster movement over a field that should still be
+            // settling behind it.
+            setTransitionDuration(BACKDROP_CROSSFADE_MS)
+            // This is an ambient player backdrop, not a playback meter. It remains alive while a
+            // restored queue is paused, including the first frame of a cold start.
+            setPlaybackReactive(false)
+            setSaturation(1.25F)
+            setAutoDarken(0.8F)
+        }
+        // These are alternative renderers, not layers. Drawing the old BlendView over the mesh
+        // produced a second blur boundary through the lower action row and kept two animations
+        // running for one background.
+        meshGradientView.setEnabledStateListener { enabled ->
+            // One preference, two implementations: kawarp needs AGSL, so it renders nothing at all
+            // below API 33 and the older four-layer field stays in charge there. Above it, kawarp
+            // is the better renderer of the same setting and the older one steps aside rather than
+            // drawing a second animated background underneath.
+            val liquid = enabled && dev.kawarp.KawarpEngine.isSupported()
+            liquidGradientView.visibility = if (liquid) VISIBLE else GONE
+            if (liquid) {
+                // Set after FlowingGradientView has shown itself in syncEnabledState, and before
+                // it starts its frame loop - so it never animates a field nobody can see.
+                meshGradientView.visibility = GONE
+                liquidGradientView.setCover(appliedCoverBitmap.readablePixels())
+            }
+            blendView.visibility = if (enabled) GONE else VISIBLE
+            if (enabled) {
+                blendView.stopRotationAnimation()
+            } else {
+                // Switching back must populate the renderer that was deliberately not fed while
+                // hidden, then leave it moving whether playback is paused or active.
+                blendView.setImageBitmap(appliedCoverBitmap.readablePixels())
+                blendView.startRotationAnimation()
+            }
+            meshGradientView.setPlaying(true)
+            liquidGradientView.setPlaying(true)
+        }
         overlayDivider = findViewById(R.id.divider)
         fadingEdgeLayout = findViewById(R.id.fading)
         lyricsBtn = findViewById(R.id.lyrics)
@@ -381,11 +545,20 @@ class FullPlayer @JvmOverloads constructor(
         starTransformButton = findViewById(R.id.star)
         ellipsisButton = findViewById(R.id.ellipsis)
         qualityBadge = findViewById(R.id.quality_badge)
+        bitrateBadge = findViewById(R.id.bitrate_badge)
         qualityAvailableHint = findViewById(R.id.quality_available_hint)
-        qualityBadge.setOnClickListener {
+        val openQualityDetails = View.OnClickListener {
             it.performPressHaptic()
             showQualityDetails()
         }
+        qualityBadge.setOnClickListener(openQualityDetails)
+        bitrateBadge.setOnClickListener(openQualityDetails)
+        // Both badges sit inside the play button's 100dp square, and the button is declared after
+        // them, so it was taking every press aimed at the badge - a control the size of a stamp
+        // losing to one with 100dp of slack around its glyph. Children are hit-tested in reverse
+        // draw order, and both the lift in the layout and this reordering put these two first.
+        qualityBadge.bringToFront()
+        bitrateBadge.bringToFront()
         outputDeviceIcon = findViewById(R.id.output_device_icon)
         outputDeviceName = findViewById(R.id.output_device_name)
         val openOutputPicker = View.OnClickListener {
@@ -402,23 +575,35 @@ class FullPlayer @JvmOverloads constructor(
         queueShuffleButton = findViewById(R.id.btnShuffle)
         queueRepeatButton = findViewById(R.id.btnRepeat)
         queueAutoplayButton = findViewById(R.id.btnAutoplay)
+        queueAutomixButton = findViewById(R.id.btnAutomix)
         queueTextView = findViewById(R.id.queue)
         queueRecyclerView = findViewById(R.id.queue_list)
         queueRecyclerView.layoutManager = LinearLayoutManager(context)
+        // Advancing through tracks removes the first visible queue row. Several fast cover swipes
+        // can otherwise stack predictive remove layouts for the same position, leaving a holder in
+        // ChildHelper's attached set after LayoutManager believes it was detached. Queue motion is
+        // supplied by ItemTouchHelper while the user reorders, so the default item animator adds no
+        // useful interaction here and is unsafe under this bursty update pattern.
+        queueRecyclerView.itemAnimator = null
         val queueAdapter = QueuePreviewAdapter(
             mutableListOf(),
-            blendView,
-            { from, to ->
-                instance?.moveMediaItem(from, to)
+            { moved, target ->
+                instance?.let { player ->
+                    val from = player.currentTimeline.indexOfWindow(moved.uid)
+                    val to = player.currentTimeline.indexOfWindow(target.uid)
+                    if (from >= 0 && to >= 0) player.moveMediaItem(from, to)
+                }
             },
-            { index ->
-                if (JellyfinRemoteTargets.active.value != null) {
-                    findViewTreeLifecycleOwner()?.lifecycleScope?.launch {
-                        JellyfinRemoteTargets.playQueueIndex(index)
+            { item ->
+                // One path for every output. Seeking to a queue index on the controller reaches
+                // whichever player owns playback, and each of them knows how to express that to
+                // its own target - a Cast queue jump, a Jellyfin play-at-index, or a local seek.
+                instance?.let { player ->
+                    val index = player.currentTimeline.indexOfWindow(item.uid)
+                    if (index >= 0) {
+                        player.seekTo(index, C.TIME_UNSET)
+                        player.play()
                     }
-                } else {
-                    instance?.seekTo(index, C.TIME_UNSET)
-                    instance?.play()
                 }
             },
             object : QueuePreviewAdapter.DragStartListener {
@@ -430,7 +615,13 @@ class FullPlayer @JvmOverloads constructor(
         queueRecyclerView.adapter = queueAdapter
         queueItemTouchHelper = ItemTouchHelper(
             QueueItemTouchHelperCallback(queueAdapter, context) { index ->
-                instance?.removeMediaItem(index)
+                instance?.let { player ->
+                    val item = queueAdapter.itemAt(index)
+                    val timelineIndex = item?.let {
+                        player.currentTimeline.indexOfWindow(it.uid)
+                    } ?: -1
+                    if (timelineIndex >= 0) player.removeMediaItem(timelineIndex)
+                }
             }
         ).apply {
             attachToRecyclerView(queueRecyclerView)
@@ -475,17 +666,16 @@ class FullPlayer @JvmOverloads constructor(
         queueContainer.visibility = INVISIBLE
         lyricsViewModel = LyricsViewModel(
             context,
-            positionProvider = {
-                JellyfinRemoteTargets.playbackState.value?.projectedPositionMs()
-                    ?: instance?.currentPosition
-                    ?: 0L
-            },
+            // The controller's clock is the playing clock, whichever device is doing the playing.
+            // Reading the local player here is why lyrics stood still during a cast: that player
+            // is paused for the whole handoff, so its position never moved.
+            positionProvider = { instance?.currentPosition ?: 0L },
+            isPlayingProvider = { instance?.isPlaying == true },
+            // The controller's position advances at the playback rate, so the local fill-in
+            // between its updates has to as well.
+            speedProvider = { instance?.playbackParameters?.speed ?: 1f },
             // Tapping a lyric jumps to it, which is the whole reason the timestamps are there.
-            onSeek = { timestamp ->
-                if (!sendRemoteTransport(PlaystateCommand.SEEK, timestamp)) {
-                    instance?.seekTo(timestamp)
-                }
-            },
+            onSeek = { timestamp -> instance?.seekTo(timestamp) },
         )
 
         // The hidden button belongs to the pre-rewrite lyrics prototype. The three bottom buttons
@@ -539,13 +729,22 @@ class FullPlayer @JvmOverloads constructor(
             }
 
             override fun onValueChanged(slider: OverlaySlider, value: Float, fromUser: Boolean, fromMomentum: Boolean) {
-                if (!fromUser) return
+                // Momentum counts, exactly as it does for the sheet's own sliders. Taking only
+                // `fromUser` meant the bar kept travelling after the finger left while the volume
+                // stayed at wherever it lifted - the bar ended up at one level and the sound at
+                // another, which is precisely what a fling looked like.
+                if (!fromUser && !fromMomentum) return
                 setDeviceVolume(value.toInt())
             }
 
             override fun onStopTracking(slider: OverlaySlider) {
                 setDeviceVolume(slider.value.toInt())
                 isUserVolumeScrubbing = false
+            }
+
+            /** The fling outlives the finger; this is where its final value is committed. */
+            override fun onStopFlinging(slider: OverlaySlider, value: Float) {
+                setDeviceVolume(value.toInt())
             }
         })
 
@@ -574,9 +773,7 @@ class FullPlayer @JvmOverloads constructor(
                 val duration = resolveDurationMs()
                 if (duration != null) {
                     val position = slider.value.toLong().coerceIn(0L, duration)
-                    if (!sendRemoteTransport(PlaystateCommand.SEEK, position)) {
-                        instance?.seekTo(position)
-                    }
+                    instance?.seekTo(position)
                     updateProgressTexts(position, duration)
                 }
                 isUserScrubbing = false
@@ -606,6 +803,11 @@ class FullPlayer @JvmOverloads constructor(
             )
 
             updateTransitionTargetForContentType(contentType)
+            // The restored controller can deliver its initial media-item callback before this
+            // view has a size. That callback cannot make a valid Coil request, and no second track
+            // transition follows on a paused cold start. Retry now that the target dimensions are
+            // real so both the cover and the selected backdrop receive the restored artwork.
+            loadCoverForImageView()
         }
 
         // Insets, multi-window resizing and the tablet max-width constraint can move the target
@@ -633,12 +835,11 @@ class FullPlayer @JvmOverloads constructor(
         queueShuffleButton.setOnClickListener {
             val controller = instance ?: return@setOnClickListener
             it.performPressHaptic()
-            JellyfinRemoteTargets.playbackState.value?.let { remote ->
-                val enabled = remote.playbackOrder != PlaybackOrder.SHUFFLE
-                findViewTreeLifecycleOwner()?.lifecycleScope?.launch {
-                    JellyfinRemoteTargets.sendShuffle(enabled)
-                }
-                queueShuffleButton.isChecked = enabled
+            // Shuffle is a property of the player that owns the queue. Whether that queue lives in
+            // this process, on a receiver, or in another Jellyfin session, the controller is what
+            // reaches it - and what reports back whether the request was honoured at all.
+            if (!controller.isCommandAvailable(Player.COMMAND_SET_SHUFFLE_MODE)) {
+                queueShuffleButton.isChecked = controller.shuffleModeEnabled
                 return@setOnClickListener
             }
             controller.shuffleModeEnabled = !controller.shuffleModeEnabled
@@ -662,27 +863,49 @@ class FullPlayer @JvmOverloads constructor(
             if (enabled) topUpQueueIfNeeded()
         }
 
+        // Half wired. The preference now gates real work - with it on, the playback service has the
+        // next track's tempo, beat grid and key analysed on this phone before the transition
+        // arrives - but nothing mixes yet, so the toast still says tracks change as usual. See the
+        // Automix section of TODO.md for what is left, which is the two-source mixer media3 does
+        // not provide.
+        queueAutomixButton.isChecked = isAutomixEnabled()
+        queueAutomixButton.setOnClickListener {
+            it.performPressHaptic()
+            // Mixing two tracks means owning their samples, and on a remote output this phone
+            // never sees one: Cast is handed a URL and the receiver fetches it, and a Finnect
+            // session is told to play an item id by another Jellyfin client entirely. Neither is
+            // a limitation to engineer around - there is no PCM path to reach. Say so rather than
+            // letting the pill light for an output that cannot honour it.
+            if (remoteOutputActive) {
+                Toast.makeText(context, R.string.automix_local_only, Toast.LENGTH_SHORT).show()
+                queueAutomixButton.isChecked = isAutomixEnabled()
+                return@setOnClickListener
+            }
+            val enabled = !isAutomixEnabled()
+            PreferenceManager.getDefaultSharedPreferences(context)
+                .edit().putBoolean(Automix.PREF_KEY, enabled).apply()
+            queueAutomixButton.isChecked = enabled
+            Toast.makeText(
+                context,
+                if (enabled) R.string.automix_on else R.string.automix_off,
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+
+        // Long press resequences what is left of the queue so that more of its transitions can be
+        // mixed. On the pill rather than in a menu because it is the same subject, and on a long
+        // press rather than a tap because it is a deliberate act: a queue somebody built by hand
+        // keeps its order until they ask for it not to.
+        queueAutomixButton.setOnLongClickListener {
+            it.performPressHaptic()
+            reorderQueueForAutomix()
+            true
+        }
+
         queueRepeatButton.setOnClickListener {
             val controller = instance ?: return@setOnClickListener
             it.performPressHaptic()
-            JellyfinRemoteTargets.playbackState.value?.let { remote ->
-                val next = when (remote.repeatMode) {
-                    RepeatMode.REPEAT_NONE -> RepeatMode.REPEAT_ALL
-                    RepeatMode.REPEAT_ALL -> RepeatMode.REPEAT_ONE
-                    RepeatMode.REPEAT_ONE -> RepeatMode.REPEAT_NONE
-                }
-                findViewTreeLifecycleOwner()?.lifecycleScope?.launch {
-                    JellyfinRemoteTargets.sendRepeat(next)
-                }
-                updateRepeatButton(next.toPlayerRepeatMode())
-                return@setOnClickListener
-            }
-            val nextRepeatMode = when (controller.repeatMode) {
-                Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
-                Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
-                Player.REPEAT_MODE_ONE -> Player.REPEAT_MODE_OFF
-                else -> Player.REPEAT_MODE_OFF
-            }
+            val nextRepeatMode = nextRepeatMode(controller.repeatMode)
             controller.repeatMode = nextRepeatMode
             updateRepeatButton(nextRepeatMode)
         }
@@ -740,20 +963,18 @@ class FullPlayer @JvmOverloads constructor(
 
         controllerButton.setOnClickListener {
             it.performPressHaptic()
-            if (!sendRemoteTransport(PlaystateCommand.PLAY_PAUSE)) instance?.playOrPause()
+            instance?.playOrPause()
         }
 
         previousButton.setOnClickListener {
             it.performPressHaptic()
-            pendingCoverSlide = SLIDE_PREVIOUS
-            if (!sendRemoteTransport(PlaystateCommand.PREVIOUS_TRACK)) {
-                instance?.seekToPrevious()
-            }
+            armCoverSlide(SLIDE_PREVIOUS)
+            instance?.seekToPrevious()
         }
         nextButton.setOnClickListener {
             it.performPressHaptic()
-            pendingCoverSlide = SLIDE_NEXT
-            if (!sendRemoteTransport(PlaystateCommand.NEXT_TRACK)) instance?.seekToNext()
+            armCoverSlide(SLIDE_NEXT)
+            instance?.seekToNext()
         }
 
         doOnLayout {
@@ -785,33 +1006,132 @@ class FullPlayer @JvmOverloads constructor(
             try {
             val finnectEnabled = JellyfinRemoteTargets.isEnabled(context)
             var targets = if (finnectEnabled) JellyfinRemoteTargets.cachedAvailable() else emptyList()
-            val sheet = BottomSheetDialog(context, R.style.Theme_Accord_OutputPicker)
+            val sheet = PlayerSheet.create(context)
             outputPickerDialog = sheet
+            // Whatever was already counting down belongs to the screen behind this sheet.
+            removeCallbacks(hideControlsRunnable)
             val root = LayoutInflater.from(context).inflate(
                 R.layout.layout_output_picker,
                 null,
                 false,
             )
-            appliedCoverBitmap?.let { artwork ->
-                root.findViewById<ImageView>(R.id.output_picker_artwork).apply {
-                    visibility = VISIBLE
-                    setImageBitmap(artwork)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        setRenderEffect(
-                            RenderEffect.createBlurEffect(
-                                OUTPUT_PICKER_BLUR_RADIUS,
-                                OUTPUT_PICKER_BLUR_RADIUS,
-                                Shader.TileMode.MIRROR,
-                            )
-                        )
-                    }
+            val backdrop = root.findViewById<ImageView>(R.id.output_picker_backdrop)
+            var backdropBitmap: Bitmap? = null
+            // Same renderer as the player's backdrop, told to ignore the Appearance toggle so this
+            // card is one thing rather than two depending on a setting about a different surface.
+            val pickerGradient = root.findViewById<FlowingGradientView>(R.id.output_picker_gradient)
+            pickerGradient.ignorePreference = true
+            pickerGradient.setPlaying(instance?.isPlaying == true)
+
+            fun captureBackdrop() {
+                PlayerSheet.captureBackdrop(activity, sheet, root, backdrop) { captured ->
+                    backdropBitmap?.takeUnless(Bitmap::isRecycled)?.recycle()
+                    backdropBitmap = captured
                 }
-                root.findViewById<View>(R.id.output_picker_blend_scrim).visibility = VISIBLE
+            }
+            fun bindNowPlaying() {
+                val current = instance?.currentMediaItem
+                root.findViewById<TextView>(R.id.output_picker_track).text =
+                    current?.mediaMetadata?.title ?: context.getString(R.string.default_track)
+                root.findViewById<TextView>(R.id.output_picker_artist).text =
+                    current?.let(ArtistCredits::primaryArtist)
+                        ?: context.getString(R.string.default_artist)
+                appliedCoverBitmap?.let {
+                    root.findViewById<SimpleImageView>(R.id.output_picker_now_art)
+                        .setImageBitmap(it)
+                }
+            }
+            bindNowPlaying()
+            cachedBackdrop?.let(pickerGradient::setArtwork)
+            val remoteActions = root.findViewById<View>(R.id.output_picker_remote_actions)
+            val remoteConnected =
+                FincordCast.isCasting || JellyfinRemoteTargets.active.value != null
+            remoteActions.visibility = if (remoteConnected) VISIBLE else GONE
+            // The third answer: keep the target, hear it here. The two above both give the target
+            // up, which is the wrong price for skipping one song through the phone.
+            val keepHere = root.findViewById<TextView>(R.id.output_picker_keep_here)
+            keepHere.visibility = if (remoteConnected) VISIBLE else GONE
+            if (remoteConnected) {
+                val target = currentRemoteTargetName()
+                val local = OutputRouting.playLocally.value
+                keepHere.text = when {
+                    local && target != null -> context.getString(R.string.output_resume_remote, target)
+                    target != null -> context.getString(R.string.output_keep_here, target)
+                    else -> context.getString(R.string.output_keep_here_generic)
+                }
+                keepHere.setOnClickListener {
+                    Haptics.press(it)
+                    sheet.dismiss()
+                    OutputRouting.setPlayLocally(!local)
+                }
+            }
+            root.findViewById<View>(R.id.output_picker_play_here_too).setOnClickListener {
+                Haptics.press(it)
+                sheet.dismiss()
+                when {
+                    FincordCast.isCasting -> FincordCast.endSession(stopReceiver = false)
+                    JellyfinRemoteTargets.active.value != null ->
+                        selectLocalRoute(outputMediaRouter.defaultRoute, stopRemote = false)
+                }
+            }
+            root.findViewById<View>(R.id.output_picker_move_here).setOnClickListener {
+                Haptics.press(it)
+                sheet.dismiss()
+                when {
+                    FincordCast.isCasting -> FincordCast.endSession(stopReceiver = true)
+                    JellyfinRemoteTargets.active.value != null ->
+                        selectLocalRoute(outputMediaRouter.defaultRoute, stopRemote = true)
+                }
+            }
+            // The blur is a single PixelCopy of whatever was behind the sheet when it opened, so a
+            // track change underneath left it showing the previous song's colours - and the header
+            // kept that song's name and cover too. Both are refreshed from onMediaItemTransition
+            // for as long as this sheet is up.
+            outputPickerRefresh = {
+                bindNowPlaying()
+                // The gradient reads the cover, so it follows a track change like the header does.
+                cachedBackdrop?.let(pickerGradient::setArtwork)
+                captureBackdrop()
             }
             val rows = root.findViewById<LinearLayout>(R.id.output_picker_rows)
+            val rowScroller = root.findViewById<View>(R.id.output_picker_scroll)
+            val routeVolumeSliders = mutableMapOf<String, OverlaySlider>()
+            root.findViewById<View>(R.id.output_picker_more).setOnClickListener {
+                Haptics.press(it)
+                sheet.dismiss()
+                startSystemMediaControl()
+            }
             sheet.setContentView(root)
 
+            fun capPickerHeight() {
+                root.post {
+                    if (!sheet.isShowing) return@post
+                    val maxHeight = min(
+                        OUTPUT_PICKER_MAX_HEIGHT_DP.dp.px.toInt(),
+                        (resources.displayMetrics.heightPixels * OUTPUT_PICKER_HEIGHT_FRACTION).toInt(),
+                    )
+                    val excess = (root.height - maxHeight).coerceAtLeast(0)
+                    rowScroller.updateLayoutParams<LinearLayout.LayoutParams> {
+                        height = if (excess == 0) {
+                            LinearLayout.LayoutParams.WRAP_CONTENT
+                        } else {
+                            (rowScroller.height - excess).coerceAtLeast(
+                                OUTPUT_PICKER_MIN_LIST_HEIGHT_DP.dp.px.toInt()
+                            )
+                        }
+                    }
+                    root.post(::captureBackdrop)
+                }
+            }
+
             fun renderRows(animateHeight: Boolean = false) {
+                // Rebuilding replaces every row, and a finger on a volume slider is holding one of
+                // them. Route providers report a volume change as an ordinary route change too, so
+                // this is the backstop for the ones that do not use onRouteVolumeChanged.
+                if (outputVolumeDragging) return
+                rowScroller.updateLayoutParams<LinearLayout.LayoutParams> {
+                    height = LinearLayout.LayoutParams.WRAP_CONTENT
+                }
                 val oldTop = IntArray(2)
                 if (animateHeight && root.isLaidOut) {
                     root.getLocationOnScreen(oldTop)
@@ -846,15 +1166,30 @@ class FullPlayer @JvmOverloads constructor(
                 val activeRemote = JellyfinRemoteTargets.active.value
                 val selectedRoute = outputMediaRouter.selectedRoute
                 val defaultRoute = outputMediaRouter.defaultRoute
-                val localRoutes = outputMediaRouter.routes
+                val discoveredLocalRoutes = outputMediaRouter.routes
                     .asSequence()
-                    .filter { it.isSystemRoute && it.isEnabled && it.id != defaultRoute.id }
+                    .filter { route ->
+                        route.isEnabled &&
+                            route.id != defaultRoute.id &&
+                            (route.isSystemRoute || route.matchesSelector(outputRouteSelector))
+                    }
                     .distinctBy { it.id }
+                    .toList()
+                // Dynamic Cast route objects are replaced while a session connects. MediaRouter's
+                // selectedRoute can consequently fall back to Phone even though CastSession is
+                // active (the logs call the old route "removed"). Match the live session's stable
+                // Cast device ID, with friendly name only as a fallback for group routes.
+                val activeCastRouteId = activeCastRoute(discoveredLocalRoutes)?.id
+                val routeIsSelected: (MediaRouter.RouteInfo) -> Boolean = { route ->
+                    activeRemote == null &&
+                        (route.id == activeCastRouteId ||
+                            (activeCastRouteId == null && route.isSelected))
+                }
+                val localRoutes = discoveredLocalRoutes
                     .sortedWith(
-                        compareByDescending<MediaRouter.RouteInfo> { it.isSelected }
+                        compareByDescending<MediaRouter.RouteInfo>(routeIsSelected)
                             .thenBy { it.name.toString().lowercase() }
                     )
-                    .toList()
 
                 val localSection = context.getString(R.string.output_section_local)
                 val finnectSection = context.getString(R.string.output_section_finnect)
@@ -866,7 +1201,8 @@ class FullPlayer @JvmOverloads constructor(
                             iconUri = defaultRoute.iconUri,
                             title = context.getString(R.string.output_this_phone),
                             subtitle = null,
-                            selected = activeRemote == null && selectedRoute.id == defaultRoute.id,
+                            selected = activeRemote == null && activeCastRouteId == null &&
+                                selectedRoute.id == defaultRoute.id,
                             localRoute = defaultRoute,
                         ) { selectLocalRoute(defaultRoute) }
                     )
@@ -878,21 +1214,33 @@ class FullPlayer @JvmOverloads constructor(
                                 iconUri = route.iconUri,
                                 title = route.name.toString(),
                                 subtitle = routeSubtitle(route),
-                                selected = activeRemote == null && route.isSelected,
+                                selected = routeIsSelected(route),
                                 localRoute = route,
                             ) { selectLocalRoute(route) }
                         )
+                        // A speaker group is one destination to play to but several speakers to
+                        // balance, so its members are listed under it while it is the one playing -
+                        // each is an ordinary route, and gets its own slider from the same code.
+                        if (routeIsSelected(route) && route.isGroup) {
+                            route.asGroup()?.routesInGroup.orEmpty().forEach { member ->
+                                if (member.id == route.id) return@forEach
+                                add(
+                                    OutputEntry(
+                                        section = localSection,
+                                        icon = routeIconFor(member),
+                                        iconUri = member.iconUri,
+                                        title = member.name.toString(),
+                                        subtitle = null,
+                                        selected = false,
+                                        localRoute = member,
+                                        isGroupMember = true,
+                                        // Tapping a member must not switch playback to it; the
+                                        // row is here to carry that member's volume.
+                                    ) { }
+                                )
+                            }
+                        }
                     }
-                    add(
-                        OutputEntry(
-                            section = localSection,
-                            icon = R.drawable.ic_plus_circle,
-                            iconUri = null,
-                            title = context.getString(R.string.output_system_switcher),
-                            subtitle = context.getString(R.string.output_system_switcher_subtitle),
-                            selected = false,
-                        ) { startSystemMediaControl() }
-                    )
                     targets.forEach { target ->
                         add(
                             OutputEntry(
@@ -904,22 +1252,35 @@ class FullPlayer @JvmOverloads constructor(
                                     context.getString(R.string.output_playing_now, it)
                                 } ?: target.client,
                                 selected = activeRemote?.sessionId == target.sessionId,
-                            ) { handOverTo(target) }
+                            ) { selectFinnectTarget(target) }
                         )
                     }
                 }
 
                 rows.removeAllViews()
-                entries.forEachIndexed { index, entry ->
-                    val previousSection = entries.getOrNull(index - 1)?.section
-                    if (entry.section != previousSection) {
-                        val section = LayoutInflater.from(context)
-                            .inflate(R.layout.layout_output_picker_section, rows, false) as TextView
-                        section.text = entry.section
-                        rows.addView(section)
+                routeVolumeSliders.clear()
+                outputPickerPhoneVolumeSlider = null
+                // Decided once, for the whole list, from the most detailed row in it. Sizing each
+                // row to its own contents produced pills of three different heights, which reads
+                // as three kinds of control rather than one list of destinations.
+                val badgeLabel = if (showOutputCodecBadge()) currentOutputSignalLabel() else null
+                val anyBadge = badgeLabel != null &&
+                    entries.any { it.selected && it.localRoute != null }
+                val rowHeight = resources.getDimensionPixelSize(
+                    when {
+                        anyBadge -> R.dimen.output_row_height_badge
+                        entries.any { it.subtitle != null } -> R.dimen.output_row_height_subtitle
+                        else -> R.dimen.output_row_height_compact
                     }
+                )
+                entries.forEach { entry ->
                     val row = LayoutInflater.from(context)
                         .inflate(R.layout.layout_output_picker_row, rows, false)
+                    row.minimumHeight = rowHeight
+                    row.setBackgroundResource(
+                        if (entry.selected) R.drawable.bg_output_picker_row_selected
+                        else R.drawable.bg_output_picker_row
+                    )
                     bindOutputIcon(
                         row.findViewById(R.id.output_row_icon),
                         entry.icon,
@@ -932,23 +1293,50 @@ class FullPlayer @JvmOverloads constructor(
                         visibility = if (entry.subtitle == null) GONE else VISIBLE
                     }
                     row.findViewById<TextView>(R.id.output_row_signal_badge).apply {
-                        val signal = if (entry.selected && entry.localRoute != null) {
-                            currentOutputSignalLabel()
-                        } else null
+                        val signal = badgeLabel
+                            ?.takeIf { entry.selected && entry.localRoute != null }
                         text = signal
                         visibility = if (signal == null) GONE else VISIBLE
                     }
+                    val routeVolume = row.findViewById<OverlaySlider>(R.id.output_row_volume)
+                    val isPhoneOutput = entry.localRoute?.id == defaultRoute.id
+                    // Volume lives on the destination being played through, and on a group's
+                    // members so a pair can be balanced. Everywhere else the row is a place to tap,
+                    // and a drag surface over it would only get in the way of tapping it - which is
+                    // also how the picker this is modelled on behaves.
+                    bindRouteVolume(
+                        routeVolume,
+                        entry.localRoute,
+                        isPhoneOutput,
+                        showVolume = entry.selected || entry.isGroupMember,
+                    )
+                    bindRowLabelSplit(row, routeVolume)
+                    if (isPhoneOutput) {
+                        outputPickerPhoneVolumeSlider = routeVolume
+                    } else {
+                        entry.localRoute?.let { routeVolumeSliders[it.id] = routeVolume }
+                    }
+                    if (entry.isGroupMember) {
+                        // Indented under the group, with no radio of its own: it is a speaker to
+                        // balance, not a destination to switch to.
+                        row.updatePaddingRelative(start = OUTPUT_MEMBER_INDENT_DP.dp.px.toInt())
+                        row.isClickable = false
+                        row.findViewById<View>(R.id.output_row_selection).visibility = GONE
+                    }
                     row.findViewById<ImageView>(R.id.output_row_check).visibility =
                         if (entry.selected) VISIBLE else GONE
-                    row.findViewById<View>(R.id.output_row_divider).visibility =
-                        if (entries.getOrNull(index + 1)?.section == entry.section) VISIBLE else GONE
-                    row.findViewById<View>(R.id.output_row_click_target).setOnClickListener {
+                    row.findViewById<View>(R.id.output_row_selection).setBackgroundResource(
+                        if (entry.selected) R.drawable.bg_output_picker_radio_selected
+                        else R.drawable.bg_output_picker_radio_unselected
+                    )
+                    row.setOnClickListener {
                         Haptics.press(it)
                         sheet.dismiss()
                         entry.onSelect()
                     }
                     rows.addView(row)
                 }
+                capPickerHeight()
             }
 
             // Codec and AudioFlinger changes arrive through the media session, independently of
@@ -970,6 +1358,26 @@ class FullPlayer @JvmOverloads constructor(
                     renderRows()
                 }
 
+                /**
+                 * Deliberately does not re-render.
+                 *
+                 * Moving a slider calls `requestSetVolume`, the route reports the new volume back,
+                 * and rebuilding every row on that reply threw away the very view the finger was
+                 * holding - so a drag moved a little and then died. The slider is already showing
+                 * the value the user chose; there is nothing to redraw.
+                 */
+                override fun onRouteVolumeChanged(
+                    router: MediaRouter,
+                    route: MediaRouter.RouteInfo,
+                ) {
+                    if (outputVolumeDragging) return
+                    routeVolumeSliders[route.id]?.let { slider ->
+                        slider.valueTo = route.volumeMax.coerceAtLeast(1).toFloat()
+                        slider.value = route.volume.toFloat().coerceIn(0F, slider.valueTo)
+                        slider.invalidate()
+                    }
+                }
+
                 override fun onRouteSelected(router: MediaRouter, route: MediaRouter.RouteInfo) {
                     renderRows()
                 }
@@ -980,10 +1388,17 @@ class FullPlayer @JvmOverloads constructor(
             }
             sheet.setOnDismissListener {
                 outputMediaRouter.removeCallback(sheetRouteCallback)
+                backdrop.setImageDrawable(null)
+                backdropBitmap?.takeUnless(Bitmap::isRecycled)?.recycle()
+                backdropBitmap = null
                 if (outputPickerFormatChanged === sheetRenderer) {
                     outputPickerFormatChanged = null
                 }
                 if (outputPickerDialog === sheet) outputPickerDialog = null
+                outputPickerRefresh = null
+                outputPickerPhoneVolumeSlider = null
+                // Cleared above first: the scheduler checks whether this sheet is still showing.
+                scheduleControlsHide()
             }
             renderRows()
             refreshAudioOutputStatus()
@@ -992,7 +1407,7 @@ class FullPlayer @JvmOverloads constructor(
                 sheetRouteCallback,
                 MediaRouter.CALLBACK_FLAG_REQUEST_DISCOVERY,
             )
-            sheet.show()
+            PlayerSheet.present(activity, sheet, root) { captureBackdrop() }
             // The local picker is useful without Jellyfin and should never wait for the network.
             // Remote clients join the already-visible sheet when the server answers.
             outputPickerOpening = false
@@ -1017,10 +1432,38 @@ class FullPlayer @JvmOverloads constructor(
         val subtitle: String?,
         val selected: Boolean,
         val localRoute: MediaRouter.RouteInfo? = null,
+        /** One speaker inside the group that is playing: indented, and not selectable itself. */
+        val isGroupMember: Boolean = false,
         val onSelect: () -> Unit,
     )
 
-    private fun selectLocalRoute(route: MediaRouter.RouteInfo) {
+    /**
+     * Reacts to a receiver session opening or closing. Chrome only.
+     *
+     * Nothing here moves the music any more, and that is the point. Selecting a Cast route opens a
+     * session through [MediaRouter.selectRoute] like any other route, and the playback service's
+     * [CastPlayer][androidx.media3.cast.CastPlayer] is what notices it, carries the queue and
+     * position across, and takes over the MediaSession. Handing over from this view instead left
+     * the session pointed at a paused local player for the whole cast - and the notification, the
+     * lock screen, Android Auto and every other controller show whatever the session says, so they
+     * all reported "paused" while a receiver was audibly playing.
+     *
+     * A session this phone did not start needs no special case either. The remote player builds
+     * its timeline out of the receiver's own queue, so an Intent-to-Join, a session another sender
+     * started, or one that outlived this process is adopted rather than overwritten.
+     */
+    private fun onCastSessionChanged(
+        @Suppress("UNUSED_PARAMETER") session: com.google.android.gms.cast.framework.CastSession?,
+    ) {
+        refreshOutputDevice()
+        updateVolumeSlider()
+        updateProgressDisplay()
+    }
+
+    private fun selectLocalRoute(
+        route: MediaRouter.RouteInfo,
+        stopRemote: Boolean = true,
+    ) {
         val owner = findViewTreeLifecycleOwner() ?: return
         val player = instance ?: return
         owner.lifecycleScope.launch {
@@ -1031,6 +1474,13 @@ class FullPlayer @JvmOverloads constructor(
             } else null
             val currentItems = (0 until player.mediaItemCount).map(player::getMediaItemAt)
             val restoredQueue = remoteState?.let { resolveRemoteQueue(it, currentItems) }
+            // Selecting a speaker is an explicit request to begin playing there, so the intent to
+            // play is set before the route changes. The service's CastPlayer carries it, along
+            // with the queue and position, onto the receiver when the session opens; a connection
+            // that inherited the phone's paused state used to load a valid queue and then sit
+            // silently until Play was pressed a second time.
+            val castingOut = route.matchesSelector(outputRouteSelector) && !route.isSystemRoute
+            if (castingOut) player.playWhenReady = true
             runCatching { outputMediaRouter.selectRoute(route) }
                 .onFailure {
                     Toast.makeText(context, R.string.media_control_text_error, Toast.LENGTH_SHORT)
@@ -1040,7 +1490,7 @@ class FullPlayer @JvmOverloads constructor(
             if (returningFromRemote) {
                 val shouldPlay = remoteState?.isPaused != true
                 val resumePosition = remoteState?.projectedPositionMs() ?: player.currentPosition
-                JellyfinRemoteTargets.sendTransport(PlaystateCommand.STOP)
+                if (stopRemote) JellyfinRemoteTargets.sendTransport(PlaystateCommand.STOP)
                 JellyfinRemoteTargets.playLocally()
                 if (restoredQueue != null && restoredQueue.items.isNotEmpty()) {
                     player.setMediaItems(
@@ -1154,6 +1604,25 @@ class FullPlayer @JvmOverloads constructor(
         }
     }
 
+    /** Joins live Fincord playback; only an idle target receives this phone's queue. */
+    private fun selectFinnectTarget(target: JellyfinRemoteTargets.Target) {
+        if (target.nowPlaying == null) {
+            handOverTo(target)
+            return
+        }
+        val owner = findViewTreeLifecycleOwner() ?: return
+        val player = instance ?: return
+        owner.lifecycleScope.launch {
+            if (JellyfinRemoteTargets.claim(target)) {
+                player.pause()
+            } else {
+                // It may have stopped between discovery and the tap; in that case the device is
+                // now an idle destination and the original hand-off action is the useful fallback.
+                handOverTo(target)
+            }
+        }
+    }
+
     /**
      * Takes playback back.
      *
@@ -1217,6 +1686,26 @@ class FullPlayer @JvmOverloads constructor(
         queueRepeatButton.isChecked = repeatMode != Player.REPEAT_MODE_OFF
     }
 
+    private fun nextRepeatMode(current: Int): Int = when (current) {
+        Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
+        Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
+        Player.REPEAT_MODE_ONE -> Player.REPEAT_MODE_OFF
+        else -> Player.REPEAT_MODE_OFF
+    }
+
+    private fun Int.toCastRepeatMode(): Int = when (this) {
+        Player.REPEAT_MODE_ALL -> MediaStatus.REPEAT_MODE_REPEAT_ALL
+        Player.REPEAT_MODE_ONE -> MediaStatus.REPEAT_MODE_REPEAT_SINGLE
+        else -> MediaStatus.REPEAT_MODE_REPEAT_OFF
+    }
+
+    private fun Int.castRepeatModeToPlayer(): Int = when (this) {
+        MediaStatus.REPEAT_MODE_REPEAT_ALL,
+        MediaStatus.REPEAT_MODE_REPEAT_ALL_AND_SHUFFLE -> Player.REPEAT_MODE_ALL
+        MediaStatus.REPEAT_MODE_REPEAT_SINGLE -> Player.REPEAT_MODE_ONE
+        else -> Player.REPEAT_MODE_OFF
+    }
+
     private fun toggleFavoriteForCurrentSong() {
         val mediaItem = instance?.currentMediaItem ?: return
         val key = buildSongKey(mediaItem)
@@ -1261,7 +1750,6 @@ class FullPlayer @JvmOverloads constructor(
     }
 
     private fun resolveDurationMs(): Long? {
-        JellyfinRemoteTargets.playbackState.value?.durationMs?.let { return it }
         val duration = instance?.contentDuration
         if (duration != null && duration != C.TIME_UNSET) {
             return duration
@@ -1269,8 +1757,19 @@ class FullPlayer @JvmOverloads constructor(
         return instance?.currentMediaItem?.mediaMetadata?.durationMs?.takeIf { it > 0L }
     }
 
+    /**
+     * The scale this slider runs on: the phone's own steps locally, the remote device's remotely.
+     *
+     * Both the value and the write target come from the controller, and that single source is the
+     * fix for the slider that moved a receiver but never showed what the receiver was set to. The
+     * two used to be read from different places - the sheet showed Android's stream volume while
+     * Now Playing wrote Cast volume - so they could not agree, and a change made on the speaker
+     * itself reached neither.
+     */
     private fun resolveMaxDeviceVolume(): Int {
-        if (JellyfinRemoteTargets.active.value != null) return 100
+        instance?.takeIf { it.isCommandAvailable(Player.COMMAND_GET_DEVICE_VOLUME) }
+            ?.deviceInfo?.maxVolume?.takeIf { it > 0 }
+            ?.let { return it }
         if (maxDeviceVolume <= 0) {
             maxDeviceVolume = audioManager?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) ?: 0
         }
@@ -1278,7 +1777,6 @@ class FullPlayer @JvmOverloads constructor(
     }
 
     private fun resolveDeviceVolume(): Int {
-        JellyfinRemoteTargets.playbackState.value?.volumePercent?.let { return it }
         val controller = instance
         return if (controller != null && controller.isCommandAvailable(Player.COMMAND_GET_DEVICE_VOLUME)) {
             controller.deviceVolume
@@ -1302,12 +1800,9 @@ class FullPlayer @JvmOverloads constructor(
         val maxVolume = resolveMaxDeviceVolume()
         if (maxVolume <= 0) return
         val boundedVolume = volume.coerceIn(0, maxVolume)
-        if (JellyfinRemoteTargets.active.value != null) {
-            findViewTreeLifecycleOwner()?.lifecycleScope?.launch {
-                JellyfinRemoteTargets.sendVolume(boundedVolume)
-            }
-            return
-        }
+        // Whatever owns playback owns its own volume: the receiver's level while casting, the
+        // remote session's while on Finnect, this phone's stream otherwise. Each player converts
+        // to whatever its target expects, so there is nothing to branch on here.
         val controller = instance
         if (controller != null && controller.isCommandAvailable(Player.COMMAND_SET_DEVICE_VOLUME_WITH_FLAGS )) {
             controller.setDeviceVolume(boundedVolume, 0)
@@ -1336,16 +1831,29 @@ class FullPlayer @JvmOverloads constructor(
         val boundedPosition = positionMs.coerceIn(0L, safeDuration)
         val remaining = (safeDuration - boundedPosition).coerceAtLeast(0L)
 
-        currentTimestampTextView.text = convertDurationToTimeStamp(boundedPosition)
-        leftTimestampTextView.text =
-            context.getString(R.string.time_remaining, convertDurationToTimeStamp(remaining))
+        // Both timestamps are wrap_content, and TextView.setText on a wrap_content view always
+        // calls requestLayout() - so writing them unconditionally remeasured the whole player on
+        // every position tick, twice a second, for the entire length of every track. The rendered
+        // text only changes once a second at most, and usually not at all between ticks, so the
+        // comparison removes the great majority of those layout passes for the cost of two string
+        // equality checks.
+        val position = convertDurationToTimeStamp(boundedPosition)
+        if (currentTimestampTextView.text != position) {
+            currentTimestampTextView.text = position
+        }
+        val left = context.getString(R.string.time_remaining, convertDurationToTimeStamp(remaining))
+        if (leftTimestampTextView.text != left) {
+            leftTimestampTextView.text = left
+        }
     }
 
     private fun updateProgressDisplay() {
         val mediaDuration = resolveDurationMs()
-        val currentPosition = JellyfinRemoteTargets.playbackState.value?.projectedPositionMs()
-            ?: instance?.currentPosition
-            ?: 0L
+        // Both come from the controller, which tracks whichever player owns the output. Reading
+        // the local player here is what left the scrubber parked at the moment of the hand-off:
+        // that player is paused for the whole cast, so its position never moves, and a drag was
+        // being measured against a timeline that was not the one playing.
+        val currentPosition = instance?.currentPosition ?: 0L
         if (mediaDuration == null || instance?.mediaItemCount == 0) {
             val placeholder = context.getString(R.string.default_duration)
             currentTimestampTextView.text = placeholder
@@ -1362,7 +1870,12 @@ class FullPlayer @JvmOverloads constructor(
         val boundedPosition = currentPosition.coerceIn(0L, safeDuration)
 
         updateProgressTexts(boundedPosition, safeDuration)
-        progressOverlaySlider.valueTo = safeDuration.toFloat()
+        // valueTo is the track's duration - constant for the whole song - but assigning it can
+        // itself request a layout, so it is only written when it actually changes.
+        val duration = safeDuration.toFloat()
+        if (progressOverlaySlider.valueTo != duration) {
+            progressOverlaySlider.valueTo = duration
+        }
         progressOverlaySlider.value = boundedPosition.toFloat()
         progressOverlaySlider.invalidate()
     }
@@ -1485,6 +1998,7 @@ class FullPlayer @JvmOverloads constructor(
         queueShuffleButton.alpha = alpha
         queueRepeatButton.alpha = alpha
         queueAutoplayButton.alpha = alpha
+        queueAutomixButton.alpha = alpha
         queueTextView.alpha = alpha
         queueRecyclerView.alpha = alpha
     }
@@ -1521,11 +2035,8 @@ class FullPlayer @JvmOverloads constructor(
                 marginBottom + floatingInsets.bottom
             )
             Log.d(TAG, "initTop: ${initialMargin[1]}")
-            // The grabber keeps its own margin and nothing else. It used to carry the status bar's
-            // inset on top of it, which put it a third of the way down the top edge; the expanded
-            // player hides that bar now, so the space was being reserved for something not there
-            // and every reference has the grabber up against the top of the screen.
         }
+        applySymmetricEdges(floatingInsets.top, floatingInsets.bottom)
         Log.d(
             TAG,
             "marginBottom: ${marginBottom}, InsetsBottom: ${floatingInsets.bottom}, marginTop: ${floatingInsets.top}"
@@ -1533,7 +2044,41 @@ class FullPlayer @JvmOverloads constructor(
         return super.dispatchApplyWindowInsets(platformInsets)
     }
 
+    /** The layout's own margins, before any inset is added to them. */
+    private var baseGrabberMargin = -1
+    private var baseBottomControlsMargin = -1
+
+    /**
+     * Centres the player's contents between the screen's real edges.
+     *
+     * Two separate faults, both visible on a punch-hole phone with the expanded player immersive.
+     * The grabber carried a flat 18dp and no inset at all, so on this display it sat inside the
+     * 78px camera cutout - hiding the status bar removes `systemBars`, but the camera is still
+     * physically there and only `displayCutout` reports it. And the bottom already started from
+     * 48dp against the grabber's 18dp before the navigation bar was added underneath, so the
+     * chin held far more space than the top even once both insets were applied.
+     *
+     * Both edges now resolve to the same total, so what is left above the grabber and below the
+     * bottom row is equal and the contents sit centred between them.
+     */
+    private fun applySymmetricEdges(insetTop: Int, insetBottom: Int) {
+        val grabber = overlayDivider.layoutParams as? MarginLayoutParams ?: return
+        val bottom = listOverlayButton.layoutParams as? MarginLayoutParams ?: return
+        if (baseGrabberMargin < 0) baseGrabberMargin = grabber.topMargin
+        if (baseBottomControlsMargin < 0) baseBottomControlsMargin = bottom.bottomMargin
+
+        val edge = maxOf(baseGrabberMargin + insetTop, baseBottomControlsMargin + insetBottom)
+        if (grabber.topMargin == edge && bottom.bottomMargin == edge) return
+        grabber.topMargin = edge
+        bottom.bottomMargin = edge
+        overlayDivider.layoutParams = grabber
+        listOverlayButton.layoutParams = bottom
+    }
+
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        // Collapsed, this whole view is invisible behind the mini bar and scaled down over the
+        // navigation bar; see [isFadedOutOfPanel]. Refusing the press hands it to the tabs below.
+        if (event.actionMasked == MotionEvent.ACTION_DOWN && isFadedOutOfPanel()) return false
         if (contentType == ContentType.LYRICS && isWideLayout) {
             return dispatchWideLyricsTouch(event)
         }
@@ -1566,6 +2111,10 @@ class FullPlayer @JvmOverloads constructor(
         when (status) {
             FloatingPanelLayout.SlideStatus.EXPANDED -> {
                 coverSimpleImageView.alpha = 1F
+                // Re-read rather than trusting what was set the last time the player was open:
+                // Settings is a screen away, and both badge choices can have changed since.
+                updateQualityBadgeText()
+                flashQualityBadge()
             }
 
             else -> {
@@ -1599,6 +2148,11 @@ class FullPlayer @JvmOverloads constructor(
         if (contentType == ContentType.PLAYLIST || contentType == ContentType.LYRICS) {
             fullPlayerToolbar.getCoverView().alpha = if (value >= 1F) 1F else 0F
         }
+        // At rest the panel fills the window, so the home feed's procedurally drawn cards and
+        // banners are completely hidden - but they are still `isShown`, and were still asking for
+        // an invalidate every vsync. Each one pulled the blurred backdrop through another GPU pass
+        // for a surface nobody could see.
+        ProceduralMotionTicker.setPaused(value >= 1F)
     }
 
     private var transformationFraction = 0F
@@ -1811,6 +2365,26 @@ class FullPlayer @JvmOverloads constructor(
         }
     }
 
+    /**
+     * Puts the content transform back where the open destination says it belongs.
+     *
+     * The player's own title, artist and artwork are moved and faded out by [animateCoverChange],
+     * and nothing else writes their alpha - so if that transform does not run, or is cancelled
+     * before it reaches the end, the header stays drawn at full strength on top of whatever pane
+     * replaced it. Leaving the app with the lyrics open and coming back to it did exactly that:
+     * the lyrics returned, the transform did not, and the song's name sat over the words.
+     *
+     * Instant and idempotent, because it is a statement of where things already are rather than a
+     * transition to somewhere new. It defers to a transform that is genuinely mid-flight.
+     */
+    private fun syncContentTransformState() {
+        if (contentTypeAnimator != null) return
+        val target = if (contentType == ContentType.NORMAL) 0F else 1F
+        transformationFraction = target
+        if (isWideLayout) animateWideContentChange(target) else animateCoverChange(target)
+        if (contentType == ContentType.LYRICS) animateLyricsEntrance(target)
+    }
+
     private fun animateLyricsEntrance(fraction: Float) {
         val lyricsFraction = inverseLerp(lyricsStartFraction, 1F, fraction, clamp = true)
         val enterOffset = maxOf(
@@ -1929,6 +2503,12 @@ class FullPlayer @JvmOverloads constructor(
 
     private fun scheduleControlsHide() {
         removeCallbacks(hideControlsRunnable)
+        // The output sheet is a conversation with the chrome it was opened from. Letting the timer
+        // run underneath it meant the lyrics and the transport slid away mid-drag, while a finger
+        // was on a volume slider - the one moment the controls are demonstrably in use. The clock
+        // starts again when the sheet closes, which is when interaction with it has actually
+        // stopped.
+        if (outputPickerDialog?.isShowing == true) return
         // A tablet's controls are beside the lyrics rather than under them, so they have nothing
         // to get out of the way of - `06`, `09` and `10` all keep the transport up while reading.
         if (isTabletLayout) return
@@ -1955,6 +2535,10 @@ class FullPlayer @JvmOverloads constructor(
     private fun hideLyricsControls() {
         if (lyricsControlsHidden || contentType != ContentType.LYRICS) return
         lyricsControlsHidden = true
+        // The output sheet is not this timer's to close. It is a conversation with the user -
+        // choosing a speaker, dragging a volume - held in front of the chrome being tidied away,
+        // and dismissing it cancelled what the user was doing on top of it. The chrome still goes;
+        // the sheet stays until the user is done with it.
         animateControlsTo(1F) {
             setControlsVisibility(false)
         }
@@ -2080,9 +2664,11 @@ class FullPlayer @JvmOverloads constructor(
             outputDeviceIcon,
             outputDeviceName,
             qualityBadge,
+            bitrateBadge,
             karaokeStatus,
         ).forEach { applyControlCollapse(it, fraction) }
         identityRowThatCollapses().forEach { applyControlCollapse(it, fraction) }
+        applyQualityBadgeAlpha()
         updateLyricsClip(fraction)
     }
 
@@ -2137,6 +2723,7 @@ class FullPlayer @JvmOverloads constructor(
             outputDeviceIcon.visibility = INVISIBLE
             outputDeviceName.visibility = INVISIBLE
             qualityBadge.visibility = INVISIBLE
+            bitrateBadge.visibility = INVISIBLE
         }
     }
 
@@ -2189,6 +2776,9 @@ class FullPlayer @JvmOverloads constructor(
      */
     private fun refreshLyrics() {
         val controller = instance ?: return
+        // The sync offset is a setting now rather than a constant, and this is the moment the
+        // lyrics sheet is next about to matter - so it is where a changed slider is picked up.
+        lyricsViewModel?.refreshOffset()
         val mediaId = controller.currentMediaItem?.mediaId ?: return
         cachedLyrics.takeIf { cachedLyricsMediaId == mediaId }?.let {
             // Recreation should paint the last confirmed value immediately. The service may still
@@ -2264,6 +2854,23 @@ class FullPlayer @JvmOverloads constructor(
         }
     }
 
+    /**
+     * A seek is the one position change the lyrics clock must not smooth over.
+     *
+     * It follows the player deliberately slowly, so that media3's periodic position corrections
+     * cannot step the highlight - which means a real jump has to say so, or the words would slide
+     * towards the new place over the next several seconds instead of arriving with the sound.
+     */
+    override fun onPositionDiscontinuity(
+        oldPosition: Player.PositionInfo,
+        newPosition: Player.PositionInfo,
+        reason: Int,
+    ) {
+        if (reason != Player.DISCONTINUITY_REASON_AUTO_TRANSITION) {
+            lyricsViewModel?.resync()
+        }
+    }
+
     override fun onTracksChanged(tracks: Tracks) {
         val details = AudioQuality.detailsOf(tracks)
         currentQualityDetails = details
@@ -2272,7 +2879,7 @@ class FullPlayer @JvmOverloads constructor(
             showAvailableQualityHint()
         } else {
             updateQualityBadgeText()
-            syncQualityBadgeVisibility()
+            flashQualityBadge()
         }
         refreshAudioOutputStatus()
     }
@@ -2318,17 +2925,103 @@ class FullPlayer @JvmOverloads constructor(
         }
     }
 
+    /**
+     * What the badge says, and for how long, are two separate Settings choices.
+     *
+     * "Lossless" is a claim about the file; "FLAC · 1411 kbps" is the measurement behind it, and
+     * which of the two is wanted on screen is a matter of taste rather than of correctness. The
+     * timing is the same kind of choice: a permanent label becomes furniture, so it can instead
+     * announce itself for two seconds when the track changes and get out of the way.
+     */
+    private enum class QualityBadgeContent { LABEL, CODEC }
+
+    private fun qualityBadgeContent(): QualityBadgeContent =
+        if (PreferenceManager.getDefaultSharedPreferences(context)
+                .getString(QUALITY_BADGE_CONTENT, QUALITY_BADGE_CONTENT_LABEL) ==
+            QUALITY_BADGE_CONTENT_CODEC
+        ) QualityBadgeContent.CODEC else QualityBadgeContent.LABEL
+
+    private fun qualityBadgeFlashes(): Boolean =
+        PreferenceManager.getDefaultSharedPreferences(context)
+            .getBoolean(QUALITY_BADGE_FLASH, false)
+
     private fun updateQualityBadgeText() {
         val details = currentQualityDetails ?: return
-        qualityBadge.setText(qualityBadgeText(details))
+        when (qualityBadgeContent()) {
+            QualityBadgeContent.LABEL -> {
+                qualityBadge.setText(qualityBadgeText(details))
+                bitrateBadge.text = null
+            }
+
+            QualityBadgeContent.CODEC -> {
+                // The codec name is the point of this mode, but a stream media3 could not name
+                // still deserves a badge, so the label stands in rather than leaving a blank pill.
+                qualityBadge.text = details.codec
+                    ?: context.getString(qualityBadgeText(details))
+                bitrateBadge.text = details.bitrateBps
+                    ?.let { context.getString(R.string.music_quality_bitrate, it / 1000) }
+            }
+        }
+        syncQualityBadgeVisibility()
+    }
+
+    /**
+     * Shows the badge for two seconds and takes it away again.
+     *
+     * Only in the flashing mode, and only from the moments worth announcing: a new track, and the
+     * player being opened. Alpha is not written directly - the lyrics chrome fades these two views
+     * as well, and whichever wrote last would win - so this drives one factor and
+     * [applyQualityBadgeAlpha] multiplies the two together.
+     */
+    private fun flashQualityBadge() {
+        if (!qualityBadgeFlashes()) return
+        if (currentQualityDetails == null) return
+        qualityFlashAnimator?.cancel()
+        qualityFlashAlpha = 0F
+        qualityFlashing = true
+        syncQualityBadgeVisibility()
+        qualityFlashAnimator = ValueAnimator.ofFloat(0F, 1F).apply {
+            duration = QUALITY_HINT_FADE_MS
+            addUpdateListener {
+                qualityFlashAlpha = it.animatedValue as Float
+                applyQualityBadgeAlpha()
+            }
+            doOnEnd {
+                qualityFlashAnimator = ValueAnimator.ofFloat(1F, 0F).apply {
+                    duration = QUALITY_HINT_FADE_MS
+                    startDelay = QUALITY_BADGE_FLASH_HOLD_MS
+                    addUpdateListener {
+                        qualityFlashAlpha = it.animatedValue as Float
+                        applyQualityBadgeAlpha()
+                    }
+                    doOnEnd {
+                        qualityFlashing = false
+                        syncQualityBadgeVisibility()
+                    }
+                    start()
+                }
+            }
+            start()
+        }
+    }
+
+    /** The flash and the lyrics-chrome fade, combined, so neither erases the other. */
+    private fun applyQualityBadgeAlpha() {
+        val alpha = qualityFlashAlpha * (1F - controlsHideFraction)
+        qualityBadge.alpha = alpha
+        bitrateBadge.alpha = alpha
     }
 
     private fun qualityBadgeText(details: AudioQuality.Details): Int = when {
         details.quality == AudioQuality.DOLBY_ATMOS -> details.quality.label
-        currentUsbHiFiStatus?.bitPerfect == true -> R.string.music_quality_bit_perfect
-        currentUsbHiFiStatus != null -> R.string.music_quality_usb_lossless
+        !isRemotePlayback() && currentUsbHiFiStatus?.bitPerfect == true ->
+            R.string.music_quality_bit_perfect
+        !isRemotePlayback() && currentUsbHiFiStatus != null -> R.string.music_quality_usb_lossless
         else -> details.quality.label
     }
+
+    private fun isRemotePlayback(): Boolean =
+        instance?.deviceInfo?.playbackType == DeviceInfo.PLAYBACK_TYPE_REMOTE
 
     /**
      * Mentions, once and briefly, that the source is better than what is playing.
@@ -2371,32 +3064,91 @@ class FullPlayer @JvmOverloads constructor(
             ?.lowercase()
 
     private fun syncQualityBadgeVisibility() {
+        // A badge whose two seconds are up is taken out of the layout rather than left at alpha 0:
+        // faded out is not the same as gone, and an invisible view still answers taps - which is
+        // exactly how the play button's oversized square came to swallow presses meant for this row.
+        if (!qualityBadgeFlashes()) {
+            qualityFlashAnimator?.cancel()
+            qualityFlashing = false
+            qualityFlashAlpha = 1F
+        }
+        val flashedOut = qualityBadgeFlashes() && !qualityFlashing && qualityFlashAlpha <= 0F
         qualityBadge.visibility = when {
             currentQualityDetails == null -> GONE
-            lyricsControlsHidden -> INVISIBLE
+            lyricsControlsHidden || flashedOut -> INVISIBLE
             else -> VISIBLE
         }
+        bitrateBadge.visibility = when {
+            qualityBadge.visibility != VISIBLE -> qualityBadge.visibility
+            bitrateBadge.text.isNullOrEmpty() -> GONE
+            else -> VISIBLE
+        }
+        applyQualityBadgeAlpha()
     }
 
     /**
      * Names the format behind the badge - "FLAC 24-bit/96 kHz" - which is the one thing the badge
      * itself cannot say, since 24/48 and 24/192 both read "Hi-Res Lossless".
      */
-    private fun showQualityDetails(requestCodecPermission: Boolean = true) {
+    private fun showQualityDetails() {
         val details = currentQualityDetails ?: return
-        if (requestCodecPermission &&
+        val sheet = PlayerSheet.create(context)
+        val root = LayoutInflater.from(context)
+            .inflate(R.layout.layout_audio_quality_sheet, null, false)
+        val backdrop = root.findViewById<ImageView>(R.id.audio_quality_backdrop)
+        var backdropBitmap: Bitmap? = null
+        val rows = root.findViewById<LinearLayout>(R.id.audio_quality_rows)
+
+        fun render() {
+            root.findViewById<TextView>(R.id.audio_quality_title)
+                .setText(qualityBadgeText(details))
+            rows.removeAllViews()
+            val messages = qualityDetailRows(details)
+                .ifEmpty { listOf(context.getString(R.string.music_quality_unknown)) }
+            messages.forEachIndexed { index, message ->
+                val row = LayoutInflater.from(context)
+                    .inflate(R.layout.layout_audio_quality_row, rows, false)
+                row.findViewById<TextView>(R.id.audio_quality_row_text).text = message
+                row.findViewById<View>(R.id.audio_quality_row_divider).visibility =
+                    if (index == messages.lastIndex) GONE else VISIBLE
+                rows.addView(row)
+            }
+        }
+
+        render()
+        sheet.setContentView(root)
+        sheet.setOnDismissListener {
+            backdrop.setImageDrawable(null)
+            backdropBitmap?.takeUnless(Bitmap::isRecycled)?.recycle()
+            backdropBitmap = null
+        }
+        PlayerSheet.present(activity, sheet, root) {
+            PlayerSheet.captureBackdrop(activity, sheet, root, backdrop) { captured ->
+                backdropBitmap?.takeUnless(Bitmap::isRecycled)?.recycle()
+                backdropBitmap = captured
+            }
+        }
+
+        // Asked for after the sheet is up, not before it. The negotiated Bluetooth codec is behind
+        // BLUETOOTH_CONNECT, and gating the whole sheet on that permission meant a tap on the badge
+        // could answer with nothing at all - a permission the user declined once is not a reason to
+        // withhold the format of the file they are listening to. The row appears when it is known.
+        if (!isRemotePlayback() &&
             currentAfFormatInfo?.routedDeviceType == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP &&
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) !=
             PackageManager.PERMISSION_GRANTED
         ) {
             activity.requestBluetoothCodecPermission { granted ->
-                if (granted) refreshAudioOutputStatus()
-                postDelayed({ showQualityDetails(requestCodecPermission = false) }, 700L)
+                if (!granted) return@requestBluetoothCodecPermission
+                refreshAudioOutputStatus()
+                postDelayed({ if (sheet.isShowing) render() }, CODEC_PERMISSION_SETTLE_MS)
             }
-            return
         }
-        val parts = buildList {
+    }
+
+    /** The signal path as lines of text: the source file, the DAC, the codec, the HAL output. */
+    private fun qualityDetailRows(details: AudioQuality.Details): List<String> = buildList {
             val source = buildList {
                 details.codec?.let { add(it) }
                 val bitDepth = details.bitDepth
@@ -2409,7 +3161,7 @@ class FullPlayer @JvmOverloads constructor(
             }.joinToString(" ")
             if (source.isNotEmpty()) add(context.getString(R.string.music_quality_source, source))
 
-            currentUsbHiFiStatus?.let { usb ->
+            currentUsbHiFiStatus?.takeUnless { isRemotePlayback() }?.let { usb ->
                 add(context.getString(R.string.music_quality_usb_device, usb.deviceName))
                 val output = buildString {
                     usb.encoding.bitDepthName()?.let { append(it).append("/") }
@@ -2424,7 +3176,8 @@ class FullPlayer @JvmOverloads constructor(
                 )
             }
 
-            val bluetoothSignal = bluetoothOutputSignalLabel(includeQuality = true)
+            val bluetoothSignal = if (isRemotePlayback()) null
+                else bluetoothOutputSignalLabel(includeQuality = true)
             bluetoothSignal?.let { signal ->
                 add(context.getString(R.string.music_quality_bluetooth_codec, signal))
                 if (signal.startsWith("SSC UHQ")) {
@@ -2432,7 +3185,7 @@ class FullPlayer @JvmOverloads constructor(
                 }
             }
 
-            currentAfFormatInfo?.let { hal ->
+            currentAfFormatInfo?.takeUnless { isRemotePlayback() }?.let { hal ->
                 hal.routedDeviceName?.takeIf { it.isNotBlank() && it != "null" }?.let {
                     add(context.getString(R.string.music_quality_output_device, it))
                 }
@@ -2457,24 +3210,6 @@ class FullPlayer @JvmOverloads constructor(
                 }
             }
         }
-        val sheet = BottomSheetDialog(context, R.style.Theme_Accord_OutputPicker)
-        val root = LayoutInflater.from(context)
-            .inflate(R.layout.layout_audio_quality_sheet, null, false)
-        root.findViewById<TextView>(R.id.audio_quality_title)
-            .setText(qualityBadgeText(details))
-        val rows = root.findViewById<LinearLayout>(R.id.audio_quality_rows)
-        val messages = parts.ifEmpty { listOf(context.getString(R.string.music_quality_unknown)) }
-        messages.forEachIndexed { index, message ->
-            val row = LayoutInflater.from(context)
-                .inflate(R.layout.layout_audio_quality_row, rows, false)
-            row.findViewById<TextView>(R.id.audio_quality_row_text).text = message
-            row.findViewById<View>(R.id.audio_quality_row_divider).visibility =
-                if (index == messages.lastIndex) GONE else VISIBLE
-            rows.addView(row)
-        }
-        sheet.setContentView(root)
-        sheet.show()
-    }
 
     /** 44100 reads as "44.1", 48000 as "48" - trailing zeroes here are noise. */
     private fun Int.khz(): String = "%.1f".format(this / 1000f).removeSuffix(".0")
@@ -2494,7 +3229,21 @@ class FullPlayer @JvmOverloads constructor(
      * protected Bluetooth API did not expose, and is also the truthful label for wired/USB/local
      * PCM routes. This describes the output path, not whether the source file itself is lossless.
      */
+    /**
+     * Whether the destination being played through shows what it is actually receiving.
+     *
+     * The same choice the now-playing badge offers, for the same reason: the codec, depth and rate
+     * are the point for some people and clutter on a small card for everyone else. On by default,
+     * because a Bluetooth route that has quietly fallen back to SBC is worth being told about.
+     */
+    private fun showOutputCodecBadge(): Boolean =
+        PreferenceManager.getDefaultSharedPreferences(context)
+            .getBoolean(OUTPUT_CODEC_BADGE, true)
+
     private fun currentOutputSignalLabel(): String? {
+        // A2DP/HAL observations describe the phone's output and remain cached while Cast or a
+        // Finnect player owns playback. They must never override the remote player's source.
+        if (isRemotePlayback()) return remotePlayerSignalLabel()
         val hal = currentAfFormatInfo
         val halRate = hal?.sampleRateHz?.toInt()?.takeIf { it > 0 }
         val halDepth = hal?.audioFormat?.audioFormatBitDepth()
@@ -2514,6 +3263,19 @@ class FullPlayer @JvmOverloads constructor(
             bitDepth = halDepth,
             sampleRate = halRate,
         )
+    }
+
+    /** Best truthful signal label for a remote player, which has no phone-side audio sink. */
+    private fun remotePlayerSignalLabel(): String? {
+        val sourceCodec = currentSourceContainer()?.uppercase()
+        val details = currentQualityDetails
+        val codec = sourceCodec ?: details?.codec
+        // Dimensions reported for a different decoder route can linger across a Cast handoff.
+        // Only retain them when the selected track's codec agrees with the stored source.
+        val matchingDetails = details?.takeIf {
+            sourceCodec == null || it.codec.equals(sourceCodec, ignoreCase = true)
+        }
+        return buildSignalLabel(codec, matchingDetails?.bitDepth, matchingDetails?.sampleRateHz)
     }
 
     /**
@@ -2607,6 +3369,23 @@ class FullPlayer @JvmOverloads constructor(
         )
     }
 
+    /** Which way the cover is being pulled, and whether there is a track that way. */
+    private var coverSwipeDirection = 0
+    private var coverSwipeActionAvailable = false
+
+    private fun isCoverSwipeActionAvailable(direction: Int): Boolean {
+        val player = instance
+        val remote = JellyfinRemoteTargets.playbackState.value
+        val remoteIndex = remote?.queueIds?.indexOf(remote.itemId)
+        return if (direction < 0) {
+            if (remote != null) remoteIndex != null && remoteIndex in 0 until remote.queueIds.lastIndex
+            else player?.hasNextMediaItem() == true
+        } else {
+            if (remote != null) (remoteIndex ?: -1) > 0 || remote.projectedPositionMs() > 0L
+            else player?.hasPreviousMediaItem() == true || (player?.currentPosition ?: 0L) > 0L
+        }
+    }
+
     /**
      * The cover follows the finger at half distance rather than one-to-one: it is anchored in the
      * layout and cannot actually leave, and a cover that tracks the finger exactly reads as
@@ -2615,16 +3394,16 @@ class FullPlayer @JvmOverloads constructor(
     override fun onCoverSwipeMove(dx: Float) {
         coverSlideAnimator?.cancel()
         coverSlideAnimator = null
-        val player = instance
-        val remote = JellyfinRemoteTargets.playbackState.value
-        val remoteIndex = remote?.queueIds?.indexOf(remote.itemId)
-        val actionAvailable = if (dx < 0F) {
-            if (remote != null) remoteIndex != null && remoteIndex in 0 until remote.queueIds.lastIndex
-            else player?.hasNextMediaItem() == true
-        } else {
-            if (remote != null) (remoteIndex ?: -1) > 0 || remote.projectedPositionMs() > 0L
-            else player?.hasPreviousMediaItem() == true || (player?.currentPosition ?: 0L) > 0L
+        // Answered once per direction rather than once per touch event. Whether there is a track
+        // that way cannot change under the finger, and on a Finnect target the question walks the
+        // whole receiver queue looking for the current id - an O(n) scan landing between the frames
+        // of a gesture whose only job is to keep up with a thumb.
+        val direction = if (dx < 0F) -1 else 1
+        if (direction != coverSwipeDirection) {
+            coverSwipeDirection = direction
+            coverSwipeActionAvailable = isCoverSwipeActionAvailable(direction)
         }
+        val actionAvailable = coverSwipeActionAvailable
         coverSwipeHaptics.update(
             coverSimpleImageView,
             dx,
@@ -2640,6 +3419,7 @@ class FullPlayer @JvmOverloads constructor(
     }
 
     override fun onCoverSwipeEnd(dx: Float, velocityX: Float) {
+        coverSwipeDirection = 0
         val flingThreshold = ViewConfiguration.get(context).scaledMinimumFlingVelocity *
             COVER_FLING_VELOCITY_MULTIPLIER
         val hasFling = abs(velocityX) >= flingThreshold
@@ -2665,16 +3445,13 @@ class FullPlayer @JvmOverloads constructor(
             if (willMove) {
                 coverSwipeHaptics.commit(coverSimpleImageView)
                 pendingCoverReleaseVelocity = velocityX
-                pendingCoverSlide = if (forwards) SLIDE_NEXT else SLIDE_PREVIOUS
-                if (remote != null) {
-                    sendRemoteTransport(
-                        if (forwards) PlaystateCommand.NEXT_TRACK
-                        else PlaystateCommand.PREVIOUS_TRACK
-                    )
-                } else if (forwards) player?.seekToNext() else player?.seekToPrevious()
-                // A backstop for the cases the check above cannot see - a repeat mode changing
-                // under us, or a queue emptied while the finger was down.
-                postDelayed(coverSlideBackstop, COVER_SLIDE_BACKSTOP_MS)
+                // The backstop covers the cases the check above cannot see - a repeat mode
+                // changing under us, or a queue emptied while the finger was down.
+                armCoverSlide(
+                    if (forwards) SLIDE_NEXT else SLIDE_PREVIOUS,
+                    COVER_SLIDE_BACKSTOP_MS,
+                )
+                if (forwards) player?.seekToNext() else player?.seekToPrevious()
                 return
             }
         }
@@ -2702,8 +3479,19 @@ class FullPlayer @JvmOverloads constructor(
 
     /** Shows the route actually selected for playback, never merely a connected device. */
     private fun refreshOutputDevice() {
+        resyncVolumeForOutput()
         JellyfinRemoteTargets.active.value?.let { target ->
             showOutput(clientIconFor(target.client), target.deviceName.ifBlank { target.client })
+            return
+        }
+        FincordCast.session.value?.castDevice?.let { device ->
+            val route = activeCastRoute(outputMediaRouter.routes)
+            showOutput(
+                route?.let(::routeIconFor) ?: R.drawable.ic_output_speaker,
+                device.friendlyName ?: route?.name?.toString() ?: context.getString(R.string.output_device),
+                route?.iconUri,
+                route,
+            )
             return
         }
         val route = outputMediaRouter.selectedRoute
@@ -2714,6 +3502,21 @@ class FullPlayer @JvmOverloads constructor(
             return
         }
         showOutput(routeIconFor(route), route.name.toString(), route.iconUri, route)
+    }
+
+    private fun activeCastRoute(
+        routes: List<MediaRouter.RouteInfo>,
+    ): MediaRouter.RouteInfo? {
+        val device = FincordCast.session.value?.castDevice ?: return null
+        val deviceId = device.deviceId
+        routes.firstOrNull { route ->
+            runCatching { CastDevice.getFromBundle(route.extras) }.getOrNull()?.deviceId == deviceId
+        }?.let { return it }
+        val friendlyName = device.friendlyName ?: return null
+        return routes.firstOrNull { route ->
+            route.matchesSelector(outputRouteSelector) &&
+                route.name.toString().equals(friendlyName, ignoreCase = true)
+        }
     }
 
     private fun showOutput(
@@ -2843,6 +3646,193 @@ class FullPlayer @JvmOverloads constructor(
         else -> null
     }
 
+    /**
+     * Puts a working volume slider on a destination this app is allowed to move.
+     *
+     * Only routes that report [MediaRouter.RouteInfo.PLAYBACK_VOLUME_VARIABLE] get one: a Bluetooth
+     * or wired route is the system's to control and its slider would do nothing. Cast speakers and
+     * groups do report it, which is what makes this useful.
+     *
+     * `requestSetVolume` is the route-level call rather than the Cast session's, so it works the
+     * same for a group and for one member of that group - a member is just another route.
+     */
+    private fun bindRouteVolume(
+        slider: OverlaySlider,
+        route: MediaRouter.RouteInfo?,
+        isPhoneOutput: Boolean = false,
+        showVolume: Boolean = true,
+    ) {
+        if (!showVolume) {
+            slider.visibility = GONE
+            return
+        }
+        if (isPhoneOutput) {
+            val manager = audioManager
+            val maximum = manager?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) ?: 0
+            if (manager == null || maximum <= 0) {
+                slider.visibility = GONE
+                return
+            }
+            slider.visibility = VISIBLE
+            slider.valueFrom = 0F
+            slider.valueTo = maximum.toFloat()
+            slider.value = manager.getStreamVolume(AudioManager.STREAM_MUSIC)
+                .toFloat().coerceIn(0F, slider.valueTo)
+            slider.addValueChangeListener(object : OverlaySlider.ValueChangeListener {
+                override fun onStartTracking(slider: OverlaySlider) {
+                    slider.parent?.requestDisallowInterceptTouchEvent(true)
+                    outputVolumeDragging = true
+                }
+
+                override fun onValueChanged(
+                    slider: OverlaySlider,
+                    value: Float,
+                    fromUser: Boolean,
+                    fromMomentum: Boolean,
+                ) {
+                    if (fromUser || fromMomentum) {
+                        manager.setStreamVolume(AudioManager.STREAM_MUSIC, value.toInt(), 0)
+                    }
+                }
+
+                override fun onStopTracking(slider: OverlaySlider) {
+                    manager.setStreamVolume(AudioManager.STREAM_MUSIC, slider.value.toInt(), 0)
+                    slider.parent?.requestDisallowInterceptTouchEvent(false)
+                    outputVolumeDragging = false
+                }
+            })
+            return
+        }
+        val adjustable = route != null &&
+            route.volumeHandling == MediaRouter.RouteInfo.PLAYBACK_VOLUME_VARIABLE &&
+            route.volumeMax > 0
+        if (!adjustable) {
+            slider.visibility = GONE
+            return
+        }
+        slider.visibility = VISIBLE
+        slider.valueFrom = 0F
+        slider.valueTo = route.volumeMax.toFloat()
+        slider.value = route.volume.toFloat().coerceIn(0F, route.volumeMax.toFloat())
+        slider.addValueChangeListener(object : OverlaySlider.ValueChangeListener {
+            override fun onStartTracking(slider: OverlaySlider) {
+                // The row underneath is a click target that would switch playback to this
+                // destination; dragging its volume is not a request to move the music there.
+                slider.parent?.requestDisallowInterceptTouchEvent(true)
+                outputVolumeDragging = true
+            }
+
+            override fun onValueChanged(
+                slider: OverlaySlider,
+                value: Float,
+                fromUser: Boolean,
+                fromMomentum: Boolean,
+            ) {
+                // Momentum counts: the fling carries the value on after the finger has gone, and
+                // ignoring it would leave the speaker at wherever the finger happened to lift.
+                if (fromUser || fromMomentum) route.requestSetVolume(value.toInt())
+            }
+
+            override fun onStopTracking(slider: OverlaySlider) {
+                route.requestSetVolume(slider.value.toInt())
+                slider.parent?.requestDisallowInterceptTouchEvent(false)
+                outputVolumeDragging = false
+            }
+        })
+    }
+
+    /**
+     * Re-reads the volume after the output has changed, everywhere it is shown.
+     *
+     * Each output carries its own volume, and its own maximum: a headset runs an absolute scale the
+     * phone speaker does not share, so both the position and the range move when the route does.
+     * Nothing announced that. `VOLUME_CHANGED_ACTION` fires when a level changes, not when the
+     * device under it is swapped, so unplugging a pair of buds left every slider showing the level
+     * they had been at until the user happened to nudge one - at which point it jumped.
+     *
+     * The cached maximum is dropped rather than reused, because a stale range is the subtler half
+     * of the same fault: the right index against the wrong maximum draws in the wrong place.
+     *
+     * Read twice. The route is swapped before the mixer has finished following it, so the first
+     * read can still answer with the outgoing device's level.
+     */
+    private fun resyncVolumeForOutput() {
+        maxDeviceVolume = 0
+        updateVolumeSlider()
+        updatePhoneOutputSlider()
+        removeCallbacks(volumeResyncRunnable)
+        postDelayed(volumeResyncRunnable, OUTPUT_VOLUME_SETTLE_MS)
+    }
+
+    private val volumeResyncRunnable = Runnable {
+        maxDeviceVolume = 0
+        updateVolumeSlider()
+        updatePhoneOutputSlider()
+    }
+
+    /**
+     * Keeps a row's labels readable where the volume fill passes underneath them.
+     *
+     * The fill is light and the labels are white, so the half of a name sitting over the fill
+     * disappeared into it. [SplitTintTextView] draws each label twice under complementary clips;
+     * this is the part that tells it where the boundary currently is.
+     *
+     * The slider spans the whole row with no side padding, so the boundary in row coordinates is
+     * simply the row's width times the value - then shifted into each label's own coordinates,
+     * because a label sits inset behind the icon and its padding.
+     */
+    private fun bindRowLabelSplit(row: View, slider: OverlaySlider) {
+        val title = row.findViewById<SplitTintTextView>(R.id.output_row_title)
+        val subtitle = row.findViewById<SplitTintTextView>(R.id.output_row_subtitle)
+        // The icon sits at the left of the row, which is the part the fill covers first, so it goes
+        // under the fill before either label does. Treating only the labels left it washed out from
+        // the moment the volume left zero.
+        val icon = row.findViewById<SplitTintImageView>(R.id.output_row_icon)
+        val apply = {
+            val span = (slider.valueTo - slider.valueFrom).takeIf { it > 0F } ?: 1F
+            val fraction = if (slider.visibility == VISIBLE) {
+                ((slider.value - slider.valueFrom) / span).coerceIn(0F, 1F)
+            } else {
+                0F
+            }
+            val fillEdge = row.width * fraction
+            title.splitX = fillEdge - offsetInRow(title, row)
+            subtitle.splitX = fillEdge - offsetInRow(subtitle, row)
+            icon.splitX = fillEdge - offsetInRow(icon, row)
+        }
+        slider.addValueChangeListener(object : OverlaySlider.ValueChangeListener {
+            override fun onValueChanged(
+                slider: OverlaySlider,
+                value: Float,
+                fromUser: Boolean,
+                fromMomentum: Boolean,
+            ) = apply()
+        })
+        row.doOnLayout { apply() }
+    }
+
+    /** How far [view] sits from [row]'s left edge, through however many parents lie between. */
+    private fun offsetInRow(view: View, row: View): Int {
+        var offset = 0
+        var current: View = view
+        while (current !== row) {
+            offset += current.left
+            current = current.parent as? View ?: break
+        }
+        return offset
+    }
+
+    private fun updatePhoneOutputSlider() {
+        if (outputVolumeDragging) return
+        val slider = outputPickerPhoneVolumeSlider ?: return
+        val manager = audioManager ?: return
+        val maximum = manager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+        slider.valueTo = maximum.toFloat()
+        slider.value = manager.getStreamVolume(AudioManager.STREAM_MUSIC)
+            .toFloat().coerceIn(0F, slider.valueTo)
+        slider.invalidate()
+    }
+
     private fun routeSubtitle(route: MediaRouter.RouteInfo): String {
         when (platformRouteType(route)) {
             MediaRoute2Info.TYPE_BLE_HEADSET ->
@@ -2859,6 +3849,14 @@ class FullPlayer @JvmOverloads constructor(
             MediaRoute2Info.TYPE_HDMI_EARC ->
                 return context.getString(R.string.output_route_display)
         }
+        // A Cast route's description is the *running receiver application's* name for as long as a
+        // session is open, so connecting to "Bedroom Group" relabelled it "Default Media Receiver"
+        // - Google's receiver app, not the speaker in the room. The model belongs to the device
+        // and says the same thing whether or not it is playing.
+        runCatching { CastDevice.getFromBundle(route.extras) }.getOrNull()?.let { device ->
+            device.modelName?.takeIf { it.isNotBlank() }?.let { return it }
+        }
+
         val description = route.description?.toString()?.takeIf {
             it.isNotBlank() && !it.equals(route.name.toString(), ignoreCase = true)
         }
@@ -3029,8 +4027,11 @@ class FullPlayer @JvmOverloads constructor(
         mediaItem: MediaItem?,
         reason: Int
     ) {
+        Log.d(TAG, "COVERDBG transition track=${mediaItem?.mediaMetadata?.title} reason=$reason " +
+            "count=${instance?.mediaItemCount} karaokeSwitch=${karaokeSwitchMediaId != null}") // TEMP-COVERDBG
         if (karaokeSwitchMediaId == mediaItem?.mediaId) {
             karaokeSwitchMediaId = null
+            lastTransitionMediaId = mediaItem?.mediaId
             fullPlayerToolbar.onMediaItemTransition(mediaItem, reason)
             qualityBadge.visibility = GONE
             showCachedLyricsOrEmpty(mediaItem)
@@ -3055,13 +4056,39 @@ class FullPlayer @JvmOverloads constructor(
         showCachedLyricsOrEmpty(mediaItem)
         refreshLyrics()
         if (instance?.mediaItemCount != 0) {
-            lastDisposable?.dispose()
-            lastDisposable = null
+            cancelCoverLoad()
             // A track that ended on its own is still going forwards, so it gets the same movement
-            // as pressing next; only the very first item appears without travelling.
-            if (pendingCoverSlide == SLIDE_NONE && !firstTime) pendingCoverSlide = SLIDE_NEXT
+            // as pressing next; only the very first item appears without travelling. A playlist
+            // replacement that keeps the same track (handing playback to Cast or Finnect, or
+            // coming back from either) does not move at all: the artwork is unchanged, so a slide
+            // would be a needless round trip.
+            //
+            // Note this *disarms* rather than merely declining to arm. Not arming was not enough:
+            // seekToNext/seekToPrevious set the direction before the seek, and a skip that turns
+            // out not to move - the last track with repeat off, a queue emptied under the press -
+            // leaves it set with nothing to consume it. The next transition to arrive was then a
+            // hand-off for the very same song, which slid the cover off as if it had been skipped
+            // and left it on the placeholder, because an unchanged track never reloads its art.
+            val sameTrack = mediaItem?.mediaId == lastTransitionMediaId
+            if (!sameTrack && reason == Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED) {
+                offerOutputChoice()
+            }
+            if (sameTrack && reason == Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED) {
+                Log.d(TAG, "COVERDBG disarm sameTrack inFlight=$coverSlideInFlight " +
+                    "pending=$pendingCoverSlide offset=$coverSlideOffsetX outDone=$coverSlideOutDone") // TEMP-COVERDBG
+                pendingCoverSlide = SLIDE_NONE
+                pendingCoverReleaseVelocity = 0F
+                removeCallbacks(coverSlideBackstop)
+            } else if (pendingCoverSlide == SLIDE_NONE && !firstTime && !sameTrack) {
+                pendingCoverSlide = SLIDE_NEXT
+            }
+            lastTransitionMediaId = mediaItem?.mediaId
             startCoverSlideOut()
             loadCoverForImageView()
+            // Armed after every transition and cancelled by the next, so a burst of swipes runs it
+            // once, when the queue finally settles on something.
+            removeCallbacks(coverIntegrityCheck)
+            postDelayed(coverIntegrityCheck, COVER_INTEGRITY_DELAY_MS)
 
             titleTextView.setTextAnimation(
                 mediaItem?.mediaMetadata?.title ?: "",
@@ -3075,8 +4102,9 @@ class FullPlayer @JvmOverloads constructor(
             syncFavoriteButtonsForCurrentItem()
             topUpQueueIfNeeded()
         } else {
-            lastDisposable?.dispose()
-            lastDisposable = null
+            Log.d(TAG, "COVERDBG transition EMPTY-TIMELINE branch: cancelling cover load") // TEMP-COVERDBG
+            cancelCoverLoad()
+            lastTransitionMediaId = mediaItem?.mediaId
             updateProgressDisplay()
             updateFavoriteButtons(false)
         }
@@ -3097,10 +4125,22 @@ class FullPlayer @JvmOverloads constructor(
      * instant the track changes, or a slow network makes the player look stuck.
      */
     private fun startCoverSlideOut() {
-        if (pendingCoverSlide == SLIDE_NONE) return
+        if (pendingCoverSlide == SLIDE_NONE) {
+            Log.d(TAG, "COVERDBG slideOut skipped (disarmed) " +
+                "inFlight=$coverSlideInFlight offset=$coverSlideOffsetX") // TEMP-COVERDBG
+            return
+        }
+        Log.d(TAG, "COVERDBG slideOut dir=$pendingCoverSlide wasInFlight=$coverSlideInFlight " +
+            "offset=$coverSlideOffsetX") // TEMP-COVERDBG
         coverSlideInFlight = true
         coverSlideOutDone = false
         coverSlideArtReady = false
+        coverSlideInStarted = false
+        // Whatever is parked belongs to the track now leaving, not the one arriving. It is only
+        // ever set for the item that was current when its load landed, so carrying it across a
+        // transition made the incoming track slide in wearing the previous song's sleeve - the
+        // cover said one album while the title said another.
+        pendingCoverDrawable = null
 
         val target = -pendingCoverSlide * coverSlideDistance()
         // A swipe has already carried the cover part of the way, so the rest of the journey is
@@ -3141,17 +4181,25 @@ class FullPlayer @JvmOverloads constructor(
         drawable: android.graphics.drawable.Drawable?,
         bitmap: android.graphics.Bitmap?
     ) {
+        Log.d(TAG, "COVERDBG applyCover uri=$currentArtworkUri drawable=${
+            drawable?.let { Integer.toHexString(System.identityHashCode(it)) }
+        } track=${instance?.currentMediaItem?.mediaMetadata?.title}") // TEMP-COVERDBG
         appliedCoverBitmap = bitmap
-        meshGradientView.setArtwork(bitmap)
-        blendView.setImageBitmap(bitmap)
+        applyBackdrop(bitmap, currentArtworkUri)
+        // Driven from here rather than the transition, so the sheet re-blurs against the colours
+        // that are actually on screen behind it instead of the ones on their way out.
+        outputPickerRefresh?.invoke()
         fullPlayerToolbar.setImageViewCover(drawable)
         floatingPanelLayout.transitionImageView?.setImageDrawable(drawable)
         floatingPanelLayout.setPreviewCover(drawable)
-        if (coverSlideInFlight && !coverSlideArtReady) {
+        if (coverSlideInFlight && !coverSlideInStarted) {
             // Still on its way out, or waiting to come back - hold it until it is out of sight.
+            Log.d(TAG, "COVERDBG park drawable=${drawable != null}") // TEMP-COVERDBG
             pendingCoverDrawable = drawable
             onCoverArtReady()
         } else {
+            Log.d(TAG, "COVERDBG direct drawable=${drawable != null} " +
+                "inFlight=$coverSlideInFlight started=$coverSlideInStarted offset=$coverSlideOffsetX") // TEMP-COVERDBG
             // Either nothing is moving, or the cover came back before the artwork did and is
             // showing the placeholder; either way it belongs on screen now.
             coverSimpleImageView.setImageDrawable(drawable)
@@ -3161,6 +4209,70 @@ class FullPlayer @JvmOverloads constructor(
     private fun isAutoplayEnabled() =
         PreferenceManager.getDefaultSharedPreferences(context)
             .getBoolean(PREF_AUTOPLAY, false)
+
+    /** Whether the user has asked for mixed transitions. */
+    private fun isAutomixEnabled() = Automix.isEnabled(context)
+
+    /**
+     * Resequences what is left of the queue so that more of its transitions can be mixed.
+     *
+     * The counterpart to a station that arrives already sequenced: a playlist somebody made by
+     * hand is a fixed set of tracks, and the order they are heard in is the only freedom left.
+     * [AutomixQueueOrdering] owns the rules - nothing already heard moves, nothing is added or
+     * dropped - and this owns telling the listener what happened, which matters more than usual
+     * here because the honest answer is often "nothing".
+     *
+     * Off the main thread to read the analyses, back on it to move anything: the controller allows
+     * nothing else. The queue is re-read after the wait rather than trusted from before it, because
+     * a track can end while the database is being read and the plan would then be one place out.
+     */
+    private fun reorderQueueForAutomix() {
+        val player = instance ?: return
+        val currentIndex = player.currentMediaItemIndex
+        val queue = List(player.mediaItemCount) { player.getMediaItemAt(it) }
+        val appContext = context.applicationContext
+
+        Toast.makeText(context, R.string.automix_reordering, Toast.LENGTH_SHORT).show()
+        CoroutineScope(Dispatchers.Main).launch {
+            val order = withContext(Dispatchers.IO) {
+                AutomixQueueOrdering.reorder(appContext, queue, currentIndex)
+            }
+            val live = instance ?: return@launch
+            // Only apply to the queue the plan was made against. Anything else - a track ended, the
+            // listener skipped, something was added - and the indices mean different items now.
+            if (live.mediaItemCount != queue.size || live.currentMediaItemIndex != currentIndex) {
+                return@launch
+            }
+            if (order == null) {
+                val analysed = withContext(Dispatchers.IO) {
+                    AutomixQueueOrdering.mixableAdjacencies(appContext, queue)
+                }
+                Toast.makeText(
+                    context,
+                    // Two different nothings, and saying which one is the whole value of the
+                    // message: a queue that already mixes as well as it can is a success, and a
+                    // queue nobody has analysed is a "come back once it has played a while".
+                    if (analysed > 0) R.string.automix_reorder_none
+                    else R.string.automix_reorder_unanalysed,
+                    Toast.LENGTH_LONG,
+                ).show()
+                return@launch
+            }
+
+            AutomixQueueOrdering.applyOrder(queue.size, currentIndex, order) { from, to ->
+                live.moveMediaItem(from, to)
+            }
+            val reordered = List(live.mediaItemCount) { live.getMediaItemAt(it) }
+            val mixable = withContext(Dispatchers.IO) {
+                AutomixQueueOrdering.mixableAdjacencies(appContext, reordered)
+            }
+            Toast.makeText(
+                context,
+                resources.getQuantityString(R.plurals.automix_reordered, mixable, mixable),
+                Toast.LENGTH_LONG,
+            ).show()
+        }
+    }
 
     /**
      * Adds more music when the queue is running out and infinity play is on.
@@ -3210,10 +4322,13 @@ class FullPlayer @JvmOverloads constructor(
         val direction = pendingCoverSlide
         pendingCoverSlide = SLIDE_NONE
         if (direction == SLIDE_NONE) {
+            Log.d(TAG, "COVERDBG STRANDED offset=$coverSlideOffsetX " +
+                "pendingDrawable=${pendingCoverDrawable != null} started=$coverSlideInStarted") // TEMP-COVERDBG
             coverSlideInFlight = false
             return
         }
         removeCallbacks(coverSlideInDeadline)
+        coverSlideInStarted = true
         // Swapped now, out of sight, so the cover that comes back is the new track's. When it
         // has not loaded yet the placeholder comes back instead and the real artwork appears
         // in place a moment later - far better than an empty screen while the network answers.
@@ -3235,6 +4350,121 @@ class FullPlayer @JvmOverloads constructor(
     }
 
     /**
+     * Hands the backdrop its new artwork once the cover has finished arriving.
+     *
+     * The backdrop swap is the most expensive thing the player does: three ImageSwitchers each
+     * crossfade for 400ms, so six images are drawn at once inside a blurred, upscaled RenderNode.
+     * Firing that from [applyCover] put it directly on top of the cover slide, and the slide -
+     * which is only animating `translationX` - stalled behind it on the RenderThread. Deferring
+     * costs nothing visually, because the cover is what the eye is following.
+     */
+    /**
+     * The one place the backdrop's artwork is written.
+     *
+     * Keyed on the artwork itself rather than the track: consecutive songs from one album resolve
+     * to the same cover, and rebuilding the field for them restarted an identical picture and cut
+     * its animation. An unchanged cover now leaves the backdrop - and its loop - completely alone.
+     *
+     * Whichever renderer is active takes it: [blendView] when the backdrop is the blurred cover,
+     * [meshGradientView] when the animated gradient is switched on in Appearance. Both are fed,
+     * because the preference can change while the player is open and the hidden one must already
+     * be holding the right picture when it is shown.
+     */
+    private fun applyBackdrop(bitmap: android.graphics.Bitmap?, artwork: Uri?) {
+        Log.d(TAG, "COVERDBG backdrop in bitmap=${bitmap != null} artwork=$artwork " +
+            "last=$lastBackdropArtwork blendVisible=${blendView.visibility == VISIBLE}") // TEMP-COVERDBG
+        if (bitmap != null && artwork != null && artwork == lastBackdropArtwork) {
+            Log.d(TAG, "COVERDBG backdrop SKIPPED (unchanged artwork)") // TEMP-COVERDBG
+            return
+        }
+        // No artwork is not the same as "erase the backdrop". A cold start with nothing restored
+        // yet calls this twice with a null cover before the controller has a queue, and passing
+        // that through cleared all three of BlendView's image views - which is a flat black field,
+        // held until the first real artwork happens to arrive. The placeholder belongs on the
+        // cover; behind it, the last good backdrop (or the renderer's own fallback) looks far more
+        // deliberate than black, and it also keeps [cachedBackdrop] intact for the next attach.
+        if (bitmap == null) {
+            Log.d(TAG, "COVERDBG backdrop IGNORED (null bitmap, keeping current)") // TEMP-COVERDBG
+            return
+        }
+        lastBackdropArtwork = artwork
+        // Every backdrop renderer reads the artwork's pixels - kawarp's Kawase pass through
+        // getPixels, the older field through getPixel and createScaledBitmap - and none of that
+        // works on the Config#HARDWARE bitmap Coil returns for a hardware-accelerated target: it
+        // throws, and kawarp's runs on its own thread where it took the process down. Converting
+        // once here also replaces the copy BlendView and FlowingGradientView each made
+        // separately, so a track change now costs one conversion instead of three.
+        // Every renderer shrinks whatever it is handed - BlendView to 60px, kawarp and the
+        // gradient to 128 - so passing the full 932px cover meant three independent downscales
+        // from a multi-megabyte source on the main thread per track change. Scaling once here, to
+        // comfortably more than any of them consume, makes each of those cheap. Nothing is lost:
+        // the result is blurred past recognition in every renderer.
+        val readable = bitmap.readablePixels()?.scaledForBackdrop()
+        // Kept past this view's lifetime so a rotation can put it straight back; see
+        // [restoreCachedBackdrop].
+        cachedBackdrop = readable
+        cachedBackdropArtwork = lastBackdropArtwork
+        // Feed only the renderer that can actually draw. BlendView makes its own treated copies;
+        // doing that for every rapid swipe while it was hidden multiplied bitmap pressure for no
+        // visible result. The preference listener seeds a renderer when it becomes active.
+        if (blendView.visibility == VISIBLE) {
+            blendView.setImageBitmap(readable)
+            blendView.startRotationAnimation()
+        } else {
+            // kawarp holds the outgoing cover itself and dissolves to this one over
+            // BACKDROP_CROSSFADE_MS; FlowingGradientView is the API 31-32 fallback.
+            liquidGradientView.setCover(readable)
+            meshGradientView.setArtwork(readable)
+        }
+        // Restart whichever renderer just received this, because being handed content is the only
+        // moment it can be sure it has something to draw.
+        //
+        // setPlaying() is otherwise reached only from onPlaybackStateChanged, and on a cold start
+        // that fires *before* the artwork arrives: the renderer is told to run while it is still
+        // empty, gives up, and nothing wakes it when the cover finally lands. The backdrop then
+        // stayed blank until the next playback-state change - which is why pressing play appeared
+        // to fix it, and why pausing again did not undo the fix.
+        meshGradientView.setPlaying(true)
+        liquidGradientView.setPlaying(true)
+    }
+
+    /**
+     * Puts the backdrop back after the view has been rebuilt.
+     *
+     * A rotation recreates this view, which resets [appliedCoverBitmap] and [lastBackdropArtwork]
+     * to null - and no media-item transition follows a rotation, so nothing ever handed the
+     * backdrop a picture again and it fell back to a flat palette until the next track change.
+     * Re-feeding the cached bitmap needs no image request, so unlike re-running the cover load it
+     * cannot race the transition's own.
+     */
+    private fun restoreCachedBackdrop() {
+        if (lastBackdropArtwork != null) return
+        val cached = cachedBackdrop?.takeUnless(android.graphics.Bitmap::isRecycled) ?: return
+        lastBackdropArtwork = cachedBackdropArtwork
+        if (blendView.visibility == VISIBLE) {
+            blendView.setImageBitmap(cached)
+        } else {
+            liquidGradientView.setCover(cached)
+            meshGradientView.setArtwork(cached)
+        }
+    }
+
+    /** See [applyBackdrop]: a bitmap whose pixels a backdrop renderer is allowed to read. */
+    private fun android.graphics.Bitmap?.readablePixels(): android.graphics.Bitmap? = when {
+        this == null -> null
+        config == android.graphics.Bitmap.Config.HARDWARE ->
+            copy(android.graphics.Bitmap.Config.ARGB_8888, false)
+        else -> this
+    }
+
+    /** Downsamples to the largest size any backdrop renderer actually consumes. */
+    private fun android.graphics.Bitmap.scaledForBackdrop(): android.graphics.Bitmap =
+        if (width <= BACKDROP_SOURCE_PX && height <= BACKDROP_SOURCE_PX) this
+        else android.graphics.Bitmap.createScaledBitmap(
+            this, BACKDROP_SOURCE_PX, BACKDROP_SOURCE_PX, true,
+        )
+
+    /**
      * Leaves quickly and settles softly, so the arrival reads as a landing rather than a stop.
      */
     private val settleInterpolator = PathInterpolator(0.17F, 0.89F, 0.32F, 1F)
@@ -3243,10 +4473,58 @@ class FullPlayer @JvmOverloads constructor(
     private fun coverSlideDistance(): Float =
         (coverSimpleImageView.width + 48.dp.px).coerceAtLeast(1F)
 
+    /**
+     * Drops any artwork request still in flight.
+     *
+     * [loadedArtworkIdentity] goes with it. It records the identity a load was *started* for, and
+     * a disposed request never delivers - so leaving it set made [enqueueCover] treat the artwork
+     * as already on its way and skip re-requesting it. Two quick skips dispose the second track's
+     * request on the way to the third, and the third then sat on the placeholder for good.
+     */
+    /**
+     * Asks, once per connected target, whether a song should go to it or stay on the phone.
+     *
+     * Raised from a genuine start of playback - a new queue with a different track - and not from
+     * the hand-off itself, which replaces the queue with the *same* track and is the moment the
+     * user just chose the speaker on purpose. Asking there would be asking them to confirm what
+     * they had done a second earlier.
+     *
+     * Once per target, not once per song: the answer is remembered in [OutputRouting] until the
+     * target goes away, and either answer can be changed at any time from the output picker.
+     */
+    private fun offerOutputChoice() {
+        if (OutputRouting.playLocally.value) return
+        val targetId = FincordCast.session.value?.castDevice?.deviceId
+            ?: JellyfinRemoteTargets.active.value?.sessionId
+            ?: return
+        if (!OutputRouting.markPrompted(targetId)) return
+        val name = currentRemoteTargetName() ?: context.getString(R.string.output_device)
+        MaterialAlertDialogBuilder(context)
+            .setTitle(R.string.output_choice_title)
+            .setMessage(context.getString(R.string.output_choice_message, name))
+            .setPositiveButton(context.getString(R.string.output_choice_remote, name)) { _, _ ->
+                OutputRouting.setPlayLocally(false)
+            }
+            .setNegativeButton(R.string.output_choice_local) { _, _ ->
+                OutputRouting.setPlayLocally(true)
+            }
+            .show()
+    }
+
+    /** What the connected remote target calls itself, for the picker's own labels. */
+    private fun currentRemoteTargetName(): String? =
+        FincordCast.session.value?.castDevice?.friendlyName?.takeIf(String::isNotBlank)
+            ?: JellyfinRemoteTargets.active.value?.deviceName?.takeIf(String::isNotBlank)
+
+    private fun cancelCoverLoad() {
+        lastDisposable?.dispose()
+        lastDisposable = null
+        loadedArtworkIdentity = null
+    }
+
     private fun loadCoverForImageView() {
         if (lastDisposable != null) {
-            lastDisposable?.dispose()
-            lastDisposable = null
+            cancelCoverLoad()
             Log.e(TAG, "raced while loading cover in onMediaItemTransition?")
         }
         val mediaItem = instance?.currentMediaItem
@@ -3256,6 +4534,18 @@ class FullPlayer @JvmOverloads constructor(
                 TAG,
                 "load cover for ${mediaItem?.mediaMetadata?.title} at ${coverSimpleImageView.width} ${coverSimpleImageView.height}"
             )
+            // The track's own embedded picture comes first, because it is already on this device
+            // and needs no server at all: it decodes straight off local storage, which is what
+            // stops playback beginning before the cover has caught up. Jellyfin's copy is the same
+            // image served over HTTP, so it is the fallback rather than the source - used the first
+            // time a track is played, and whenever the file carried no picture of its own.
+            mediaItem?.mediaId?.let { id ->
+                embeddedArtworkFile(id).takeIf(File::isFile)?.let {
+                    enqueueCover(id, Uri.fromFile(it))
+                    return
+                }
+            }
+
             val artwork = mediaItem?.mediaMetadata?.artworkUri
             if (artwork != null) {
                 enqueueCover(mediaItem.mediaId, artwork)
@@ -3267,10 +4557,6 @@ class FullPlayer @JvmOverloads constructor(
             // null to Coil (which clears a perfectly useful cached drawable); recover the URI by
             // stable media id, then by stable album id for older saved queues.
             val mediaId = mediaItem?.mediaId ?: return
-            embeddedArtworkFile(mediaId).takeIf(File::isFile)?.let {
-                enqueueCover(mediaId, Uri.fromFile(it))
-                return
-            }
             artworkLookupJob?.cancel()
             artworkLookupJob = (findViewTreeLifecycleOwner()?.lifecycleScope
                 ?: CoroutineScope(Dispatchers.Main)).launch {
@@ -3407,9 +4693,6 @@ class FullPlayer @JvmOverloads constructor(
             connect(R.id.caption, ConstraintSet.START, split.id, ConstraintSet.END)
             clear(R.id.speaker_hint, ConstraintSet.START)
             connect(R.id.speaker_hint, ConstraintSet.START, split.id, ConstraintSet.END, 34.dp.px.toInt())
-
-            clear(R.id.output_device_name, ConstraintSet.START)
-            connect(R.id.output_device_name, ConstraintSet.START, split.id, ConstraintSet.END)
 
             clear(R.id.quality_badge, ConstraintSet.START)
             connect(R.id.quality_badge, ConstraintSet.START, split.id, ConstraintSet.END)
@@ -3600,20 +4883,71 @@ class FullPlayer @JvmOverloads constructor(
     private fun enqueueCover(mediaId: String, artwork: Uri) {
         if (instance?.currentMediaItem?.mediaId != mediaId) return
         val identity = "$mediaId:$artwork"
+        // Re-applying is gated on the identity the bitmap actually *is*, not the one most recently
+        // requested. loadedArtworkIdentity is set as soon as a load starts, so between that and
+        // the load finishing it names the incoming track while appliedCoverBitmap still holds the
+        // outgoing one - and a second call in that window repainted the player with the previous
+        // song's cover.
+        if (identity == appliedArtworkIdentity && appliedCoverBitmap != null) {
+            // Already loaded, but the cover may have slid out for a playlist replacement that kept
+            // the same track (returning from Finnect). Re-applying keeps the slide from settling
+            // on the placeholder - nothing else will ever reload it, because the identity is
+            // unchanged.
+            //
+            // Only while something is actually moving, though. media3 emits onMediaMetadataChanged
+            // several times per track, and each one arrived here and repainted every surface - a
+            // fresh BitmapDrawable, four setImageDrawable calls and an output-picker refresh, three
+            // times over, for a cover already on screen. With nothing sliding there is no
+            // placeholder to lose to, so the work has no result to show for itself.
+            if (!coverSlideInFlight) return
+            currentArtworkUri = artwork
+            applyCover(
+                android.graphics.drawable.BitmapDrawable(context.resources, appliedCoverBitmap),
+                appliedCoverBitmap,
+            )
+            return
+        }
+        // Only skip a load already under way when one has actually landed. loadedArtworkIdentity is
+        // set when a request *starts*, so on its own it also names requests that never delivered -
+        // a success dropped by the mediaId guard below, for instance. Skipping unconditionally then
+        // meant nothing ever re-requested that track's artwork and the cover kept the placeholder
+        // for good, because every later retry matched the identity of the load that failed.
         if (identity == loadedArtworkIdentity && appliedCoverBitmap != null) return
         loadedArtworkIdentity = identity
+        // Tell the prefetcher what size to warm, so its entries land under the same memory-cache
+        // key this request will look for rather than beside it.
+        QueuePrefetcher.artworkTargetPx = coverSimpleImageView.width
         lastDisposable = context.imageLoader.enqueue(
                 ImageRequest.Builder(context).apply {
                     data(artwork)
                     size(coverSimpleImageView.width, coverSimpleImageView.height)
                     scale(Scale.FILL)
+                    // The mediaId is re-checked on delivery, not only when the request is made.
+                    // Two quick taps leave two requests in flight, and nothing stopped the slower
+                    // one from finishing last and repainting the player with the previous song's
+                    // cover - the artwork then belonged to a track that was no longer showing.
                     target(onSuccess = {
-                        applyCover(it.asDrawable(context.resources), it.toBitmap())
+                        if (instance?.currentMediaItem?.mediaId == mediaId) {
+                            appliedArtworkIdentity = identity
+                            currentArtworkUri = artwork
+                            applyCover(it.asDrawable(context.resources), it.toBitmap())
+                        }
                     }, onError = {
-                        loadedArtworkIdentity = null
-                        applyCover(it?.asDrawable(context.resources), it?.toBitmap())
+                        if (instance?.currentMediaItem?.mediaId == mediaId) {
+                            loadedArtworkIdentity = null
+                            appliedArtworkIdentity = null
+                            currentArtworkUri = artwork
+                            applyCover(it?.asDrawable(context.resources), it?.toBitmap())
+                        }
                     }) // do not react to onStart() which sets placeholder
-                    allowHardware(coverSimpleImageView.isHardwareAccelerated)
+                    // Deliberately software, overriding nothing: the loader is already built
+                    // with allowHardware(false) and this request used to be the one exception.
+                    // A Config#HARDWARE bitmap keeps its pixels on the GPU, and every consumer of
+                    // this one reads pixels - the blur, the gradient palette, the sampler - so each
+                    // track change paid for a full-size copy back to software on the main thread
+                    // before any of them could start. Asking for software up front deletes that
+                    // copy outright.
+                    allowHardware(false)
                 }.build()
             )
     }
@@ -3646,42 +4980,41 @@ class FullPlayer @JvmOverloads constructor(
      */
     override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) {
         val mediaId = instance?.currentMediaItem?.mediaId ?: return
-        mediaMetadata.artworkUri?.let {
-            enqueueCover(mediaId, it)
-            return
-        }
-        val bytes = mediaMetadata.artworkData ?: return
-        embeddedArtworkJob?.cancel()
-        embeddedArtworkJob = (findViewTreeLifecycleOwner()?.lifecycleScope
-            ?: CoroutineScope(Dispatchers.Main)).launch {
-            val file = withContext(Dispatchers.IO) { storeEmbeddedArtwork(mediaId, bytes) }
-            if (instance?.currentMediaItem?.mediaId == mediaId) {
-                enqueueCover(mediaId, Uri.fromFile(file))
+        // Keep the file's own picture whenever the extractor surfaces one, even if Jellyfin also
+        // offers a URL for it. This used to return early on the URL, which is why nothing was ever
+        // written and every play went back to the server for a picture the file already contained.
+        // Storing it now means the *next* play of this track resolves its cover from local storage
+        // with no request at all.
+        val bytes = mediaMetadata.artworkData
+        if (bytes != null && !embeddedArtworkFile(mediaId).isFile) {
+            embeddedArtworkJob?.cancel()
+            embeddedArtworkJob = (findViewTreeLifecycleOwner()?.lifecycleScope
+                ?: CoroutineScope(Dispatchers.Main)).launch {
+                val file = withContext(Dispatchers.IO) { storeEmbeddedArtwork(mediaId, bytes) }
+                // Only take over the display if nothing has managed to paint a cover yet. When the
+                // server's copy already arrived it is the same picture, and swapping it out would
+                // be a visible flicker bought for nothing.
+                if (instance?.currentMediaItem?.mediaId == mediaId && appliedCoverBitmap == null) {
+                    enqueueCover(mediaId, Uri.fromFile(file))
+                }
             }
         }
-    }
-
-    private fun storeEmbeddedArtwork(mediaId: String, bytes: ByteArray): File {
-        val target = embeddedArtworkFile(mediaId)
-        target.parentFile?.mkdirs()
-        val unchanged = target.isFile && target.length() == bytes.size.toLong() &&
-            runCatching { target.readBytes().contentEquals(bytes) }.getOrDefault(false)
-        if (unchanged) return target
-        val pending = File(target.parentFile, "${target.name}.pending")
-        pending.writeBytes(bytes)
-        if (!pending.renameTo(target)) {
-            target.writeBytes(bytes)
-            pending.delete()
+        // Only worth asking the server when this track has no picture of its own. Without the
+        // check every track loaded twice - once from the file, once over HTTP for the same image -
+        // and the second one simply overwrote the first.
+        mediaMetadata.artworkUri?.let {
+            if (embeddedArtworkFile(mediaId).isFile) return
+            enqueueCover(mediaId, it)
         }
-        return target
     }
 
-    private fun embeddedArtworkFile(mediaId: String): File {
-        val name = MessageDigest.getInstance("SHA-256")
-            .digest(mediaId.toByteArray())
-            .joinToString("") { "%02x".format(it) }
-        return File(context.cacheDir, "embedded_artwork/$name")
-    }
+    // Both delegate to the shared store, because the playback service writes these files and this
+    // reads them: two copies of the naming rule would only have to agree forever.
+    private fun storeEmbeddedArtwork(mediaId: String, bytes: ByteArray): File =
+        EmbeddedArtworkStore.store(context, mediaId, bytes)
+
+    private fun embeddedArtworkFile(mediaId: String): File =
+        EmbeddedArtworkStore.fileFor(context, mediaId)
 
     override fun onIsPlayingChanged(isPlaying: Boolean) {
         onPlaybackStateChanged(instance?.playbackState ?: Player.STATE_IDLE)
@@ -3697,18 +5030,35 @@ class FullPlayer @JvmOverloads constructor(
 
     override fun onPlaybackStateChanged(playbackState: @Player.State Int) {
         Log.d("FullPlayer", "onPlaybackStateChanged: $playbackState")
-        val remoteState = JellyfinRemoteTargets.playbackState.value
-        val isPlaying = remoteState?.let { !it.isPaused } ?: (instance?.isPlaying == true)
+        // The controller follows whichever player owns the output, so this is simply "is music
+        // playing" again. Asking the local player used to answer "no" for the whole of a cast -
+        // it is deliberately silent then - and the button sat on Play over a playing speaker.
+        val isPlaying = instance?.isPlaying == true
+        // Cast reports not-playing while it buffers the next queue item. That is a loading state,
+        // not a user pause: keep the artwork/ambient motion alive and move the feedback onto the
+        // progress track. In-track Cast seeks are masked by CastQueuePlayer, so this is reserved
+        // for genuine item loading. A paused receiver still has playWhenReady=false and behaves
+        // like an ordinary pause.
+        val isRemoteTrackBuffering = remoteOutputActive &&
+            playbackState == Player.STATE_BUFFERING &&
+            instance?.playWhenReady == true
+        progressOverlaySlider.isLoading = isRemoteTrackBuffering
+        val visuallyPlaying = isPlaying || isRemoteTrackBuffering
+        // Both backdrop choices are ambient and remain animated while paused. Playback still
+        // controls the cover's own pause treatment below, but never whether the background lives.
+        meshGradientView.setPlaying(true)
+        liquidGradientView.setPlaying(true)
+        if (blendView.visibility == VISIBLE) blendView.startRotationAnimation()
         updateCoverPauseScale(
-            isPlaying = isPlaying,
+            isPlaying = visuallyPlaying,
             animate = !firstTime
         )
         if (isPlaying) {
             controllerButton.playAnimation(false)
-        } else if (remoteState != null || playbackState != Player.STATE_BUFFERING) {
+        } else if (remoteOutputActive || playbackState != Player.STATE_BUFFERING) {
             controllerButton.playAnimation(true)
         }
-        if (isPlaying) {
+        if (visuallyPlaying) {
             startPositionUpdates()
         } else {
             stopPositionUpdates()
@@ -3839,9 +5189,21 @@ class FullPlayer @JvmOverloads constructor(
                 applyCoverTranslation()
             }
             addListener(object : AnimatorListenerAdapter() {
+                // cancel() fires onAnimationEnd too. Without this guard, interrupting a slide ran
+                // the interrupted one's completion callback: a new slide-out cancelled the previous
+                // slide-in, whose `coverSlideInFlight = false` then wiped the flag startCoverSlideOut
+                // had just set. The cover was left wherever the cancel stopped it - a resting offset
+                // that leaked into every subsequent slide - and late artwork was written onto a view
+                // parked off-centre with nothing pending to bring it back.
+                private var canceled = false
+
+                override fun onAnimationCancel(animation: Animator) {
+                    canceled = true
+                }
+
                 override fun onAnimationEnd(animation: Animator) {
-                    coverSlideAnimator = null
-                    onEnd?.invoke()
+                    if (coverSlideAnimator === animation) coverSlideAnimator = null
+                    if (!canceled) onEnd?.invoke()
                 }
             })
             start()
@@ -3854,6 +5216,9 @@ class FullPlayer @JvmOverloads constructor(
     }
 
     override fun onDeviceVolumeChanged(volume: Int, muted: Boolean) {
+        // Reported by whichever player owns the output, so this is already the receiver's level
+        // during a cast and the remote session's on Finnect - no filtering needed. It also means
+        // a change made on the speaker itself, or from Google Home, lands here.
         updateVolumeSlider(volume)
     }
     override fun onTimelineChanged(timeline: Timeline, reason: @Player.TimelineChangeReason Int) {
@@ -3877,7 +5242,10 @@ class FullPlayer @JvmOverloads constructor(
         var labelledUserRun = false
         var labelledSource = false
 
-        for (i in 0 until timeline.windowCount) {
+        // A queue is the current track plus what will play after it. Keeping already-played tracks
+        // above the current row made the list grow backwards forever and made its visual row
+        // numbers diverge from the actions the user was taking on the upcoming queue.
+        for (i in current.coerceAtLeast(0) until timeline.windowCount) {
             val w = timeline.getWindow(i, window)
             val queuedByHand = UserQueue.isUserQueued(w.mediaItem)
             var label: String? = null
@@ -3895,9 +5263,18 @@ class FullPlayer @JvmOverloads constructor(
                     labelledSource = true
                 }
             }
-            items.add(QueueItem(w.uid, w.mediaItem, label))
+            items.add(QueueItem(w.uid, w.mediaItem, label, isCurrent = i == current))
         }
         return items
+    }
+
+    /** Resolves an adapter row back into the current timeline after filtering played tracks. */
+    private fun Timeline.indexOfWindow(uid: Any): Int {
+        val window = Timeline.Window()
+        for (index in 0 until windowCount) {
+            if (getWindow(index, window).uid == uid) return index
+        }
+        return -1
     }
 
     /** Keeps artwork/title/queue selection aligned while audio continues on the remote phone. */
@@ -3909,12 +5286,15 @@ class FullPlayer @JvmOverloads constructor(
         val index = state.queueIds.indexOf(itemId.replace("-", "").lowercase())
         val player = instance ?: return
         if (index !in 0 until player.mediaItemCount || index == player.currentMediaItemIndex) return
-        pendingCoverSlide = if (index > player.currentMediaItemIndex) SLIDE_NEXT else SLIDE_PREVIOUS
+        armCoverSlide(if (index > player.currentMediaItemIndex) SLIDE_NEXT else SLIDE_PREVIOUS)
         player.seekTo(index, 0L)
         player.pause()
     }
 
     override fun onDetachedFromWindow() {
+        // The pause is only lifted by a slide back below the top, so a teardown while expanded
+        // would leave the home feed's cards frozen for the rest of the process.
+        ProceduralMotionTicker.setPaused(false)
         karaokeJob?.cancel()
         karaokeJob = null
         karaokeStatus.removeCallbacks(hideKaraokeStatusRunnable)
@@ -3935,6 +5315,7 @@ class FullPlayer @JvmOverloads constructor(
         airplayOverlayButton.removeCallbacks(resetAirplayButton)
         removeCallbacks(coverSlideBackstop)
         removeCallbacks(coverSlideInDeadline)
+        removeCallbacks(coverIntegrityCheck)
         artworkLookupJob?.cancel()
         artworkLookupJob = null
         embeddedArtworkJob?.cancel()
@@ -3953,6 +5334,7 @@ class FullPlayer @JvmOverloads constructor(
             runCatching { AudioOutput.unregister(context, it) }
             audioDeviceCallback = null
         }
+        removeCallbacks(volumeResyncRunnable)
         if (outputRouteCallbackRegistered) {
             outputMediaRouter.removeCallback(outputRouteCallback)
             outputRouteCallbackRegistered = false
@@ -3960,8 +5342,19 @@ class FullPlayer @JvmOverloads constructor(
         super.onDetachedFromWindow()
     }
 
+    /**
+     * The window coming back is the moment to check the pane and the chrome still agree; see
+     * [syncContentTransformState] for what disagreeing looked like.
+     */
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(visibility)
+        if (visibility == VISIBLE) post(::syncContentTransformState)
+    }
+
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
+        restoreCachedBackdrop()
+        post(::syncContentTransformState)
         if (audioDeviceCallback == null) {
             audioDeviceCallback = AudioOutput.register(context) { refreshOutputDevice() }
         }
@@ -3977,6 +5370,15 @@ class FullPlayer @JvmOverloads constructor(
                 JellyfinRemoteTargets.active.collect { refreshOutputDevice() }
             }
         }
+        if (castSessionJob == null && FincordCast.isAvailable) {
+            castSessionJob = findViewTreeLifecycleOwner()?.lifecycleScope?.launch {
+                FincordCast.session.collect(::onCastSessionChanged)
+            }
+        }
+        // The receiver's own status no longer needs a separate observer here. It reaches the
+        // remote player, which is in front of the session while casting, so it arrives through the
+        // ordinary Player.Listener callbacks this view already implements - the same ones a local
+        // track change comes through.
         if (remotePlaybackJob == null) {
             remotePlaybackJob = findViewTreeLifecycleOwner()?.lifecycleScope?.launch {
                 JellyfinRemoteTargets.playbackState.collect { state ->
@@ -3987,7 +5389,7 @@ class FullPlayer @JvmOverloads constructor(
                         updateRepeatButton(it.repeatMode.toPlayerRepeatMode())
                     }
                     updateProgressDisplay()
-                    updateVolumeSlider(state?.volumePercent)
+                    updateVolumeSlider()
                 }
             }
         }
@@ -3996,6 +5398,7 @@ class FullPlayer @JvmOverloads constructor(
         // same smooth resize used for a device appearing later.
         if (remoteTargetsWarmupJob == null && JellyfinRemoteTargets.isEnabled(context)) {
             remoteTargetsWarmupJob = findViewTreeLifecycleOwner()?.lifecycleScope?.launch {
+                JellyfinRemoteTargets.restoreActive()
                 JellyfinRemoteTargets.available()
             }
         }
@@ -4081,14 +5484,28 @@ class FullPlayer @JvmOverloads constructor(
         const val TAG = "FullPlayer"
         private const val POSITION_UPDATE_INTERVAL_MS = 500L
 
+
         /** Containers worth mentioning when a quality cap is hiding what they hold. */
         private val LOSSLESS_CONTAINERS = setOf("flac", "alac", "wav", "aiff", "ape", "wv")
 
+        /** Long enough for the codec query to come back after the permission is granted. */
+        private const val CODEC_PERMISSION_SETTLE_MS = 700L
+        private const val OUTPUT_CODEC_BADGE = "output_codec_badge"
+        private const val QUALITY_BADGE_CONTENT = "quality_badge_content"
+        private const val QUALITY_BADGE_CONTENT_LABEL = "label"
+        private const val QUALITY_BADGE_CONTENT_CODEC = "codec"
+        private const val QUALITY_BADGE_FLASH = "quality_badge_flash"
+        private const val QUALITY_BADGE_FLASH_HOLD_MS = 2_000L
         private const val QUALITY_HINT_FADE_MS = 220L
         private const val QUALITY_HINT_HOLD_MS = 3_000L
         private const val PAUSED_COVER_SCALE = 0.84F
-        private const val OUTPUT_PICKER_BLUR_RADIUS = 72F
         private const val OUTPUT_PICKER_RESIZE_MS = 240L
+        /** How long the mixer takes to follow a route change before its level can be trusted. */
+        private const val OUTPUT_VOLUME_SETTLE_MS = 250L
+
+        private const val OUTPUT_PICKER_MAX_HEIGHT_DP = 540F
+        private const val OUTPUT_PICKER_MIN_LIST_HEIGHT_DP = 96F
+        private const val OUTPUT_PICKER_HEIGHT_FRACTION = 0.82F
 
         /** How far the cover follows the finger, and how far it has to go to count as a swipe. */
         private const val COVER_SWIPE_FOLLOW = 0.56F
@@ -4109,8 +5526,44 @@ class FullPlayer @JvmOverloads constructor(
         private const val COVER_SLIDE_MIN_MS = 70L
         private const val COVER_SLIDE_BACKSTOP_MS = 400L
 
+        /**
+         * How long a requested skip has to produce a track change before the direction is dropped.
+         *
+         * Long enough for a Cast receiver to answer, since a skip while casting is a round trip
+         * over the network rather than a local seek; the cover has not moved while this runs, so
+         * waiting costs nothing visible.
+         */
+        private const val COVER_SLIDE_ARM_TIMEOUT_MS = 2_500L
+
+        /** How far a group's member speakers sit inside the group row above them. */
+        private const val OUTPUT_MEMBER_INDENT_DP = 30F
+
         /** The longest the cover stays off screen waiting for artwork to load. */
+        /** Backdrops are blurred, so they never need more than this many pixels a side. */
+        private const val BACKDROP_SOURCE_PX = 256
+
+        /** Long enough that a burst of swipes has stopped before the cover is re-checked. */
+        private const val COVER_INTEGRITY_DELAY_MS = 700L
+
         private const val COVER_ART_WAIT_MS = 90L
+
+        /**
+         * How long the backdrop takes to dissolve from one album's cover to the next.
+         *
+         * Deliberately far longer than the cover slide: the artwork is a hard, fast movement the
+         * eye follows, and the field behind it should still be settling after the cover has
+         * landed rather than cutting over with it.
+         */
+        private const val BACKDROP_CROSSFADE_MS = 1_000
+
+        /**
+         * The last backdrop artwork, held past any one [FullPlayer] so a rotation can restore it.
+         *
+         * A bare bitmap and a Uri - nothing here references a Context or a View, so this cannot
+         * retain an Activity across the recreation it exists to survive.
+         */
+        private var cachedBackdrop: android.graphics.Bitmap? = null
+        private var cachedBackdropArtwork: Uri? = null
         private const val CONTROLS_HIDE_DELAY_MS = 3_000L
 
         /**
@@ -4125,6 +5578,7 @@ class FullPlayer @JvmOverloads constructor(
         private const val KARAOKE_SWITCH_GUARD_MS = 1_000L
 
         private const val PREF_AUTOPLAY = "autoplay_similar"
+        // The playback service reads this too, so the key itself lives in Automix rather than
     }
 
 }

@@ -26,6 +26,12 @@
     <color name="popupMenuSeparator">#8c808080</color>
     <color name="primaryOverlayColor">#bfffffff</color>
     <color name="primaryOverlayShadeColor">#73ffffff</color>
+    <!--
+        The surface of a queue row while it is being dragged. White, like every other overlay in
+        the player: that panel is always drawn over artwork, and a tint of the artwork's own light
+        is what makes the card look lifted off it rather than pasted onto it.
+    -->
+    <color name="queueDragCardColor">#33ffffff</color>
     <color name="red">#ff3b30</color>
     <color name="secondaryOverlayColor">#26ffffff</color>
     <color name="secondaryOverlayShadeColor">#33ffffff</color>

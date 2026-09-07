@@ -8,6 +8,8 @@ import android.graphics.RenderNode
 import android.graphics.Shader
 import android.graphics.drawable.Drawable
 import android.util.AttributeSet
+import android.view.MotionEvent
+import android.view.View
 import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.core.view.doOnLayout
 import androidx.media3.common.MediaItem
@@ -17,6 +19,9 @@ import androidx.media3.common.Timeline
 import com.google.android.material.button.MaterialButton
 import android.widget.TextView
 import uk.akane.accord.R
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinRemoteTargets
+import uk.akane.accord.logic.cast.FincordCast
+import uk.akane.accord.logic.ArtistCredits
 import uk.akane.accord.logic.dp
 import uk.akane.accord.logic.isDarkMode
 import uk.akane.accord.logic.playOrPause
@@ -34,8 +39,10 @@ class PreviewPlayer @JvmOverloads constructor(
     FloatingPanelLayout.OnSlideListener {
     private var controlMaterialButton: MaterialButton
     private var nextMaterialButton: MaterialButton
+    private var previousMaterialButton: MaterialButton? = null
     private var coverSimpleImageView: SimpleImageView
     private var titleTextView: TextView
+    private var subtitleTextView: TextView? = null
     private val floatingPanelLayout: FloatingPanelLayout
         get() = parent as FloatingPanelLayout
     private val activity: MainActivity
@@ -103,8 +110,10 @@ class PreviewPlayer @JvmOverloads constructor(
         inflate(context, R.layout.layout_preview_player, this)
         controlMaterialButton = findViewById(R.id.control_btn)
         nextMaterialButton = findViewById(R.id.next_btn)
+        previousMaterialButton = findViewById(R.id.previous_btn)
         coverSimpleImageView = findViewById(R.id.preview_cover)
         titleTextView = findViewById(R.id.title)
+        subtitleTextView = findViewById(R.id.preview_subtitle)
 
         coverSimpleImageView.doOnLayout {
             floatingPanelLayout.setupMetrics(
@@ -127,6 +136,23 @@ class PreviewPlayer @JvmOverloads constructor(
             activity.getPlayer()?.seekToNext()
         }
 
+        previousMaterialButton?.setOnClickListener {
+            it.performPressHaptic()
+            activity.getPlayer()?.seekToPrevious()
+        }
+        findViewById<View?>(R.id.preview_lyrics_btn)?.setOnClickListener {
+            it.performPressHaptic()
+            floatingPanelLayout.expandTo(FullPlayer.ContentType.LYRICS)
+        }
+        findViewById<View?>(R.id.preview_queue_btn)?.setOnClickListener {
+            it.performPressHaptic()
+            floatingPanelLayout.expandTo(FullPlayer.ContentType.PLAYLIST)
+        }
+        findViewById<View?>(R.id.preview_ellipsis_btn)?.setOnClickListener {
+            it.performPressHaptic()
+            floatingPanelLayout.showPlayerPopupFromPreview(it)
+        }
+
         activity.controllerViewModel.addControllerCallback(activity.lifecycle) { controller, _ ->
             controller.addListener(playerListener)
             updatePlaybackControls(controller.playbackState)
@@ -136,6 +162,13 @@ class PreviewPlayer @JvmOverloads constructor(
 
         updatePlaybackControls()
         updateTitle()
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        // Expanded, the bar is faded out but scaled up across the top of the player, where its
+        // transport buttons lie over the player's own toolbar; see [isFadedOutOfPanel].
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN && isFadedOutOfPanel()) return false
+        return super.dispatchTouchEvent(ev)
     }
 
     override fun dispatchDraw(canvas: Canvas) {
@@ -186,6 +219,20 @@ class PreviewPlayer @JvmOverloads constructor(
             titleTextView.text = resolved
             lastTitleText = resolved
         }
+        // The Cast design checklist asks the persistent control to say where the sound is going,
+        // not only what is playing. It is also the answer to "why is my phone silent" - without it
+        // the collapsed bar is indistinguishable from ordinary local playback.
+        subtitleTextView?.text = remoteOutputName()
+            ?.let { resources.getString(R.string.playing_on_device, it) }
+            ?: player?.currentMediaItem?.let(ArtistCredits::primaryArtist).orEmpty()
+    }
+
+    /** The device playing this, or null when that device is the phone itself. */
+    private fun remoteOutputName(): String? {
+        JellyfinRemoteTargets.active.value?.let { target ->
+            return target.deviceName.ifBlank { target.client }
+        }
+        return FincordCast.session.value?.castDevice?.friendlyName?.takeIf { it.isNotBlank() }
     }
 
     private fun updatePanelVisibility(playerOverride: Player? = null) {

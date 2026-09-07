@@ -9,6 +9,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
+import android.widget.TextView
 import uk.akane.accord.ui.components.NoToast as Toast
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -18,13 +19,19 @@ import androidx.core.widget.NestedScrollView
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import androidx.preference.PreferenceManager
+import com.google.android.material.textfield.TextInputEditText
+import com.google.android.material.textfield.TextInputLayout
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinClientHolder
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinCredentialStore
+import org.akanework.gramophone.logic.data.jellyfin.JellyfinEndpoints
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinUserImage
+import org.akanework.gramophone.logic.data.lidarr.LidarrCredentialStore
 import org.akanework.gramophone.ui.JellyfinLoginActivity
+import org.jellyfin.sdk.api.client.extensions.authenticationApi
 import org.akanework.gramophone.ui.fragments.settings.AppearanceSettingsFragment
 import org.akanework.gramophone.ui.fragments.settings.AudioSettingsFragment
 import org.akanework.gramophone.ui.fragments.settings.BehaviorSettingsFragment
@@ -42,7 +49,12 @@ import uk.akane.accord.R
 import uk.akane.accord.ui.MainActivity
 import uk.akane.accord.ui.components.NavigationBar
 import uk.akane.accord.ui.components.SettingsListBuilder
+import uk.akane.accord.ui.components.enablePasteInto
+import uk.akane.accord.logic.settings.FincordSettingsBackup
 import java.io.ByteArrayOutputStream
+import java.time.LocalDate
+import java.util.Arrays
+import java.util.Locale
 
 /**
  * Settings, in the shape the 1.0-stable build uses - sectioned cards rather than the old preference
@@ -55,10 +67,29 @@ import java.io.ByteArrayOutputStream
  */
 class SettingsFragment : Fragment() {
 
+    companion object {
+        private const val ARG_RESTORE_URI = "restore_uri"
+        private const val QUICK_CONNECT_CODE_LENGTH = 6
+        private const val MAX_BACKUP_BYTES = 2 * 1024 * 1024
+        private const val MIN_BACKUP_PASSWORD_LENGTH = 8
+
+        fun forRestore(uri: Uri) = SettingsFragment().apply {
+            arguments = Bundle().apply { putString(ARG_RESTORE_URI, uri.toString()) }
+        }
+    }
+
     private val mainActivity
         get() = requireActivity() as MainActivity
 
     private lateinit var builder: SettingsListBuilder
+
+    private val settingsBackupCreator = registerForActivityResult(
+        ActivityResultContracts.CreateDocument(FincordSettingsBackup.MIME_TYPE),
+    ) { uri -> uri?.let { askForBackupPassword(it, restoring = false) } }
+
+    private val settingsBackupPicker = registerForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri -> uri?.let(::confirmSettingsRestore) }
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -92,6 +123,11 @@ class SettingsFragment : Fragment() {
         navigationBar.post { navigationBar.resetToExpandedState() }
 
         builder = SettingsListBuilder(rootView.findViewById<LinearLayout>(R.id.settings_rows))
+        arguments?.getString(ARG_RESTORE_URI)?.let { raw ->
+            // Consume before showing the dialog, so a rotation cannot stack a second prompt.
+            arguments?.remove(ARG_RESTORE_URI)
+            rootView.post { if (isAdded) confirmSettingsRestore(Uri.parse(raw)) }
+        }
         return rootView
     }
 
@@ -165,6 +201,96 @@ class SettingsFragment : Fragment() {
 
     private fun push(fragment: Fragment) {
         mainActivity.fragmentSwitcherView.addFragmentToCurrentStack(fragment)
+    }
+
+    /**
+     * Authorises the Quick Connect code shown by another Jellyfin client.
+     *
+     * This is intentionally the reverse of the login screen's Quick Connect action: there Accord
+     * displays a code and waits to be approved; here an already signed-in Accord is the approving
+     * client. The access token on [JellyfinClientHolder.api] tells the server which user is granting
+     * the request, so the code is the only value the user needs to enter.
+     */
+    private fun showQuickConnectAuthorizer() {
+        if (!JellyfinCredentialStore.hasStoredSession(requireContext())) {
+            toast(getString(R.string.settings_profile_picture_signed_out))
+            return
+        }
+
+        val content = layoutInflater.inflate(R.layout.dialog_quick_connect_authorize, null)
+        val codeLayout = content.findViewById<TextInputLayout>(R.id.quick_connect_code_layout)
+        val codeField = content.findViewById<TextInputEditText>(R.id.quick_connect_code)
+        val status = content.findViewById<TextView>(R.id.quick_connect_authorize_status)
+        codeLayout.enablePasteInto(codeField)
+
+        val dialog = MaterialAlertDialogBuilder(requireContext())
+            .setTitle(R.string.jellyfin_quick_connect_authorize_title)
+            .setView(content)
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(R.string.jellyfin_quick_connect_authorize_action, null)
+            .create()
+        dialog.setOnShowListener {
+            val authorize = dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE)
+            authorize.setOnClickListener {
+                val code = codeField.text?.toString().orEmpty()
+                    .filter(Char::isLetterOrDigit)
+                    .uppercase(Locale.ROOT)
+                if (code.length != QUICK_CONNECT_CODE_LENGTH) {
+                    codeLayout.error = getString(R.string.jellyfin_quick_connect_code_error)
+                    return@setOnClickListener
+                }
+
+                codeLayout.error = null
+                codeField.isEnabled = false
+                authorize.isEnabled = false
+                status.visibility = View.VISIBLE
+                status.setText(R.string.jellyfin_quick_connect_authorizing)
+                viewLifecycleOwner.lifecycleScope.launch {
+                    val result = withContext(Dispatchers.IO) {
+                        runCatching {
+                            // Network changes can leave the stored LAN URL active while only the
+                            // remote URL is reachable (or vice versa). Pick the working endpoint
+                            // before creating the authenticated client used for approval.
+                            JellyfinEndpoints.selectReachableStoredEndpoint()
+                            val api = checkNotNull(JellyfinClientHolder.api())
+                            if (!api.authenticationApi.getQuickConnectEnabled().content) {
+                                QuickConnectAuthorization.DISABLED
+                            } else if (api.authenticationApi.authorizeQuickConnect(code).content) {
+                                QuickConnectAuthorization.AUTHORIZED
+                            } else {
+                                QuickConnectAuthorization.INVALID_CODE
+                            }
+                        }
+                    }
+                    if (!isAdded || !dialog.isShowing) return@launch
+                    when (result.getOrNull()) {
+                        QuickConnectAuthorization.AUTHORIZED -> {
+                            dialog.dismiss()
+                            toast(getString(R.string.jellyfin_quick_connect_authorized))
+                        }
+                        QuickConnectAuthorization.DISABLED -> {
+                            status.setText(R.string.jellyfin_quick_connect_disabled)
+                            codeField.isEnabled = true
+                            authorize.isEnabled = true
+                        }
+                        QuickConnectAuthorization.INVALID_CODE -> {
+                            codeLayout.error = getString(R.string.jellyfin_quick_connect_code_rejected)
+                            status.visibility = View.GONE
+                            codeField.isEnabled = true
+                            authorize.isEnabled = true
+                            codeField.selectAll()
+                        }
+                        null -> {
+                            status.setText(R.string.jellyfin_quick_connect_authorize_failed)
+                            codeField.isEnabled = true
+                            authorize.isEnabled = true
+                        }
+                    }
+                }
+            }
+        }
+        dialog.show()
+        codeField.requestFocus()
     }
 
     /**
@@ -273,6 +399,138 @@ class SettingsFragment : Fragment() {
         Toast.makeText(requireContext(), message, Toast.LENGTH_SHORT).show()
     }
 
+    private fun createSettingsBackup() {
+        settingsBackupCreator.launch("Fincord-settings-${LocalDate.now()}${FincordSettingsBackup.FILE_EXTENSION}")
+    }
+
+    private fun writeSettingsBackup(uri: Uri, password: CharArray) {
+        val context = requireContext().applicationContext
+        viewLifecycleOwner.lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                try {
+                    runCatching {
+                        val preferences = PreferenceManager.getDefaultSharedPreferences(context)
+                        val bytes = FincordSettingsBackup.fromPreferences(preferences, password)
+                        checkNotNull(context.contentResolver.openOutputStream(uri, "wt")).use {
+                            it.write(bytes)
+                        }
+                    }
+                } finally {
+                    Arrays.fill(password, '\u0000')
+                }
+            }
+            toast(
+                getString(
+                    if (result.isSuccess) R.string.settings_backup_saved
+                    else R.string.settings_backup_failed,
+                ),
+            )
+        }
+    }
+
+    private fun chooseSettingsBackup() {
+        settingsBackupPicker.launch(
+            arrayOf(FincordSettingsBackup.MIME_TYPE, "application/octet-stream"),
+        )
+    }
+
+    private fun confirmSettingsRestore(uri: Uri) {
+        MaterialAlertDialogBuilder(requireContext())
+            .setTitle(R.string.settings_restore_title)
+            .setMessage(R.string.settings_restore_warning)
+            .setPositiveButton(R.string.settings_restore_action) { _, _ ->
+                askForBackupPassword(uri, restoring = true)
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun askForBackupPassword(uri: Uri, restoring: Boolean) {
+        val content = layoutInflater.inflate(R.layout.dialog_settings_backup_password, null)
+        val passwordLayout = content.findViewById<TextInputLayout>(R.id.backup_password_layout)
+        val password = content.findViewById<TextInputEditText>(R.id.backup_password)
+        val confirmationLayout =
+            content.findViewById<TextInputLayout>(R.id.backup_password_confirmation_layout)
+        val confirmation =
+            content.findViewById<TextInputEditText>(R.id.backup_password_confirmation)
+        confirmationLayout.visibility = if (restoring) View.GONE else View.VISIBLE
+
+        val dialog = MaterialAlertDialogBuilder(requireContext())
+            .setTitle(
+                if (restoring) R.string.settings_backup_password_restore_title
+                else R.string.settings_backup_password_create_title,
+            )
+            .setMessage(R.string.settings_backup_password_message)
+            .setView(content)
+            .setPositiveButton(
+                if (restoring) R.string.settings_restore_action
+                else R.string.settings_backup_create,
+                null,
+            )
+            .setNegativeButton(android.R.string.cancel, null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val value = password.text?.toString().orEmpty()
+                when {
+                    value.length < MIN_BACKUP_PASSWORD_LENGTH -> {
+                        passwordLayout.error = getString(
+                            R.string.settings_backup_password_too_short,
+                            MIN_BACKUP_PASSWORD_LENGTH,
+                        )
+                    }
+                    !restoring && value != confirmation.text?.toString().orEmpty() -> {
+                        passwordLayout.error = null
+                        confirmationLayout.error =
+                            getString(R.string.settings_backup_password_mismatch)
+                    }
+                    else -> {
+                        passwordLayout.error = null
+                        confirmationLayout.error = null
+                        val chars = value.toCharArray()
+                        password.text?.clear()
+                        confirmation.text?.clear()
+                        dialog.dismiss()
+                        if (restoring) restoreSettings(uri, chars)
+                        else writeSettingsBackup(uri, chars)
+                    }
+                }
+            }
+        }
+        dialog.show()
+        password.requestFocus()
+    }
+
+    private fun restoreSettings(uri: Uri, password: CharArray) {
+        val context = requireContext().applicationContext
+        viewLifecycleOwner.lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                try {
+                    runCatching {
+                        val bytes = checkNotNull(context.contentResolver.openInputStream(uri)).use {
+                            it.readNBytes(MAX_BACKUP_BYTES + 1)
+                        }
+                        require(bytes.size <= MAX_BACKUP_BYTES) { "Backup is too large" }
+                        FincordSettingsBackup.restoreToPreferences(
+                            PreferenceManager.getDefaultSharedPreferences(context),
+                            bytes,
+                            password,
+                        )
+                    }
+                } finally {
+                    Arrays.fill(password, '\u0000')
+                }
+            }
+            val count = result.getOrNull()
+            if (count == null) {
+                toast(getString(R.string.settings_restore_failed))
+            } else {
+                toast(getString(R.string.settings_restore_complete, count))
+                mainActivity.recreate()
+            }
+        }
+    }
+
     private fun sections(): List<SettingsListBuilder.Section> {
         val context = requireContext()
         val prefs = PreferenceManager.getDefaultSharedPreferences(context)
@@ -301,6 +559,10 @@ class SettingsFragment : Fragment() {
                             }
                         )
                     ) { showProfilePictureOptions() },
+                    SettingsListBuilder.Row.Navigation(
+                        title = getString(R.string.jellyfin_quick_connect_authorize_title),
+                        summary = getString(R.string.jellyfin_quick_connect_authorize_summary),
+                    ) { showQuickConnectAuthorizer() },
                     SettingsListBuilder.Row.Toggle(
                         title = getString(R.string.settings_sync_on_startup),
                         checked = prefs.getBoolean("sync_on_startup", false)
@@ -332,7 +594,14 @@ class SettingsFragment : Fragment() {
                         title = getString(R.string.settings_category_spotify)
                     ) { push(SpotifySettingsFragment()) },
                     SettingsListBuilder.Row.Navigation(
-                        title = getString(R.string.settings_category_lidarr)
+                        title = getString(R.string.settings_category_lidarr),
+                        summary = getString(
+                            if (LidarrCredentialStore.isSyncedThroughPlugin(requireContext())) {
+                                R.string.lidarr_synced_through_plugin
+                            } else {
+                                R.string.settings_lidarr_summary
+                            }
+                        )
                     ) { push(LidarrSettingsFragment()) },
                 )
             ),
@@ -359,6 +628,20 @@ class SettingsFragment : Fragment() {
                 )
             ),
             SettingsListBuilder.Section(
+                title = getString(R.string.settings_section_backup),
+                rows = listOf(
+                    SettingsListBuilder.Row.Navigation(
+                        title = getString(R.string.settings_backup_create),
+                        summary = getString(R.string.settings_backup_create_summary),
+                    ) { createSettingsBackup() },
+                    SettingsListBuilder.Row.Navigation(
+                        title = getString(R.string.settings_restore_title),
+                        summary = getString(R.string.settings_restore_summary),
+                    ) { chooseSettingsBackup() },
+                ),
+                footer = getString(R.string.settings_backup_footer),
+            ),
+            SettingsListBuilder.Section(
                 title = getString(R.string.settings_section_about),
                 rows = listOf(
                     SettingsListBuilder.Row.Navigation(
@@ -379,4 +662,11 @@ class SettingsFragment : Fragment() {
             ),
         )
     }
+
+    private enum class QuickConnectAuthorization {
+        AUTHORIZED,
+        INVALID_CODE,
+        DISABLED,
+    }
+
 }

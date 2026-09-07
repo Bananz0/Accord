@@ -11,6 +11,8 @@
         <item name="textAppearanceLargePopupMenu">@style/TextAppearance.App.BodyLarge</item>
         <item name="textAppearanceSmallPopupMenu">@style/TextAppearance.App.BodyLarge</item>
         <item name="popupMenuBackground">@drawable/popup_background</item>
+        <!-- Replace Android's bright yellow autofill marker with a quiet Accord accent wash. -->
+        <item name="android:autofilledHighlight">@drawable/autofill_highlight</item>
 
         <!--
             Typography and accent from the upstream Accord UI.
@@ -205,9 +207,13 @@
         <item name="colorPrimary">@color/accentColor</item>
     </style>
     <style xmlns:ns0="http://schemas.android.com/tools" name="Theme.Accord.Splash" parent="Theme.SplashScreen.IconBackground">
-        <item name="android:windowBackground">@drawable/ic_launcher_background</item>
+        <!-- Android 12+ takes the splash colour from windowSplashScreenBackground, not
+             android:windowBackground. Set both so every supported Android version gets the same
+             deliberate red instead of inheriting a dynamic/pink surface colour. -->
+        <item name="android:windowBackground">@color/systemRed</item>
+        <item name="windowSplashScreenBackground">@color/systemRed</item>
         <item name="postSplashScreenTheme">@style/Theme.Accord</item>
-        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_anim</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_fincord</item>
         <item name="android:windowSplashScreenBehavior" ns0:targetApi="tiramisu">icon_preferred</item>
     </style>
     <style name="Theme.Accord" parent="Base.Theme.Accord"/>

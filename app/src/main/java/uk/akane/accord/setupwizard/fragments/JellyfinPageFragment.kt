@@ -22,8 +22,8 @@ import uk.akane.cupertino.utils.AnimationUtils
  * library is on a Jellyfin server, so a fresh install needs a server and an account before it has
  * anything to show - asking for storage access first would be asking for the wrong thing.
  *
- * Sign-in itself is [JellyfinLoginActivity], which already handles discovery, the user picker and
- * Quick Connect. It reports nothing back, so the stored session is re-checked when it returns.
+ * Sign-in itself is [JellyfinLoginActivity], which handles discovery, endpoint testing, the user
+ * picker and Quick Connect. It also starts the first forced sync before returning successfully.
  */
 class JellyfinPageFragment : Fragment() {
 
@@ -37,7 +37,7 @@ class JellyfinPageFragment : Fragment() {
     private val signIn = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) {
-        // The login screen finishes without a result, so ask the credential store directly.
+        // Authentication owns starting the sync; this page only reflects the durable session.
         refreshState(animate = true)
     }
 

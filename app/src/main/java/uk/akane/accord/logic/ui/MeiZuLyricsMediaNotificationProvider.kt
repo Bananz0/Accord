@@ -50,6 +50,17 @@ class MeiZuLyricsMediaNotificationProvider(
         setSmallIcon(R.drawable.ic_accord_monochrome)
     }
 
+    /**
+     * The channel the wrapped provider already owns.
+     *
+     * media3 1.10 made this part of the Provider contract so the service can create the channel
+     * before asking for a notification. Delegated rather than answered here: this class only
+     * decorates [DefaultMediaNotificationProvider]'s notification with MeiZu's ticker extras, and
+     * naming a second channel would leave the notification posted to one the service never made.
+     */
+    override fun getNotificationChannelInfo(): MediaNotification.Provider.NotificationChannelInfo =
+        inner.notificationChannelInfo
+
     override fun createNotification(
         mediaSession: MediaSession,
         customLayout: ImmutableList<CommandButton>,

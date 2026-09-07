@@ -6,7 +6,9 @@ import androidx.media3.common.MediaItem
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinLibraryLoader
 import org.akanework.gramophone.logic.data.lastfm.LastFmClient
 import org.akanework.gramophone.logic.data.lastfm.LastFmCredentialStore
+import org.akanework.gramophone.logic.data.matching.MusicText
 import uk.akane.accord.R
+import uk.akane.accord.ui.adapters.BannerItem
 import java.util.Calendar
 import kotlin.math.roundToInt
 
@@ -42,6 +44,21 @@ object HomeFeed {
     private const val ROW_SIZE = 12
     private const val MIX_SIZE = 50
     private const val MIN_MIX_SIZE = 5
+
+    /**
+     * How much more than a mix needs is shuffled before the running order is worked out.
+     *
+     * [spread] can only separate two tracks by the same artist if there is a third to put between
+     * them, so it is given a few times the material it will keep and discards the rest.
+     */
+    private const val POOL_OVERSAMPLE = 3
+
+    /** Banners are the full-bleed cards at the top of the feed; they hold a mix like any other. */
+    private const val BANNER_SIZE = 50
+    private const val BANNER_ARTIST_MIXES = 4
+
+    /** Artist banners rotate daily through this many of the best-ranked artists. */
+    private const val BANNER_ARTIST_POOL = 12
 
     private const val MILLIS_PER_DAY = 24L * 60L * 60L * 1000L
 
@@ -106,7 +123,7 @@ object HomeFeed {
                 .stableShuffle(weeklySeed("because_$seedKey"))
                 .balancedByArtist()
 
-            val songs = (core + neighbours).distinctBy { it.mediaId }.take(MIX_SIZE)
+            val songs = (core + neighbours).asOrderedMix()
             if (songs.size < MIN_MIX_SIZE) return@mapNotNull null
 
             HomeCard(
@@ -185,9 +202,7 @@ object HomeFeed {
             ),
             cards = stale.map { (artist, _, silentDays) ->
                 val title = artist.title.orEmpty()
-                val songs = artist.songList
-                    .stableShuffle(weeklySeed("stale_$title"))
-                    .take(MIX_SIZE)
+                val songs = artist.songList.asMix(weeklySeed("stale_$title"))
                 HomeCard(
                     title = "$title Mix",
                     subtitle = "Last played ${silentDays.describeGap()}",
@@ -338,7 +353,7 @@ object HomeFeed {
     }
 
     private fun mixCard(title: String, subtitle: String, songs: List<MediaItem>): HomeCard? {
-        val selected = songs.distinctBy { it.mediaId }.take(MIX_SIZE)
+        val selected = songs.asOrderedMix()
         if (selected.size < MIN_MIX_SIZE) return null
         return HomeCard(
             title = title,
@@ -398,9 +413,7 @@ object HomeFeed {
             subtitle = context.getString(R.string.home_top_mixes_subtitle),
             cards = artists.map { artist ->
                 val title = artist.title ?: context.getString(R.string.unknown_artist)
-                val songs = artist.songList
-                    .stableShuffle(weeklySeed("artist_mix_$title"))
-                    .take(MIX_SIZE)
+                val songs = artist.songList.asMix(weeklySeed("artist_mix_$title"))
                 HomeCard(
                     title = context.getString(R.string.home_artist_mix, title),
                     subtitle = songs.mapNotNull { it.mediaMetadata.albumTitle?.toString() }
@@ -443,8 +456,7 @@ object HomeFeed {
             cards = genres.map { entries ->
                 val displayName = entries.first().second
                 val songs = entries.map { it.third }
-                    .stableShuffle(weeklySeed("genre_${entries.first().first}"))
-                    .take(MIX_SIZE)
+                    .asMix(weeklySeed("genre_${entries.first().first}"))
                 HomeCard(
                     title = "$displayName Mix",
                     subtitle = songs.mapNotNull { it.mediaMetadata.artist?.toString() }
@@ -521,7 +533,7 @@ object HomeFeed {
                 "One mix per decade you own",
             ),
             cards = decades.map { (decade, tracks) ->
-                val songs = tracks.stableShuffle(weeklySeed("decade_$decade")).take(MIX_SIZE)
+                val songs = tracks.asMix(weeklySeed("decade_$decade"))
                 HomeCard(
                     title = "${decade}s Mix",
                     subtitle = songs.mapNotNull { it.mediaMetadata.artist?.toString() }
@@ -532,6 +544,145 @@ object HomeFeed {
                 )
             },
         )
+    }
+
+    /**
+     * The banner carousel at the top of the home screen.
+     *
+     * This used to be built separately from the shelves below it, and it showed. Two of its
+     * banners fell back to `library.take(50)` whenever the signal behind them was missing - no
+     * favourites yet, nothing played yet - which is not a mix but the first fifty rows of a sorted
+     * library: fifty tracks whose titles all begin with the same letter, every alternate version
+     * of the same song next to its twin, and the same fifty in two different banners. The artist
+     * banners picked the four artists whose names sorted first. Everything here now goes through
+     * [asMix], and a banner with nothing behind it is left out rather than filled with whatever
+     * was at the top of the list.
+     */
+    fun banners(
+        context: Context,
+        library: List<MediaItem>,
+        artists: List<ArtistInput>,
+    ): List<BannerItem> {
+        if (library.isEmpty()) return emptyList()
+
+        val played = library.filter { it.playCount() > 0 }
+        val favourites = library.filter { it.isFavourite() }
+        val likedGenres = library
+            .filter { it.playCount() > 0 || it.isFavourite() }
+            .mapNotNull { it.genreKey() }
+            .toSet()
+
+        val banners = buildList {
+            // The one banner that is always available: it needs no history, only a library.
+            bannerItem(
+                id = "daily_shuffle",
+                title = context.getString(R.string.mix_daily_shuffle),
+                fallbackSummary = context.getString(R.string.mix_daily_shuffle_subtitle),
+                songs = library.asMix(dailySeed("daily_shuffle"), BANNER_SIZE),
+            )?.let(::add)
+
+            bannerItem(
+                id = "heavy_rotation",
+                title = context.getString(R.string.mix_most_played),
+                fallbackSummary = null,
+                songs = played.sortedByDescending { it.playCount() }.asOrderedMix(BANNER_SIZE),
+            )?.let(::add)
+
+            bannerItem(
+                id = "favourites_mix",
+                title = context.getString(R.string.mix_favourites),
+                fallbackSummary = null,
+                songs = favourites.asMix(weeklySeed("favourites_banner"), BANNER_SIZE),
+            )?.let(::add)
+
+            bannerItem(
+                id = "recently_added",
+                title = context.getString(R.string.mix_recently_added),
+                fallbackSummary = null,
+                songs = library.filter { it.addDate() > 0L }
+                    .sortedByDescending { it.addDate() }
+                    .asOrderedMix(BANNER_SIZE),
+            )?.let(::add)
+
+            // Discovery, which is the one thing none of the others do: everything above is drawn
+            // from music the user has already reached for.
+            bannerItem(
+                id = "unheard_mix",
+                title = phrase(
+                    "banner_unheard",
+                    "Yet to be heard",
+                    "First listens",
+                    "New to you",
+                ),
+                fallbackSummary = null,
+                songs = library
+                    .filter { it.playCount() == 0 && it.genreKey() in likedGenres }
+                    .asMix(dailySeed("unheard_banner"), BANNER_SIZE),
+            )?.let(::add)
+
+            bannerArtists(artists).forEach { artist ->
+                val title = artist.title ?: return@forEach
+                bannerItem(
+                    id = "artist_mix_$title",
+                    title = context.getString(R.string.home_artist_mix, title),
+                    fallbackSummary = title,
+                    songs = artist.songList.asMix(weeklySeed("artist_banner_$title"), BANNER_SIZE),
+                    summary = artist.songList.mapNotNull { it.mediaMetadata.albumTitle?.toString() }
+                        .distinct().take(4).joinToString("、"),
+                )?.let(::add)
+            }
+        }
+        return banners.withoutNearDuplicateBanners()
+    }
+
+    /**
+     * The artists worth a banner, rotated daily.
+     *
+     * Ranked by how much the user actually plays them, with catalogue size as a tie-break so a
+     * library with no history still picks the artists it holds most of. The daily rotation through
+     * the top of that ranking is the point: a fixed [BANNER_ARTIST_MIXES] taken straight off the
+     * ranking would show the same four artists every day for as long as the ranking held.
+     */
+    private fun bannerArtists(artists: List<ArtistInput>): List<ArtistInput> = artists
+        .filter { !it.title.isNullOrBlank() && it.songList.size >= MIN_MIX_SIZE }
+        .sortedByDescending { artist -> artist.songList.sumOf { it.playCount() } * 4 + artist.songList.size }
+        .take(BANNER_ARTIST_POOL)
+        .sortedBy { stableHash(dailySeed("artist_banner"), it.title.orEmpty()) }
+        .take(BANNER_ARTIST_MIXES)
+
+    /** A banner, or null when there was not enough behind it to be worth showing one. */
+    private fun bannerItem(
+        id: String,
+        title: String,
+        fallbackSummary: String?,
+        songs: List<MediaItem>,
+        summary: String? = null,
+    ): BannerItem? {
+        if (songs.size < MIN_MIX_SIZE) return null
+        val artistsSummary = summary?.takeIf(String::isNotBlank)
+            ?: songs.mapNotNull { it.mediaMetadata.artist?.toString() }
+                .distinct().take(5).joinToString("、").takeIf(String::isNotBlank)
+            ?: fallbackSummary
+        return BannerItem(
+            id = id,
+            title = title,
+            artistsSummary = artistsSummary,
+            cover = songs.firstNotNullOfOrNull { it.mediaMetadata.artworkUri },
+            songs = songs,
+        )
+    }
+
+    /** Two banners holding the same music are one banner and one wasted slot. */
+    private fun List<BannerItem>.withoutNearDuplicateBanners(): List<BannerItem> = buildList {
+        this@withoutNearDuplicateBanners.forEach { candidate ->
+            val candidateIds = candidate.mediaIds.toSet()
+            val duplicate = any { accepted ->
+                val acceptedIds = accepted.mediaIds.toSet()
+                val smaller = minOf(candidateIds.size, acceptedIds.size)
+                smaller > 0 && candidateIds.intersect(acceptedIds).size.toDouble() / smaller >= 0.90
+            }
+            if (!duplicate) add(candidate)
+        }
     }
 
     /** Last.fm discovery, narrowed to artists that can actually be played from this library. */
@@ -567,9 +718,7 @@ object HomeFeed {
             subtitle = "Playable artist mixes related to $seedName",
             cards = matches.map { artist ->
                 val title = artist.title ?: context.getString(R.string.unknown_artist)
-                val songs = artist.songList
-                    .stableShuffle(weeklySeed("similar_artist_$title"))
-                    .take(MIX_SIZE)
+                val songs = artist.songList.asMix(weeklySeed("similar_artist_$title"))
                 HomeCard(
                     title = "$title Mix",
                     subtitle = context.resources.getQuantityString(
@@ -664,6 +813,110 @@ object HomeFeed {
                 .coerceAtLeast(1)
             List(share) { uri }
         }
+    }
+
+    /**
+     * The one way a loose pool of tracks becomes a mix.
+     *
+     * Three things happen here, and the row is wrong without any of them. One copy of each
+     * recording survives, because a library that holds a song on its single, its album and a
+     * compilation otherwise puts all three in the same mix - which is what made a mix read as a
+     * list of near-identical titles that had nothing to do with each other. The order is a
+     * deterministic shuffle rather than whatever order the library arrived in, which is sorted:
+     * taking the first fifty tracks of a sorted library is an alphabetical slice, not a mix. And
+     * the survivors are then [spread] so the same artist and album are not stacked together.
+     */
+    private fun List<MediaItem>.asMix(seed: String, size: Int = MIX_SIZE): List<MediaItem> =
+        distinctBy { it.mediaId }
+            .dedupeRecordings()
+            .stableShuffle(seed)
+            .take(size * POOL_OVERSAMPLE)
+            .spread()
+            .take(size)
+
+    /**
+     * [asMix] for a pool whose order already means something - most played first, newest first -
+     * so the sequence is kept and only the duplicates and the clumping are dealt with.
+     */
+    private fun List<MediaItem>.asOrderedMix(size: Int = MIX_SIZE): List<MediaItem> =
+        distinctBy { it.mediaId }
+            .dedupeRecordings()
+            .take(size * POOL_OVERSAMPLE)
+            .spread()
+            .take(size)
+
+    /**
+     * One copy of each recording, preferring the copy the user has actually engaged with.
+     *
+     * Editions are the problem this solves: the same song filed under a single, a studio album, a
+     * deluxe reissue and a greatest-hits compilation is four rows with the same title, and a mix
+     * that draws from a whole library will happily take several of them. [MusicText.recordingKey]
+     * is what decides they are the same recording - it folds featured credits and remaster years
+     * away, and deliberately keeps live and remix markers, because those really are different
+     * recordings rather than different spellings of one.
+     */
+    private fun List<MediaItem>.dedupeRecordings(): List<MediaItem> = dedupeBy(
+        key = { it.recordingKey() },
+        prefer = compareBy<MediaItem> { it.playCount() }
+            .thenBy { if (it.isFavourite()) 1 else 0 }
+            // Last resort, so which copy wins does not change between two identical runs.
+            .thenByDescending { it.mediaId },
+    )
+
+    /**
+     * One item per [key], keeping the position of the first of each group and the best of them.
+     *
+     * Position and choice are separated on purpose: which copy of a song is kept should follow the
+     * user's history, while where it sits should follow whatever ordering the caller built.
+     */
+    internal fun <T> List<T>.dedupeBy(key: (T) -> String, prefer: Comparator<T>): List<T> {
+        val groups = LinkedHashMap<String, MutableList<T>>()
+        forEach { item -> groups.getOrPut(key(item)) { mutableListOf() }.add(item) }
+        return groups.values.map { group -> group.maxWithOrNull(prefer) ?: group.first() }
+    }
+
+    /**
+     * Reorders so consecutive tracks come from different artists and different records.
+     *
+     * A shuffle alone still hands out runs - four tracks off one album in a row is an ordinary
+     * outcome of shuffling a library where that album is a tenth of the pool - and a run like that
+     * is what makes a mix feel like a directory listing. Each track is moved no further than the
+     * first position where its neighbour differs, so the shuffle's ordering survives.
+     */
+    private fun List<MediaItem>.spread(): List<MediaItem> = spreadBy { item ->
+        listOfNotNull(item.artistKey().takeIf(String::isNotBlank), item.albumKey())
+    }
+
+    /**
+     * Reorders so no two consecutive items share any of the keys [neighbours] gives them.
+     *
+     * Greedy and order-preserving: each step takes the earliest remaining item that does not
+     * collide with the one just placed, and falls back to the earliest remaining item when every
+     * candidate collides - which is what happens once only one artist is left, and is the right
+     * answer there.
+     */
+    internal fun <T> List<T>.spreadBy(neighbours: (T) -> List<String>): List<T> {
+        if (size < 3) return this
+        val remaining = toMutableList()
+        val ordered = ArrayList<T>(remaining.size)
+        var previous: List<String>? = null
+        while (remaining.isNotEmpty()) {
+            val index = previous?.let { last ->
+                remaining.indexOfFirst { neighbours(it).none(last::contains) }.takeIf { it >= 0 }
+            } ?: 0
+            val chosen = remaining.removeAt(index)
+            previous = neighbours(chosen)
+            ordered.add(chosen)
+        }
+        return ordered
+    }
+
+    /** Identity of the recording rather than of the file, for [dedupeRecordings]. */
+    private fun MediaItem.recordingKey(): String {
+        val title = mediaMetadata.title?.toString()?.takeIf(String::isNotBlank)
+            // Nothing to compare, so it is only ever equal to itself.
+            ?: return "id:$mediaId"
+        return artistKey() + " " + MusicText.recordingKey(title)
     }
 
     /** Round-robin artists so one prolific artist cannot consume an entire personal mix. */

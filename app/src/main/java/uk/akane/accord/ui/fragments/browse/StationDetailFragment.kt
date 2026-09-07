@@ -2,6 +2,8 @@ package uk.akane.accord.ui.fragments.browse
 
 import android.net.Uri
 import android.os.Bundle
+import org.akanework.gramophone.logic.data.jellyfin.QueuePrefetcher
+import coil3.imageLoader
 import android.graphics.Color
 import android.view.LayoutInflater
 import android.view.View
@@ -206,6 +208,7 @@ class StationDetailFragment : SwitcherPostponeFragment(), FragmentSwitcherTransi
             withContext(Dispatchers.Main) {
                 currentTracks = tracks
                 trackAdapter.submitList(tracks)
+                QueuePrefetcher.warmArtwork(requireContext(), tracks, requireContext().imageLoader)
                 refreshDownloadState(tracks)
                 refreshSavedPlaylistState(title, tracks)
                 metaView.text = resources.getQuantityString(
@@ -375,7 +378,7 @@ class StationDetailFragment : SwitcherPostponeFragment(), FragmentSwitcherTransi
         }
     }
 
-    private fun createJellyfinPlaylist(
+    private suspend fun createJellyfinPlaylist(
         context: android.content.Context,
         requestedTitle: String,
         tracks: List<MediaItem>

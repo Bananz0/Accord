@@ -1,7 +1,9 @@
 package uk.akane.accord.ui
 
 import android.Manifest
+import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.content.res.Resources
 import android.graphics.Color
@@ -36,8 +38,10 @@ import org.akanework.gramophone.logic.data.jellyfin.JellyfinCredentialStore
 import org.akanework.gramophone.logic.data.lyrics.LyricsIndexWorker
 import uk.akane.accord.Accord
 import uk.akane.accord.R
+import uk.akane.accord.logic.cast.FincordCast
 import uk.akane.accord.logic.enableEdgeToEdgeProperly
 import uk.akane.accord.logic.isDarkMode
+import uk.akane.accord.logic.isPhoneSized
 import uk.akane.accord.logic.utils.CalculationUtils.lerp
 import uk.akane.accord.logic.utils.UiUtils
 import uk.akane.accord.setupwizard.fragments.SetupWizardFragment
@@ -57,13 +61,18 @@ import androidx.lifecycle.withStateAtLeast
 import androidx.lifecycle.Lifecycle
 import org.akanework.gramophone.logic.data.jellyfin.JellyfinUserImage
 import android.media.AudioManager
+import android.net.Uri
 import android.view.KeyEvent
 import androidx.core.content.ContextCompat
+import androidx.media3.common.DeviceInfo
 import androidx.media3.common.C
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
 import org.akanework.gramophone.logic.data.library.songListSnapshot
+import org.akanework.gramophone.logic.data.catalog.MusicCatalogProviders
+import uk.akane.accord.ui.fragments.RequestsFragment
 import uk.akane.accord.ui.fragments.SettingsFragment
+import uk.akane.accord.logic.settings.FincordSettingsBackup
 
 class MainActivity : AppCompatActivity() {
     companion object {
@@ -74,13 +83,22 @@ class MainActivity : AppCompatActivity() {
         const val PLAYBACK_AUTO_PLAY_ID = "AutoStartId"
         const val PLAYBACK_AUTO_PLAY_POSITION = "AutoStartPos"
 
+        const val APP_LINK_SCHEME = "fincord"
+        const val PLAY_LINK_HOST = "play"
+        const val PLAY_LINK_PATH = "item"
+        private const val SEARCH_LINK_HOST = "search"
+
         private const val PLAY_ON_LAUNCH = "autoplay"
         private const val IMMERSIVE_MODE = "immersive_mode"
         private const val IMMERSIVE_MODE_RESET = "immersive_mode_reset"
         private const val BACKGROUNDLESS_STATUS_BAR = "backgroundless_status_bar"
+        private const val ROTATE_NOW_PLAYING = "rotate_now_playing"
 
         /** How long a launch will wait for the playback service to hand back the saved queue. */
         private const val PLAY_ON_LAUNCH_TIMEOUT_MS = 10_000L
+
+        /** Share sheets usually send "Look at this: <url>", not a bare URL. */
+        private val LINK_IN_TEXT = Regex("""https?://\S+""")
     }
 
     private lateinit var bottomNavigationView: BottomNavigationView
@@ -115,6 +133,7 @@ class MainActivity : AppCompatActivity() {
      */
     private var screenCorners = UiUtils.ScreenCorners(0f, 0f, 0f, 0f)
     lateinit var fragmentSwitcherView: FragmentSwitcherView
+    private lateinit var searchFragment: SearchFragment
 
     private var bottomInset: Int = 0
     private var bottomDefaultRadius: Int = 0
@@ -133,6 +152,39 @@ class MainActivity : AppCompatActivity() {
      * bars for one thing. The volume itself still changes, and the player's slider follows it
      * through the broadcast it already listens for. Collapsed, the keys behave normally.
      */
+    /**
+     * Lets the volume keys reach whatever is actually playing.
+     *
+     * The remote device has to see the key event before anything else consumes it, which is why
+     * this is `dispatchKeyEvent` and not [onKeyDown]: by the time the latter runs the phone's own
+     * stream volume has usually already been adjusted, so the buttons moved a stream nobody was
+     * listening to while the speaker stayed where it was.
+     *
+     * Asked of the controller rather than of Cast, so a Jellyfin session on another device answers
+     * the keys the same way a Chromecast does - the player in front of the session is the one that
+     * knows how to express a volume change to its own target.
+     */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (adjustRemoteVolume(event)) return true
+        return super.dispatchKeyEvent(event)
+    }
+
+    private fun adjustRemoteVolume(event: KeyEvent): Boolean {
+        val raise = when (event.keyCode) {
+            KeyEvent.KEYCODE_VOLUME_UP -> true
+            KeyEvent.KEYCODE_VOLUME_DOWN -> false
+            else -> return false
+        }
+        val player = getPlayer() ?: return false
+        if (player.deviceInfo.playbackType != DeviceInfo.PLAYBACK_TYPE_REMOTE) return false
+        if (!player.isCommandAvailable(Player.COMMAND_ADJUST_DEVICE_VOLUME_WITH_FLAGS)) return false
+        // The release is swallowed too: letting it through would hand the phone a lone key-up and
+        // let the system act on it.
+        if (event.action != KeyEvent.ACTION_DOWN) return true
+        if (raise) player.increaseDeviceVolume(0) else player.decreaseDeviceVolume(0)
+        return true
+    }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         if (isVolumeKey(keyCode) && isNowPlayingOpen()) {
             ContextCompat.getSystemService(this, AudioManager::class.java)?.adjustStreamVolume(
@@ -271,6 +323,10 @@ class MainActivity : AppCompatActivity() {
                     return
                 }
                 if (!fragmentSwitcherView.popBackTopFragmentIfExists()) {
+                    // Leaving the app is only ever right when there is no page behind this one.
+                    // Any other refusal is the navigator being momentarily unable, and handing
+                    // that to the platform is what closed Accord mid-transition.
+                    if (fragmentSwitcherView.canPopBack()) return
                     isEnabled = false
                     onBackPressedDispatcher.onBackPressed()
                     isEnabled = true
@@ -278,7 +334,7 @@ class MainActivity : AppCompatActivity() {
             }
         })
 
-        val searchFragment = SearchFragment()
+        searchFragment = SearchFragment()
         fragmentSwitcherView.setup(
             this,
             listOf(
@@ -337,6 +393,9 @@ class MainActivity : AppCompatActivity() {
 
         floatingPanelLayout.addOnSlideListener(object : FloatingPanelLayout.OnSlideListener {
             override fun onSlideStatusChanged(status: FloatingPanelLayout.SlideStatus) {
+                // Opening the player is what unlocks rotation on a phone, and closing it is what
+                // takes the device back upright.
+                applyOrientationPolicy()
                 when (status) {
                     FloatingPanelLayout.SlideStatus.EXPANDED -> {
                         if (!isDarkMode() &&
@@ -405,6 +464,152 @@ class MainActivity : AppCompatActivity() {
             WindowInsetsCompat.CONSUMED
         }
 
+        handleSettingsBackup(intent)
+        handleAppLink(intent)
+        handleSharedLink(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleSettingsBackup(intent)
+        handleAppLink(intent)
+        handleSharedLink(intent)
+        if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            joinCastSession(intent)
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Not onCreate: the panel restores its own expansion with the rest of the view state,
+        // which happens after onCreate. Deciding earlier would read a closed player on every
+        // rotation and turn the device straight back upright.
+        applyOrientationPolicy()
+        joinCastSession(intent)
+    }
+
+    /** Consumes the Cast remote-control notification's Intent-to-Join deep link once. */
+    private fun joinCastSession(intent: Intent?) {
+        intent ?: return
+        if (FincordCast.joinFrom(intent)) {
+            // FincordCast passed the framework its own copy; clearing ours prevents a rotation or
+            // later onResume from trying to join the same receiver a second time.
+            intent.data = null
+        }
+    }
+
+    /**
+     * Opens the request screen on a link shared from another app.
+     *
+     * This is what makes "share this album to Accord" mean something. Spotify, Deezer and Apple
+     * Music all hand out a plain URL through the share sheet, so the whole journey from hearing a
+     * record somewhere else to asking for it is share, tap, done - no retyping a title into a
+     * search box and hoping the spelling matches.
+     */
+    private fun handleSharedLink(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_SEND) return
+        // The setup wizard is occupying the same container; a request screen pushed underneath it
+        // would be waiting, unreachable, when the wizard finishes.
+        if (!JellyfinCredentialStore.hasStoredSession(this)) return
+        val shared = intent.getStringExtra(Intent.EXTRA_TEXT)?.trim().orEmpty()
+        // Share text is often a sentence with the URL somewhere inside it.
+        val url = LINK_IN_TEXT.find(shared)?.value ?: shared.takeIf {
+            MusicCatalogProviders.looksLikeLink(it)
+        } ?: return
+        // Consumed, so a configuration change does not reopen the screen behind the user.
+        intent.removeExtra(Intent.EXTRA_TEXT)
+        openRequestsFor(url)
+    }
+
+    /** Routes app-owned deep links, consuming each once so rotation cannot replay it. */
+    private fun handleAppLink(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_VIEW) return
+        val data = intent.data ?: return
+        if (data.scheme != APP_LINK_SCHEME) return
+        when (data.host) {
+            PLAY_LINK_HOST -> {
+                val segments = data.pathSegments
+                if (segments.size != 2 || segments[0] != PLAY_LINK_PATH) return
+                val mediaId = segments[1].takeIf { it.isNotBlank() } ?: return
+                intent.data = null
+                playDeepLinkedItem(mediaId)
+            }
+            SEARCH_LINK_HOST -> {
+                val query = data.getQueryParameter("query")?.trim().orEmpty()
+                intent.data = null
+                openSearch(query)
+            }
+        }
+    }
+
+    /** Lets a `.fnc` file be restored by tapping it in Files, not only from the settings picker. */
+    private fun handleSettingsBackup(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_VIEW) return
+        val data = intent.data ?: return
+        val isBackup = intent.type == FincordSettingsBackup.MIME_TYPE ||
+            data.lastPathSegment?.endsWith(
+                FincordSettingsBackup.FILE_EXTENSION,
+                ignoreCase = true,
+            ) == true
+        if (!isBackup) return
+        intent.data = null
+        openSettingsRestore(data)
+    }
+
+    private fun openSettingsRestore(uri: Uri, attempt: Int = 0) {
+        if (fragmentSwitcherView.isNavigationInProgress && attempt < 40) {
+            fragmentSwitcherView.postDelayed({ openSettingsRestore(uri, attempt + 1) }, 32L)
+            return
+        }
+        fragmentSwitcherView.post {
+            fragmentSwitcherView.addFragmentToCurrentStack(SettingsFragment.forRestore(uri))
+        }
+    }
+
+    /** Resolves an exact library ID only after both the session and cached library are ready. */
+    private fun playDeepLinkedItem(mediaId: String) {
+        if (!JellyfinCredentialStore.hasStoredSession(this)) return
+        controllerViewModel.addControllerCallback(lifecycle) { controller, _ ->
+            dispose()
+            lifecycleScope.launch {
+                accord.refreshLibrary(force = false).join()
+                val item = reader.songListSnapshot(timeoutMillis = 10_000L)
+                    .firstOrNull { it.mediaId == mediaId }
+                if (item == null) {
+                    NoToast.makeText(
+                        this@MainActivity,
+                        R.string.no_tracks_available,
+                        NoToast.LENGTH_SHORT,
+                    ).show()
+                    return@launch
+                }
+                runCatching {
+                    controller.setMediaItem(item)
+                    controller.prepare()
+                    controller.play()
+                }
+            }
+        }
+    }
+
+    /** Opens the visible Search destination for Assistant GET_THING and app search links. */
+    private fun openSearch(query: String) {
+        if (!::searchFragment.isInitialized) return
+        bottomNavigationView.selectedItemId = R.id.search
+        returnToSearchRoot(searchFragment, query = query)
+    }
+
+    private fun openRequestsFor(url: String, attempt: Int = 0) {
+        // Cold launch reaches here while the switcher is still assembling its first base fragment;
+        // pushing onto it then leaves the page attached to a container that is about to be swapped.
+        if (fragmentSwitcherView.isNavigationInProgress && attempt < 40) {
+            fragmentSwitcherView.postDelayed({ openRequestsFor(url, attempt + 1) }, 32L)
+            return
+        }
+        fragmentSwitcherView.post {
+            fragmentSwitcherView.addFragmentToCurrentStack(RequestsFragment.forLink(url))
+        }
     }
 
     val bottomHeight: Int
@@ -576,9 +781,14 @@ class MainActivity : AppCompatActivity() {
      * old implementation could open the keyboard over an album.  Finish only when the actual root
      * is visible, and re-run the normal Cupertino pop if the late page registration appears.
      */
-    private fun returnToSearchRoot(searchFragment: SearchFragment, attempt: Int = 0) {
+    private fun returnToSearchRoot(
+        searchFragment: SearchFragment,
+        attempt: Int = 0,
+        query: String? = null,
+    ) {
         if (searchFragment.isVisible && !searchFragment.isHidden) {
-            searchFragment.focusSearch()
+            if (query.isNullOrBlank()) searchFragment.focusSearch()
+            else searchFragment.showQuery(query)
             return
         }
         if (attempt >= 80) return
@@ -587,13 +797,13 @@ class MainActivity : AppCompatActivity() {
         ) {
             returnToDestinationRoot {
                 fragmentSwitcherView.post {
-                    returnToSearchRoot(searchFragment, attempt + 1)
+                    returnToSearchRoot(searchFragment, attempt + 1, query)
                 }
             }
             return
         }
         fragmentSwitcherView.postDelayed(
-            { returnToSearchRoot(searchFragment, attempt + 1) },
+            { returnToSearchRoot(searchFragment, attempt + 1, query) },
             32L,
         )
     }
@@ -693,8 +903,8 @@ class MainActivity : AppCompatActivity() {
      * Asks for a library sync. The work belongs to the application; only the callback is ours,
      * and it is on this activity's scope so it dies with the screen instead of resurrecting it.
      */
-    fun updateLibrary(then: (() -> Unit)? = null) {
-        val job = accord.refreshLibrary()
+    fun updateLibrary(force: Boolean = false, then: (() -> Unit)? = null) {
+        val job = accord.refreshLibrary(force)
         if (then == null) return
         lifecycleScope.launch {
             job.join()
@@ -738,9 +948,14 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    /** Applies the two Appearance choices without giving up the edge-to-edge layout. */
+    /**
+     * Applies the two Appearance choices without giving up the edge-to-edge layout.
+     *
+     * Public because the expanded player takes the bars away while it is open and has to give them
+     * back on the way out: what "back" means is this preference, not "showing".
+     */
     @Suppress("DEPRECATION")
-    private fun applySystemBarMode() {
+    fun applySystemBarMode() {
         val controller = WindowInsetsControllerCompat(window, window.decorView)
         val immersive = prefs.getBoolean(IMMERSIVE_MODE, false)
         val backgroundless = prefs.getBoolean(BACKGROUNDLESS_STATUS_BAR, true)
@@ -750,15 +965,53 @@ class MainActivity : AppCompatActivity() {
         window.statusBarColor =
             if (backgroundless) Color.TRANSPARENT else getColor(R.color.windowColor)
         window.isStatusBarContrastEnforced = !backgroundless
+        window.navigationBarColor = Color.TRANSPARENT
+        window.isNavigationBarContrastEnforced = false
         controller.isAppearanceLightStatusBars = !isDarkMode()
+        controller.isAppearanceLightNavigationBars = !isDarkMode()
 
-        if (immersive) {
+        // The expanded player runs its own immersive mode, and this method is re-asserted on every
+        // focus change - so without this it fought the player: whichever ran last decided whether
+        // the bars were up, and the backgroundless look appeared to need re-toggling to stick.
+        val playerOwnsBars = ::floatingPanelLayout.isInitialized &&
+            floatingPanelLayout.slideFraction >= 1F
+        if (immersive || playerOwnsBars) {
             controller.systemBarsBehavior =
                 WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             controller.hide(WindowInsetsCompat.Type.systemBars())
         } else {
             controller.show(WindowInsetsCompat.Type.systemBars())
         }
+    }
+
+    /**
+     * Decides which orientations this window accepts, given what is on screen.
+     *
+     * A phone-sized window has one arrangement for browsing: a single column behind a bottom bar,
+     * with the mini player above it. Turned on its side it keeps that arrangement in a third of
+     * the height, and the two bars end up sitting on the content - which is why the browsing
+     * screens stay upright on a phone. The expanded player is the exception: it has a real
+     * landscape arrangement, artwork beside the controls, so it is allowed to turn. Tablets and
+     * large foldables have room for either orientation everywhere and are never constrained.
+     */
+    private fun applyOrientationPolicy() {
+        if (!isPhoneSized()) {
+            if (requestedOrientation != ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED) {
+                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            }
+            return
+        }
+        val wanted = when {
+            // Sliding counts as open. Deciding on the panel's resting state would leave the
+            // orientation locked through the drag and snap it afterwards.
+            !isNowPlayingOpen() -> ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT
+            // The opt-in: turn the player with the device even where the system has rotation
+            // locked, which is the usual state for a phone being held to read a lyric sheet.
+            prefs.getBoolean(ROTATE_NOW_PLAYING, false) ->
+                ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+            else -> ActivityInfo.SCREEN_ORIENTATION_USER
+        }
+        if (requestedOrientation != wanted) requestedOrientation = wanted
     }
 
     /**
@@ -772,6 +1025,7 @@ class MainActivity : AppCompatActivity() {
             if (key == IMMERSIVE_MODE || key == BACKGROUNDLESS_STATUS_BAR) {
                 applySystemBarMode()
             }
+            if (key == ROTATE_NOW_PLAYING) applyOrientationPolicy()
         }
 
     override fun onStart() {

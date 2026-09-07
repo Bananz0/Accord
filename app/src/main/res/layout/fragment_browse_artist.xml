@@ -52,6 +52,9 @@
                     android:includeFontPadding="false"
                     android:textColor="@android:color/white"
                     android:textSize="32sp"
+                    android:ellipsize="marquee"
+                    android:marqueeRepeatLimit="marquee_forever"
+                    android:singleLine="true"
                     app:layout_constraintBottom_toBottomOf="parent"
                     app:layout_constraintStart_toStartOf="parent"
                     app:layout_constraintEnd_toStartOf="@id/btnPlay"
@@ -176,7 +179,7 @@
                 android:textColor="@color/onSurfaceColor"
                 android:textSize="20sp" />
 
-            <androidx.recyclerview.widget.RecyclerView
+            <uk.akane.accord.ui.components.TwoAxisRecyclerView
                 android:id="@+id/rvAlbums"
                 android:layout_width="match_parent"
                 android:layout_height="230dp"

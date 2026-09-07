@@ -24,6 +24,19 @@ import kotlin.math.abs
  */
 object GlobalTapHaptics {
 
+    /**
+     * Counts touches on the window, so work started by one tap can tell it has been overtaken.
+     *
+     * Anything that answers a tap after a round trip has a question to ask when the answer comes
+     * back: is this still what the user is waiting for? Attachment and visibility cannot answer it
+     * - the screen behind a late reply is usually the same screen - but a touch that landed in the
+     * meantime says plainly that the user has moved on. Read it when the tap is handled, compare
+     * when the work finishes.
+     */
+    @Volatile
+    var touchGeneration: Long = 0L
+        private set
+
     fun install(window: Window) {
         val decor = window.decorView
         val slop = ViewConfiguration.get(decor.context).scaledTouchSlop
@@ -45,6 +58,7 @@ object GlobalTapHaptics {
         fun onTouch(decor: View, event: MotionEvent) {
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    touchGeneration++
                     downX = event.rawX
                     downY = event.rawY
                     downView = clickableUnder(decor, downX, downY)

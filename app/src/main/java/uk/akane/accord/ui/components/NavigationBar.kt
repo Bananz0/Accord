@@ -2,7 +2,6 @@ package uk.akane.accord.ui.components
 
 import android.animation.ValueAnimator
 import android.content.Context
-import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.graphics.Path
 import android.graphics.BlendMode
@@ -34,7 +33,6 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.findViewTreeLifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.RecyclerView
-import androidx.preference.PreferenceManager
 import coil3.imageLoader
 import coil3.request.Disposable
 import coil3.request.ImageRequest
@@ -115,12 +113,6 @@ class NavigationBar @JvmOverloads constructor(
         resources.getColor(R.color.navigationBarHeaderBlurAppendColor, null)
     private val blurAppendColorDark =
         resources.getColor(R.color.navigationBarHeaderBlurAppendDarkModeColor, null)
-    private val preferences = PreferenceManager.getDefaultSharedPreferences(context)
-    private val statusBarPreferenceListener =
-        SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-            if (key == BACKGROUNDLESS_STATUS_BAR) invalidate()
-        }
-
     private var titleText = ""
     private var returnButtonText = ""
     private var shouldDrawExpandedTitle = true
@@ -420,12 +412,18 @@ class NavigationBar @JvmOverloads constructor(
         }
     }
 
-    private fun statusBarSurfaceTop(): Float =
-        if (preferences.getBoolean(BACKGROUNDLESS_STATUS_BAR, true)) {
-            paddingTop.toFloat()
-        } else {
-            0F
-        }
+    /**
+     * The top of the bar's own surface, which is the top of the window.
+     *
+     * This used to start below the status inset whenever "backgroundless status bar" was on, and
+     * that left a transparent strip with nothing behind it: the page kept scrolling through the
+     * gap, so the time and the battery icon sat on top of moving track titles. Backgroundless is
+     * about Accord not painting a second opaque bar under Android's indicators - the window's own
+     * status colour, which that preference still governs - not about cutting a hole in the blur
+     * that the rest of the bar is made of. The surface only exists once the bar has collapsed, so
+     * a hero header still runs full-bleed to the top of the screen while the page is at rest.
+     */
+    private fun statusBarSurfaceTop(): Float = 0F
 
     private fun drawBottomDivider(canvas: Canvas) {
         canvas.drawRect(
@@ -1149,7 +1147,6 @@ class NavigationBar @JvmOverloads constructor(
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        preferences.registerOnSharedPreferenceChangeListener(statusBarPreferenceListener)
         observeAvatar()
     }
 
@@ -1197,7 +1194,6 @@ class NavigationBar @JvmOverloads constructor(
     }
 
     override fun onDetachedFromWindow() {
-        preferences.unregisterOnSharedPreferenceChangeListener(statusBarPreferenceListener)
         avatarJob?.cancel()
         avatarJob = null
         avatarRequest?.dispose()
@@ -1351,7 +1347,6 @@ class NavigationBar @JvmOverloads constructor(
         EXPANDED_PADDED_HEIGHT.dp.px + EXPANDED_PADDED_HEIGHT_APPEND_RETURN.dp.px
 
     companion object {
-        private const val BACKGROUNDLESS_STATUS_BAR = "backgroundless_status_bar"
         const val EXPANDED_PADDED_HEIGHT = 22
         const val EXPANDED_PADDED_HEIGHT_APPEND_RETURN = -10
         const val EXPANDED_PADDED_HEIGHT_RETURN = 44

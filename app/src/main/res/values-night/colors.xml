@@ -160,6 +160,7 @@
     <!-- ==== Ported from upstream Accord ==== -->
     <color name="accentColor">#FA2D48</color>
     <color name="accentColorFainted">#1AFA2D48</color>
+    <color name="autofillHighlightColor">#24FA2D48</color>
     <color name="coverBorder">#1A000000</color>
     <color name="surfaceColor">#000000</color>
     <color name="onSurfaceColor">#D9FFFFFF</color>

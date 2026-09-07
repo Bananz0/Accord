@@ -375,6 +375,20 @@ class FloatingPanelLayout @JvmOverloads constructor(
         if (!force && newFraction == fraction && fraction != 0F && fraction != 1F) return
         fraction = newFraction
 
+        /*
+         * Nothing has been measured yet.
+         *
+         * The scales below are ratios of these two widths, and on the layout pass that runs before
+         * either view has a width that ratio is 0/0 - NaN. `View.setScaleX` does not tolerate NaN,
+         * it throws `IllegalArgumentException: Cannot set 'scaleX' to Float.NaN`, and since this
+         * runs from `onLayout` the throw takes the activity down before the player is ever drawn.
+         *
+         * Returning costs nothing: `onLayout` only calls this when one of the cached dimensions
+         * changed, so the pass that gives these views a real width calls it again with
+         * force = true.
+         */
+        if (previewView.width == 0 || fullScreenView.width == 0) return
+
         val deltaY = lerp(0f, (fullScreenView.height - previewView.height - previewView.marginBottom).toFloat(), fraction)
 
         // Preview
@@ -833,13 +847,23 @@ class FloatingPanelLayout @JvmOverloads constructor(
         if (hidden == statusBarHidden) return
         statusBarHidden = hidden
         if (hidden) {
-            // Transient rather than a lock: a swipe from the top still brings the bar back
-            // without having to leave the player.
+            // Transient rather than a lock: a swipe from the top still brings the bars back
+            // without having to leave the player, and that first swipe reveals them rather than
+            // pulling the notification shade down over the player.
             insetController.systemBarsBehavior =
                 WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            insetController.hide(WindowInsetsCompat.Type.statusBars())
+            // Both bars, not just the status bar. The expanded player owns the screen, and leaving
+            // the navigation bar up meant the gesture area kept its own surface at the bottom
+            // while the top had gone edge to edge.
+            insetController.hide(WindowInsetsCompat.Type.systemBars())
         } else {
-            insetController.show(WindowInsetsCompat.Type.statusBars())
+            // Not an unconditional show. The app has an immersive setting of its own, and putting
+            // the bars back merely because the player closed took them away from a user who had
+            // asked for them to be gone - opening the now playing screen and closing it again was
+            // enough to undo the preference until something else re-asserted it. The activity owns
+            // that decision, so hand it back rather than guessing here.
+            (activity as? MainActivity)?.applySystemBarMode()
+                ?: insetController.show(WindowInsetsCompat.Type.systemBars())
         }
     }
 
@@ -1402,3 +1426,24 @@ class FloatingPanelLayout @JvmOverloads constructor(
     }
 
 }
+
+/**
+ * True while [FloatingPanelLayout] has faded this half of the panel out of sight.
+ *
+ * The panel cross-fades the mini bar and the full player with alpha, and alpha is not part of hit
+ * testing: a view faded to nothing still takes touches exactly as if it were solid. The panel is
+ * laid over the whole window, in front of the bottom navigation, so a collapsed player's chrome
+ * kept catching taps meant for the tabs underneath it - the toolbar's three dots sits over the
+ * Search tab once the player is scaled down to the bar, so pressing Search opened the playing
+ * song's menu, and its star sits near the Library tab, where a press quietly favourited the song.
+ * Expanded, the same thing happens the other way round: the scaled-up mini bar lies invisibly
+ * across the player's toolbar with its transport buttons over those three dots.
+ *
+ * Read on ACTION_DOWN only. A gesture that began while the view was visible keeps its target for
+ * the rest of the stream, so a drag that collapses the panel under its own finger is not cut off
+ * halfway through.
+ */
+internal fun View.isFadedOutOfPanel(): Boolean = alpha <= PANEL_GHOST_ALPHA
+
+/** Below this the view is no longer on screen in any meaningful sense; the fade over/undershoots. */
+private const val PANEL_GHOST_ALPHA = 0.01F

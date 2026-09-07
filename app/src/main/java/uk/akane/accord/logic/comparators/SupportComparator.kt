@@ -37,22 +37,25 @@ class SupportComparator<T, U>(
             return Comparator { _, _ -> 0 }
         }
 
-        fun <T> createInversionComparator(cmp: Comparator<T>, invert: Boolean = false, fallback: Comparator<T>? = null):
-                Comparator<T> {
-            if (!invert) return cmp
-            return SupportComparator(cmp, fallback, true) { it }
+        fun <T> createInversionComparator(
+            cmp: Comparator<T>,
+            invert: Boolean = false,
+            fallback: Comparator<T>? = null,
+        ): Comparator<T> {
+            if (!invert && fallback == null) return cmp
+            return SupportComparator(cmp, fallback, invert) { it }
         }
 
         fun <T> createAlphanumericComparator(
             inverted: Boolean = false,
-            cnv: (T) -> CharSequence,
+            cnv: (T) -> CharSequence?,
             fallback: Comparator<T>? = null
         ): Comparator<T> {
             return SupportComparator(
                 AlphaNumericComparator(),
                 fallback,
                 inverted
-            ) { cnv(it).toString() }
+            ) { cnv(it)?.toString() }
         }
     }
 }

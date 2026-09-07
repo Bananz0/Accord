@@ -1,9 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The sheet itself: rounded at the top only, since the bottom runs off the screen edge. -->
+<!-- Floating glass card; every edge remains on screen. -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
-    <solid android:color="@color/settings_background" />
-    <corners
-        android:topLeftRadius="22dp"
-        android:topRightRadius="22dp" />
+    <solid android:color="@color/output_picker_surface" />
+    <corners android:radius="26dp" />
 </shape>
