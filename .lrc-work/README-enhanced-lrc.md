@@ -1,5 +1,18 @@
 # Accord Enhanced LRC worker
 
+> **The desktop app lives in its own repository:**
+> [Bananz0/fincord-lyrics-studio](https://github.com/Bananz0/fincord-lyrics-studio).
+>
+> It is the same job with a window on it, and it runs the work across whatever
+> accelerators a machine has - CUDA, Intel NPU, Apple Silicon, CPU - chosen per stage.
+> Deliberately a separate repo rather than a submodule: it moves at its own pace and
+> nothing in the Gradle build needs it present.
+>
+> **`enhanced_lrc.py` and the studio's `pipeline_core.py` now carry the same alignment
+> rules in two copies.** They were merged from the same fix and agree today; if one is
+> changed, change the other. Folding them into a single shared module is the open item.
+
+
 The karaoke service runs a persistent CPU Enhanced LRC worker. Two additional
 CUDA workers run under WSL on the laptop and lease work through an encrypted,
 loopback-only SSH tunnel. Lidarr sends release-import, upgrade, rename, and
