@@ -533,6 +533,18 @@ def normalise_word(word: str, labels: set[str]) -> str:
     return "".join(ch for ch in word.upper() if ch in labels)
 
 
+# How long a line could plausibly take to sing: a base allowance plus a share per word.
+# Used to bound the CTC window so an instrumental gap is never offered to the aligner as
+# somewhere to put a word.
+PLAUSIBLE_LINE_BASE_S = 2.0
+PLAUSIBLE_PER_WORD_S = 0.7
+
+# A word may legitimately be held - a sustained note, a spoken-word passage. What is not
+# legitimate is a short line, sung as one phrase, whose interior words are pulled apart.
+MAX_INTERIOR_HOLD_MS = 3000
+SHORT_LINE_WORDS = 8
+
+
 def evenly_spaced(start: float, end: float, count: int) -> list[tuple[float, float]]:
     if count == 0:
         return []
@@ -769,7 +781,24 @@ def align_track(path: Path, lines: list[tuple[float, str]], duration: float) -> 
         if not active:
             continue
         window_start = max(0.0, line_start - 0.45)
-        window_end = min(duration, max(line_start + 0.5, next_start + 0.25))
+        # Bounded by what the line could plausibly take to sing, not by where the next
+        # line starts.
+        #
+        # Running the window to next_start assumes CTC will leave an instrumental gap as
+        # blank frames. It does not, reliably: where the acoustic evidence for a word is
+        # weak the aligner places it anywhere in the window that scores best. Given the
+        # eleven seconds between two lines of "SHE DID IT AGAIN" it produced
+        #
+        #     [00:01.47] <00:01.47>I <00:02.94>know <00:11.54>you <00:12.74>do<00:12.78>
+        #
+        # for a phrase sung inside three, holding `know` for 8.6 s and lighting `you do`
+        # as the next line began. A library scan found the same shape in 12,511 short
+        # lines across 5,428 of 9,710 files.
+        #
+        # Two thirds of a second a word plus slack is generous for sung delivery and an
+        # order of magnitude tighter than an instrumental.
+        plausible = line_start + PLAUSIBLE_LINE_BASE_S + PLAUSIBLE_PER_WORD_S * len(active)
+        window_end = min(duration, max(line_start + 0.5, min(next_start + 0.25, plausible)))
         timings: list[tuple[float, float] | None] = [None] * len(original_words)
 
         def run_alignment(begin: float, end: float) -> list[tuple[float, float]]:
@@ -801,7 +830,11 @@ def align_track(path: Path, lines: list[tuple[float, str]], duration: float) -> 
             try:
                 word_timings = run_alignment(window_start, window_end)
             except Exception:
-                word_timings = run_alignment(max(0, line_start - 1.5), min(duration, max(line_start + 1, next_start + 1.5)))
+                # The retry widens the window a little, but still may not run to the
+                # next line - that is the failure being fixed, not a fallback from it.
+                retry_end = min(duration, max(line_start + 1,
+                                              min(next_start + 1.5, plausible + 1.5)))
+                word_timings = run_alignment(max(0, line_start - 1.5), retry_end)
             for (original_index, _), timing in zip(active, word_timings):
                 timings[original_index] = timing
                 aligned_words += 1
@@ -823,8 +856,12 @@ def align_track(path: Path, lines: list[tuple[float, str]], duration: float) -> 
             current = max(cursor, timing[0])
             starts.append(current)
             cursor = current + 0.01
+        # A line ends where its last word ends. It used to be clamped towards the next
+        # line's start, which stretches every line across whatever silence follows it and
+        # is the second half of the same defect: Enhanced LRC infers a word's end from the
+        # next marker, so a stretched line hands that silence to its final word.
         end_time = max(starts[-1] + 0.08, timings[-1][1])
-        end_time = min(max(end_time, starts[-1] + 0.04), max(next_start - 0.01, starts[-1] + 0.04))
+        end_time = min(end_time, max(next_start - 0.01, starts[-1] + 0.04))
         pieces = [stamp(starts[i]) + word for i, word in enumerate(original_words)]
         rendered.append(stamp(starts[0], "[]") + " " + " ".join(pieces) + stamp(end_time))
         previous_rendered_end = end_time
@@ -844,6 +881,48 @@ def validate(rendered: list[str], duration: float, aligned: int, fallback: int) 
         raise NeedsReview("Generated word cues extend past the audio duration")
     if fallback > max(3, math.floor((aligned + fallback) * 0.02)):
         raise NeedsReview(f"Fallback timing exceeded the safety threshold ({fallback} words)")
+    stretched = stretched_word(rendered)
+    if stretched:
+        raise NeedsReview(stretched)
+
+
+def stretched_word(rendered: list[str]) -> str | None:
+    """
+    A word held far longer than anyone sings one, which is the defect this gate exists for.
+
+    Everything else validate() checks - monotonicity, overrun, fallback rate - passed the
+    file that started this:
+
+        [00:01.47] <00:01.47>I <00:02.94>know <00:11.54>you <00:12.74>do<00:12.78>
+
+    Its cues rise, they sit inside the audio, and they were aligned rather than guessed.
+    It is still wrong: `know` is given 8.6 seconds of an instrumental the singer spends
+    silent, so the highlight parks on it and lights `you do` as the next line begins.
+
+    Only interior gaps count, and only on short lines. The span from the last word to the
+    line's closing marker is a legitimate way to say the line ended, and a line of many
+    words is more often a spoken passage than a mistake. A genuine held note passes: two
+    seconds on "Ohhhh" is under the threshold and always will be.
+
+    It does reject the extreme cases in long-form tracks - a J. Cole outro line holding a
+    word for 282 seconds is flagged, and should be. That output is wrong wherever it
+    appears; the line ought to have been split. Rejection means needs_review rather than
+    installation, so the track simply keeps whatever lyrics it already had.
+    """
+    for line in rendered:
+        cues = [
+            int(mm) * 60000 + int(ss) * 1000 + int(fr) * 10 ** (3 - len(fr))
+            for mm, ss, fr in re.findall(r"<(\d+):(\d{2})[.:](\d{2,3})>", line)
+        ]
+        words = len(cues) - 1          # the final cue closes the line
+        if words < 2 or words > SHORT_LINE_WORDS:
+            continue
+        interior = [cues[i + 1] - cues[i] for i in range(len(cues) - 2)]
+        if interior and max(interior) >= MAX_INTERIOR_HOLD_MS:
+            held = max(interior) / 1000
+            return (f"A word is held {held:.1f}s inside a {words}-word line, which is an "
+                    f"instrumental gap charged to a word rather than the line ending")
+    return None
 
 
 def install(path: Path, content: str) -> Path:
