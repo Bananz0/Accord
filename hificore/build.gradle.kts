@@ -4,12 +4,11 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     id("com.android.library")
-    kotlin("android")
 }
 
 android {
     namespace = "org.nift4.gramophone.hificore"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         minSdk = 21

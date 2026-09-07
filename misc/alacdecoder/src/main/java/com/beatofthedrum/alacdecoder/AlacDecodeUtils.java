@@ -1,11 +1,33 @@
 /*
 ** AlacDecodeUtils.java
 **
-** Copyright (c) 2011 Peter McQuillan
+** Copyright (c) 2011-2014 Peter McQuillan
 **
-** All Rights Reserved.
-**                       
-** Distributed under the BSD Software License (see license.txt)  
+** Based on the ALAC decoder - Copyright (c) 2005 David Hammerton
+**
+** All rights reserved.
+**
+** Redistribution and use in source and binary forms, with or without
+** modification, are permitted provided that the following conditions are met:
+**
+**     * Redistributions of source code must retain the above copyright notice,
+**       this list of conditions and the following disclaimer.
+**     * Redistributions in binary form must reproduce the above copyright notice,
+**       this list of conditions and the following disclaimer in the
+**       documentation and/or other materials provided with the distribution.
+**     * The name of the author may not be used to endorse or promote products
+**       derived from this software without specific prior written permission.
+**
+** THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+** AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+** IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+** ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR
+** ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+** DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+** SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+** CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+** OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+** OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 **
 */
 package com.beatofthedrum.alacdecoder;
@@ -20,6 +42,7 @@ import androidx.media3.decoder.SimpleDecoderOutputBuffer;
 import org.nift4.alacdecoder.AlacDecoderException;
 
 import java.nio.ByteBuffer;
+import java.util.Arrays;
 
 @OptIn(markerClass = UnstableApi.class)
 public class AlacDecodeUtils
@@ -535,18 +558,19 @@ public class AlacDecodeUtils
 				int right;
 
 				midright = buffer_a[i];
-				if (bitspersample == 20) {
-					midright = midright << 4;
-				}
 				difference = buffer_b[i];
-				if (bitspersample == 20) {
-					difference = difference << 4;
-				}
 
 				right = midright - ((difference * interlacing_leftweight) >> interlacing_shift);
 				left = right + difference;
 
-				if (uncompressed_bytes != 0 && uncompressed_bytes_buffer_a != null)
+				if (bitspersample == 20) {
+					left = left << 4;
+				}
+				if (bitspersample == 20) {
+					right = right << 4;
+				}
+
+				if (bitspersample == 24 && uncompressed_bytes != 0 && uncompressed_bytes_buffer_a != null)
 				{
 					int mask = ~(0xFFFFFFFF << (uncompressed_bytes * 8));
 					left <<= (uncompressed_bytes * 8);
@@ -557,9 +581,9 @@ public class AlacDecodeUtils
 				}
 
 				buffer_out.position((i * numchannels + channel_index_a) * 3);
-				Util.putInt24(buffer_out, left & 0xffffff);
+				Util.putInt24(buffer_out, (left << 8) >> 8);
 				buffer_out.position((i * numchannels + channel_index_b) * 3);
-				Util.putInt24(buffer_out, right & 0xffffff);
+				Util.putInt24(buffer_out, (right << 8) >> 8);
 			}
 
 			return;
@@ -580,7 +604,7 @@ public class AlacDecodeUtils
 				right = right << 4;
 			}
 
-			if (uncompressed_bytes != 0 && uncompressed_bytes_buffer_a != null)
+			if (bitspersample == 24 && uncompressed_bytes != 0 && uncompressed_bytes_buffer_a != null)
 			{
 				int mask = ~(0xFFFFFFFF << (uncompressed_bytes * 8));
 				left <<= (uncompressed_bytes * 8);
@@ -591,9 +615,9 @@ public class AlacDecodeUtils
 			}
 
 			buffer_out.position((i * numchannels + channel_index_a) * 3);
-			Util.putInt24(buffer_out, left & 0xffffff);
+			Util.putInt24(buffer_out, (left << 8) >> 8);
 			buffer_out.position((i * numchannels + channel_index_b) * 3);
-			Util.putInt24(buffer_out, right & 0xffffff);
+			Util.putInt24(buffer_out, (right << 8) >> 8);
 
 		}
 
@@ -747,7 +771,8 @@ public class AlacDecodeUtils
 				if (decoutbuffer.data == null) {
 					decoutbuffer.init(decinbuffer.timeUs, outputsize);
 				} else if (outputsize > decoutbuffer.data.limit()) {
-					Log.w("AlacDecoder", "had to grow buffer, shouldn't happen");
+					Log.w("AlacDecoder", "had to grow buffer from " +
+							decoutbuffer.data.limit() + " to " + outputsize + ", shouldn't happen");
 					decoutbuffer.grow(outputsize);
 				}
 				ByteBuffer outbuffer = Util.castNonNull(decoutbuffer.data);
@@ -851,7 +876,7 @@ public class AlacDecodeUtils
 							int sample = alac.outputsamples_buffer[channel_index][i] << 4;
 
 							outbuffer.position((i * alac.numchannels + channel_index_a) * 3);
-							Util.putInt24(outbuffer, sample & 0xffffff);
+							Util.putInt24(outbuffer, (sample << 8) >> 8);
 						}
 						break;
 					case 24: {
@@ -866,7 +891,7 @@ public class AlacDecodeUtils
 							}
 
 							outbuffer.position((i * alac.numchannels + channel_index_a) * 3);
-							Util.putInt24(outbuffer, sample);
+							Util.putInt24(outbuffer, (sample << 8) >> 8);
 
 						}
 						break;
@@ -921,7 +946,8 @@ public class AlacDecodeUtils
 				if (decoutbuffer.data == null) {
 					decoutbuffer.init(decinbuffer.timeUs, outputsize);
 				} else if (outputsize > decoutbuffer.data.limit()) {
-					Log.w("AlacDecoder", "had to grow buffer, shouldn't happen");
+					Log.w("AlacDecoder", "had to grow buffer from " +
+							decoutbuffer.data.limit() + " to " + outputsize + ", shouldn't happen");
 					decoutbuffer.grow(outputsize);
 				}
 				ByteBuffer outbuffer = Util.castNonNull(decoutbuffer.data);
@@ -1048,8 +1074,8 @@ public class AlacDecodeUtils
 							audiobits_b = audiobits_b << (alac.bitspersample_input - 16);
 							audiobits_b = audiobits_b | readbits(alac, alac.bitspersample_input - 16);
 							if (alac.bitspersample_input != 32) {
-								x = audiobits_a & ((1 << alac.bitspersample_input) - 1);
-								audiobits_a = (x ^ m) - m;        // sign extend our data bits
+								x = audiobits_b & ((1 << alac.bitspersample_input) - 1);
+								audiobits_b = (x ^ m) - m;        // sign extend our data bits
 							}
 
 							alac.outputsamples_buffer[channel_index][i] = audiobits_a;
@@ -1100,9 +1126,7 @@ public class AlacDecodeUtils
 				Log.w("AlacDecoder", "got " + size + " bytes of filler");
 			} else if (frame_type == 6) {
 				int tag = readbits(alac, 4);
-				if (tag != 0) {
-					throw new AlacDecoderException("unsupported data stream element tag " + tag);
-				}
+				boolean filler = tag == 0;
 				boolean align = readbit(alac) != 0;
 				int size = readbits(alac, 8);
 				if (size == 255)
@@ -1115,15 +1139,21 @@ public class AlacDecodeUtils
 					}
 				} else if (!align) {
 					// encoder doesn't do this and we're paranoid.
-					throw new AlacDecoderException("found DSE data with align disabled");
+					filler = false;
 				}
+				int[] buffer = new int[size];
 				for (int i = 0; i < size; i++) {
-					int data = readbits(alac, 8);
-					if (data != 0x5a) {
-						throw new AlacDecoderException("found non-filler DSE data " + data);
+					buffer[i] = readbits(alac, 8);
+					if (buffer[i] != 0x5a) {
+						filler = false;
 					}
 				}
-				Log.w("AlacDecoder", "got " + size + " bytes of filler DSE");
+				if (filler) {
+					Log.w("AlacDecoder", "got " + size + " bytes of filler DSE, " +
+							"debug encoder used");
+				} else {
+					Log.w("AlacDecoder", "got DSE: " + Arrays.toString(buffer));
+				}
 			} else if (frame_type == 2 || frame_type == 5) {
 				throw new AlacDecoderException("refalac does not support tag " + frame_type + ", is this file corrupt? or is there a new version of ALAC?");
 			} else if (frame_type == 7) {
@@ -1132,14 +1162,15 @@ public class AlacDecodeUtils
 				throw new AlacDecoderException("invalid tag " + frame_type);
 			}
 		}
+		int length = decinbuffer.data.limit();
 		if (alac.input_buffer_bitaccumulator > 0) {
 			int cnt = 8 - alac.input_buffer_bitaccumulator;
 			int bits = readbits(alac, cnt);
 			if (bits != 0) {
-				throw new AlacDecoderException("found trailing data " + bits + " in last " + cnt + " bits");
+				throw new AlacDecoderException("found trailing data " + bits + " in last " + cnt
+					+ " bits (" + (length - alac.ibIdx) + " bytes trailing)");
 			}
 		}
-		int length = decinbuffer.data.limit();
 		if (alac.ibIdx < length) {
 			throw new AlacDecoderException("found " + (length - alac.ibIdx) + " bytes trailing");
 		}

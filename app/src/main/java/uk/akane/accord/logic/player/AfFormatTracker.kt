@@ -124,6 +124,20 @@ class AfFormatTracker(
         this.audioSink = sink
     }
 
+    /**
+     * The platform track behind the sink, for [PlaybackClockProbe].
+     *
+     * A volatile snapshot rather than the reflection path, because the probe has to sample this
+     * from the *application* thread - ExoPlayer.getCurrentPosition may only be read there, and a
+     * clock comparison is worthless if its two halves come from different moments. The track
+     * reference is published here by the playback thread whenever it changes; reading a position
+     * off an AudioTrack is a thread-safe native call, and a track released underneath us fails
+     * inside the probe's own runCatching rather than here.
+     */
+    @Volatile
+    var probeAudioTrack: AudioTrack? = null
+        private set
+
     override fun onAudioTrackInitialized(
         eventTime: AnalyticsListener.EventTime,
         audioTrackConfig: AudioTrackConfig
@@ -148,6 +162,7 @@ class AfFormatTracker(
                 }
                 lastPeriodUid?.let { formatChangedCallback?.invoke(null, it) }
                 this.lastAudioTrack = audioTrack
+                this.probeAudioTrack = audioTrack
                 this.lastPeriodUid = eventTime.mediaPeriodId?.periodUid
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                     audioTrack?.addOnRoutingChangedListener(
@@ -183,6 +198,7 @@ class AfFormatTracker(
                     )
                 }
                 lastAudioTrack = null
+                probeAudioTrack = null
                 formatChangedCallback?.invoke(null, lastPeriodUid)
                 lastPeriodUid = null
                 format = null

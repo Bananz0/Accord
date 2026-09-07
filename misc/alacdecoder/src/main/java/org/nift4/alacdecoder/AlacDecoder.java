@@ -73,8 +73,10 @@ public class AlacDecoder extends SimpleDecoder<DecoderInputBuffer, SimpleDecoder
             return new AlacDecoderException("input has extra data, why?");
         try {
             int limit = AlacDecodeUtils.decode_frame(file, inputBuffer, outputBuffer);
-            Util.castNonNull(outputBuffer.data).position(0);
-            outputBuffer.data.limit(limit);
+            if (outputBuffer.data != null) {
+                outputBuffer.data.position(0);
+                outputBuffer.data.limit(limit);
+            }
             return null;
         } catch (AlacDecoderException e) {
             return e;
