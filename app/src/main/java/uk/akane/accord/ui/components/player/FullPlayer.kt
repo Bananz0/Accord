@@ -2978,10 +2978,19 @@ class FullPlayer @JvmOverloads constructor(
      * as well, and whichever wrote last would win - so this drives one factor and
      * [applyQualityBadgeAlpha] multiplies the two together.
      */
+    private fun cancelQualityFlash() {
+        // cancel() also invokes onAnimationEnd: remove the continuation before cancelling,
+        // otherwise an interrupted fade-in starts a fade-out that we immediately lose track of.
+        qualityFlashAnimator?.removeAllListeners()
+        qualityFlashAnimator?.cancel()
+        qualityFlashAnimator = null
+    }
+
     private fun flashQualityBadge() {
+        if (!isAttachedToWindow) return
         if (!qualityBadgeFlashes()) return
         if (currentQualityDetails == null) return
-        qualityFlashAnimator?.cancel()
+        cancelQualityFlash()
         qualityFlashAlpha = 0F
         qualityFlashing = true
         syncQualityBadgeVisibility()
@@ -3073,7 +3082,7 @@ class FullPlayer @JvmOverloads constructor(
         // faded out is not the same as gone, and an invisible view still answers taps - which is
         // exactly how the play button's oversized square came to swallow presses meant for this row.
         if (!qualityBadgeFlashes()) {
-            qualityFlashAnimator?.cancel()
+            cancelQualityFlash()
             qualityFlashing = false
             qualityFlashAlpha = 1F
         }
@@ -5313,9 +5322,9 @@ class FullPlayer @JvmOverloads constructor(
         removeCallbacks(hideControlsRunnable)
         lyricsRefreshJob?.cancel()
         lyricsRefreshJob = null
-        qualityFlashAnimator?.removeAllListeners()
-        qualityFlashAnimator?.cancel()
-        qualityFlashAnimator = null
+        cancelCoverLoad()
+        cancelQualityFlash()
+        qualityAvailableHint.animate().cancel()
         qualityFlashing = false
         volumeUpdateAnimator?.cancel()
         coverPauseAnimator?.cancel()

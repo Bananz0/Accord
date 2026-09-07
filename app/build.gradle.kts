@@ -364,7 +364,11 @@ dependencies {
     // wait for charge and wifi, survive the app being killed, and resume rather than restart.
     implementation("androidx.work:work-runtime-ktx:2.11.2")
     // --- below does not apply to release builds ---
-    debugImplementation("com.squareup.leakcanary:leakcanary-android:3.0-alpha-8")
+    // 3.0-alpha-9 (2026-06-25). Heap dumps now land in the app's no-backup directory rather
+    // than public Download, so pull them with
+    //   adb exec-out run-as com.bananz0.fincord.debug cat no_backup/leakcanary/<name>.hprof
+    // rather than from /sdcard. Debug-only, and nothing in this tree calls its API.
+    debugImplementation("com.squareup.leakcanary:leakcanary-android:3.0-alpha-9")
     testImplementation("junit:junit:4.13.2")
 }
 
