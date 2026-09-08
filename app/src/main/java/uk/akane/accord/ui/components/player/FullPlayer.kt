@@ -1395,8 +1395,10 @@ class FullPlayer @JvmOverloads constructor(
                     if (outputVolumeBusy()) return
                     routeVolumeSliders[route.id]?.let { slider ->
                         slider.valueTo = route.volumeMax.coerceAtLeast(1).toFloat()
-                        slider.value = route.volume.toFloat().coerceIn(0F, slider.valueTo)
-                        slider.invalidate()
+                        animateSheetSliderTo(
+                            slider,
+                            route.volume.toFloat().coerceIn(0F, slider.valueTo),
+                        )
                     }
                 }
 
@@ -1418,6 +1420,7 @@ class FullPlayer @JvmOverloads constructor(
                 }
                 if (outputPickerDialog === sheet) outputPickerDialog = null
                 outputPickerRefresh = null
+                cancelSheetSliderAnimations()
                 outputPickerPhoneVolumeSlider = null
                 routeVolumeSliders.clear()
                 // Cleared above first: the scheduler checks whether this sheet is still showing.
@@ -1836,6 +1839,47 @@ class FullPlayer @JvmOverloads constructor(
             controller.setDeviceVolume(boundedVolume, 0)
         } else {
             audioManager?.setStreamVolume(AudioManager.STREAM_MUSIC, boundedVolume, 0)
+        }
+    }
+
+    /**
+     * Animators for the output sheet's rows, one per slider.
+     *
+     * The player's bar has always eased towards a new level; the sheet's rows assigned it, so a
+     * volume key stepped the active endpoint's slider while the bar behind the sheet glided. Same
+     * gesture, same value, two different animations.
+     *
+     * Held so each can be cancelled: a running ValueAnimator sits in the platform's thread-local
+     * AnimationHandler and keeps its update listener - and through it a sheet row, and the player -
+     * alive until it finishes or is cancelled.
+     */
+    private val sheetSliderAnimators = mutableMapOf<OverlaySlider, ValueAnimator>()
+
+    private fun cancelSheetSliderAnimation(slider: OverlaySlider) {
+        // Remove before cancelling: cancel() runs the end listener, which would otherwise remove
+        // whatever is under this key by the time it does.
+        sheetSliderAnimators.remove(slider)?.cancel()
+    }
+
+    private fun cancelSheetSliderAnimations() {
+        sheetSliderAnimators.values.toList().forEach { it.cancel() }
+        sheetSliderAnimators.clear()
+    }
+
+    /** Eases [slider] to [targetValue], the way the player's own volume bar moves. */
+    private fun animateSheetSliderTo(slider: OverlaySlider, targetValue: Float) {
+        cancelSheetSliderAnimation(slider)
+        val startValue = slider.value
+        if (startValue == targetValue) return
+        sheetSliderAnimators[slider] = ValueAnimator.ofFloat(startValue, targetValue).apply {
+            duration = LONG_DURATION
+            interpolator = AnimationUtils.easingStandardInterpolator
+            addUpdateListener {
+                slider.value = it.animatedValue as Float
+                slider.invalidate()
+            }
+            doOnEnd { sheetSliderAnimators.remove(slider) }
+            start()
         }
     }
 
@@ -3768,6 +3812,7 @@ class FullPlayer @JvmOverloads constructor(
             slider.addValueChangeListener(object : OverlaySlider.ValueChangeListener {
                 override fun onStartTracking(slider: OverlaySlider) {
                     slider.parent?.requestDisallowInterceptTouchEvent(true)
+                    cancelSheetSliderAnimation(slider)
                     outputVolumeDragging = true
                 }
 
@@ -3811,6 +3856,7 @@ class FullPlayer @JvmOverloads constructor(
                 // The row underneath is a click target that would switch playback to this
                 // destination; dragging its volume is not a request to move the music there.
                 slider.parent?.requestDisallowInterceptTouchEvent(true)
+                cancelSheetSliderAnimation(slider)
                 outputVolumeDragging = true
             }
 
@@ -3925,9 +3971,11 @@ class FullPlayer @JvmOverloads constructor(
         val manager = audioManager ?: return
         val maximum = manager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
         slider.valueTo = maximum.toFloat()
-        slider.value = manager.getStreamVolume(AudioManager.STREAM_MUSIC)
-            .toFloat().coerceIn(0F, slider.valueTo)
-        slider.invalidate()
+        animateSheetSliderTo(
+            slider,
+            manager.getStreamVolume(AudioManager.STREAM_MUSIC)
+                .toFloat().coerceIn(0F, slider.valueTo),
+        )
     }
 
     private fun routeSubtitle(route: MediaRouter.RouteInfo): String {
@@ -5407,6 +5455,7 @@ class FullPlayer @JvmOverloads constructor(
         lyricsRefreshJob?.cancel()
         lyricsRefreshJob = null
         keepScreenOn = false
+        cancelSheetSliderAnimations()
         cancelCoverLoad()
         cancelQualityFlash()
         qualityAvailableHint.animate().cancel()
