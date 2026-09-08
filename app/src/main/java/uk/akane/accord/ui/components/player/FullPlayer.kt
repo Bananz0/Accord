@@ -15,6 +15,7 @@ import android.content.BroadcastReceiver
 import android.content.Intent
 import android.content.IntentFilter
 import android.media.AudioManager
+import android.view.KeyEvent
 import android.media.MediaRoute2Info
 import android.media.MediaRouter2
 import android.net.Uri
@@ -250,7 +251,20 @@ class FullPlayer @JvmOverloads constructor(
         get() = instance?.deviceInfo?.playbackType == DeviceInfo.PLAYBACK_TYPE_REMOTE
     /** True while a finger is on one of the picker's volume sliders; see `renderRows`. */
     private var outputVolumeDragging = false
+
+    /**
+     * Whether a sheet volume gesture is still in flight, momentum included.
+     *
+     * [outputVolumeDragging] goes false when the finger lifts, but the fling carries the bar on
+     * afterwards. Re-rendering a row or re-reading the level during that window snaps the slider
+     * back to where the finger left it - the same stall the player's own bar had.
+     */
+    private fun outputVolumeBusy(): Boolean =
+        outputVolumeDragging ||
+            outputPickerPhoneVolumeSlider?.isMomentumFlingOngoing == true ||
+            routeVolumeSliders.values.any { it.isMomentumFlingOngoing }
     private var outputPickerPhoneVolumeSlider: OverlaySlider? = null
+    private val routeVolumeSliders = mutableMapOf<String, OverlaySlider>()
     private var outputPickerOpening = false
     private var outputDeviceIcon: ImageView
     private var outputDeviceName: TextView
@@ -1013,6 +1027,10 @@ class FullPlayer @JvmOverloads constructor(
             var targets = if (finnectEnabled) JellyfinRemoteTargets.cachedAvailable() else emptyList()
             val sheet = PlayerSheet.create(context)
             outputPickerDialog = sheet
+            // The sheet is a dialog, so it owns the window while it is up and MainActivity's
+            // volume-key handling never runs: the keys fell through to the system, which moved the
+            // phone's stream instead of the receiver and drew its own overlay across this card.
+            sheet.setOnKeyListener { _, keyCode, event -> handleSheetVolumeKey(keyCode, event) }
             // Whatever was already counting down belongs to the screen behind this sheet.
             removeCallbacks(hideControlsRunnable)
             val root = LayoutInflater.from(context).inflate(
@@ -1100,7 +1118,6 @@ class FullPlayer @JvmOverloads constructor(
             }
             val rows = root.findViewById<LinearLayout>(R.id.output_picker_rows)
             val rowScroller = root.findViewById<View>(R.id.output_picker_scroll)
-            val routeVolumeSliders = mutableMapOf<String, OverlaySlider>()
             root.findViewById<View>(R.id.output_picker_more).setOnClickListener {
                 Haptics.press(it)
                 sheet.dismiss()
@@ -1133,7 +1150,7 @@ class FullPlayer @JvmOverloads constructor(
                 // Rebuilding replaces every row, and a finger on a volume slider is holding one of
                 // them. Route providers report a volume change as an ordinary route change too, so
                 // this is the backstop for the ones that do not use onRouteVolumeChanged.
-                if (outputVolumeDragging) return
+                if (outputVolumeBusy()) return
                 rowScroller.updateLayoutParams<LinearLayout.LayoutParams> {
                     height = LinearLayout.LayoutParams.WRAP_CONTENT
                 }
@@ -1375,7 +1392,7 @@ class FullPlayer @JvmOverloads constructor(
                     router: MediaRouter,
                     route: MediaRouter.RouteInfo,
                 ) {
-                    if (outputVolumeDragging) return
+                    if (outputVolumeBusy()) return
                     routeVolumeSliders[route.id]?.let { slider ->
                         slider.valueTo = route.volumeMax.coerceAtLeast(1).toFloat()
                         slider.value = route.volume.toFloat().coerceIn(0F, slider.valueTo)
@@ -1402,6 +1419,7 @@ class FullPlayer @JvmOverloads constructor(
                 if (outputPickerDialog === sheet) outputPickerDialog = null
                 outputPickerRefresh = null
                 outputPickerPhoneVolumeSlider = null
+                routeVolumeSliders.clear()
                 // Cleared above first: the scheduler checks whether this sheet is still showing.
                 scheduleControlsHide()
             }
@@ -1791,7 +1809,12 @@ class FullPlayer @JvmOverloads constructor(
     }
 
     private fun updateVolumeSlider(volume: Int? = null) {
-        if (isUserVolumeScrubbing) return
+        // The fling outlives the finger. onStopTracking - and so isUserVolumeScrubbing going false -
+        // fires the moment the touch ends, while the bar is still travelling, so a volume change
+        // arriving during that window animated the slider towards the real level and fought the
+        // fling: the bar stopped dead and then set off again, which is exactly what a fling looked
+        // like. The gesture is not over until the momentum is.
+        if (isUserVolumeScrubbing || volumeOverlaySlider.isMomentumFlingOngoing) return
         val maxVolume = resolveMaxDeviceVolume()
         if (maxVolume <= 0) return
 
@@ -2291,6 +2314,21 @@ class FullPlayer @JvmOverloads constructor(
         }
     }
 
+    /**
+     * Holds the screen on while the lyrics are up and something is playing.
+     *
+     * Lyrics are the one screen in this app people leave running and look back at, and the display
+     * timing out mid-song is the whole reason to be on it. Tied to playback rather than to the view
+     * alone, so a paused player left open on the lyrics does not hold the screen on indefinitely -
+     * the request is for the screen to survive a song, not for the phone to never sleep.
+     *
+     * `keepScreenOn` only applies while this window is visible, so backgrounding the app releases
+     * it without anything having to notice.
+     */
+    private fun updateLyricsKeepScreenOn() {
+        keepScreenOn = fadingEdgeLayout.visibility == VISIBLE && instance?.isPlaying == true
+    }
+
     private fun showLyrics() {
         fadingEdgeLayout.visibility = VISIBLE
         fadingEdgeLayout.alpha = 0F
@@ -2301,6 +2339,7 @@ class FullPlayer @JvmOverloads constructor(
             lyricsViewModel?.onViewCreated(fadingEdgeLayout)
         }
         refreshLyrics()
+        updateLyricsKeepScreenOn()
     }
 
     /**
@@ -2332,6 +2371,7 @@ class FullPlayer @JvmOverloads constructor(
 
     private fun hideLyrics() {
         fadingEdgeLayout.visibility = INVISIBLE
+        updateLyricsKeepScreenOn()
         fadingEdgeLayout.alpha = 0F
         fadingEdgeLayout.translationY = 0F
         fadingEdgeLayout.scaleX = 1F
@@ -3670,6 +3710,39 @@ class FullPlayer @JvmOverloads constructor(
      * `requestSetVolume` is the route-level call rather than the Cast session's, so it works the
      * same for a group and for one member of that group - a member is just another route.
      */
+    /**
+     * Volume keys while the output sheet is open.
+     *
+     * Mirrors what MainActivity does for the player behind it: whatever owns playback owns its own
+     * volume, so a receiver gets the keys while casting and the phone's stream gets them otherwise.
+     * The overlay is suppressed the same way - by not passing FLAG_SHOW_UI - because this card has
+     * a volume bar of its own and the system's panel lands on top of it.
+     */
+    private fun handleSheetVolumeKey(keyCode: Int, event: KeyEvent): Boolean {
+        val raise = when (keyCode) {
+            KeyEvent.KEYCODE_VOLUME_UP -> true
+            KeyEvent.KEYCODE_VOLUME_DOWN -> false
+            else -> return false
+        }
+        // The release is swallowed too, or the system acts on it and shows the panel anyway.
+        if (event.action != KeyEvent.ACTION_DOWN) return true
+        val controller = instance
+        val remote = controller != null &&
+            controller.deviceInfo.playbackType == DeviceInfo.PLAYBACK_TYPE_REMOTE &&
+            controller.isCommandAvailable(Player.COMMAND_ADJUST_DEVICE_VOLUME_WITH_FLAGS)
+        if (remote) {
+            if (raise) controller.increaseDeviceVolume(0) else controller.decreaseDeviceVolume(0)
+        } else {
+            audioManager?.adjustStreamVolume(
+                AudioManager.STREAM_MUSIC,
+                if (raise) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER,
+                0,
+            )
+            updatePhoneOutputSlider()
+        }
+        return true
+    }
+
     private fun bindRouteVolume(
         slider: OverlaySlider,
         route: MediaRouter.RouteInfo?,
@@ -3714,6 +3787,11 @@ class FullPlayer @JvmOverloads constructor(
                     slider.parent?.requestDisallowInterceptTouchEvent(false)
                     outputVolumeDragging = false
                 }
+
+                /** The fling outlives the finger; this is where its final value is committed. */
+                override fun onStopFlinging(slider: OverlaySlider, value: Float) {
+                    manager.setStreamVolume(AudioManager.STREAM_MUSIC, value.toInt(), 0)
+                }
             })
             return
         }
@@ -3751,6 +3829,11 @@ class FullPlayer @JvmOverloads constructor(
                 route.requestSetVolume(slider.value.toInt())
                 slider.parent?.requestDisallowInterceptTouchEvent(false)
                 outputVolumeDragging = false
+            }
+
+            /** The fling outlives the finger; this is where its final value is committed. */
+            override fun onStopFlinging(slider: OverlaySlider, value: Float) {
+                route.requestSetVolume(value.toInt())
             }
         })
     }
@@ -3837,7 +3920,7 @@ class FullPlayer @JvmOverloads constructor(
     }
 
     private fun updatePhoneOutputSlider() {
-        if (outputVolumeDragging) return
+        if (outputVolumeBusy()) return
         val slider = outputPickerPhoneVolumeSlider ?: return
         val manager = audioManager ?: return
         val maximum = manager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
@@ -5031,6 +5114,7 @@ class FullPlayer @JvmOverloads constructor(
         EmbeddedArtworkStore.fileFor(context, mediaId)
 
     override fun onIsPlayingChanged(isPlaying: Boolean) {
+        updateLyricsKeepScreenOn()
         onPlaybackStateChanged(instance?.playbackState ?: Player.STATE_IDLE)
     }
 
@@ -5322,6 +5406,7 @@ class FullPlayer @JvmOverloads constructor(
         removeCallbacks(hideControlsRunnable)
         lyricsRefreshJob?.cancel()
         lyricsRefreshJob = null
+        keepScreenOn = false
         cancelCoverLoad()
         cancelQualityFlash()
         qualityAvailableHint.animate().cancel()
