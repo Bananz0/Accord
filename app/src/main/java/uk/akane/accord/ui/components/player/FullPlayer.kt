@@ -1377,6 +1377,15 @@ class FullPlayer @JvmOverloads constructor(
                 }
 
                 override fun onRouteChanged(router: MediaRouter, route: MediaRouter.RouteInfo) {
+                    // A volume change arrives as an ordinary route change as well, and rebuilding
+                    // replaces the very row that is easing towards the new level - the fresh one is
+                    // assigned its value outright, so the bar arrives instantly. That is why a
+                    // rocker press stepped the sheet while the player's bar behind it glided.
+                    //
+                    // Only the rebuild is skipped. The level itself is already being applied, by
+                    // onRouteVolumeChanged or by the volume broadcast, and both of those re-target
+                    // the running animation rather than fighting it.
+                    if (sheetSliderAnimators.isNotEmpty()) return
                     renderRows()
                 }
 
