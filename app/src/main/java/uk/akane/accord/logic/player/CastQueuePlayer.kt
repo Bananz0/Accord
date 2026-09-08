@@ -655,20 +655,46 @@ class CastQueuePlayer(
         return Futures.immediateVoidFuture()
     }
 
+    /**
+     * Volume on the receiver, and why it is stepped here rather than by the remote player.
+     *
+     * `RemoteCastPlayer.increaseDeviceVolume` is `setDeviceVolume(getDeviceVolume() + 1)` against
+     * its own cached level, and `setDeviceVolume` returns silently when it has no `CastSession` and
+     * swallows a throwing `CastSession.setVolume` behind a warning of its own. So a key press that
+     * does nothing looks identical to one that worked, from here.
+     *
+     * Stepping from the level this player has already published removes the cache from the
+     * question - it is the number the slider and the notification are drawing - and leaves exactly
+     * one way to fail, which is logged.
+     */
+    private fun stepDeviceVolume(delta: Int, flags: Int): ListenableFuture<*> {
+        val maxVolume = (remote.deviceInfo.takeIf { it.maxVolume > 0 } ?: DEVICE_INFO).maxVolume
+        if (maxVolume <= 0) {
+            Log.w(TAG, "receiver reports no volume range; ignoring volume step")
+            return Futures.immediateVoidFuture()
+        }
+        val from = remote.deviceVolume
+        val target = (from + delta).coerceIn(0, maxVolume)
+        if (target == from) return Futures.immediateVoidFuture()
+        remote.setDeviceVolume(target, flags)
+        // Read back rather than assume. RemoteCastPlayer applies this to the CastSession and only
+        // then updates its own field, so a level that has not moved by the next state read is the
+        // signature of the silent drop above.
+        Log.d(TAG, "device volume $from -> $target (max $maxVolume), remote now ${remote.deviceVolume}")
+        return Futures.immediateVoidFuture()
+    }
+
     override fun handleSetDeviceVolume(deviceVolume: Int, flags: Int): ListenableFuture<*> {
         remote.setDeviceVolume(deviceVolume, flags)
+        Log.d(TAG, "device volume set to $deviceVolume, remote now ${remote.deviceVolume}")
         return Futures.immediateVoidFuture()
     }
 
-    override fun handleIncreaseDeviceVolume(flags: Int): ListenableFuture<*> {
-        remote.increaseDeviceVolume(flags)
-        return Futures.immediateVoidFuture()
-    }
+    override fun handleIncreaseDeviceVolume(flags: Int): ListenableFuture<*> =
+        stepDeviceVolume(1, flags)
 
-    override fun handleDecreaseDeviceVolume(flags: Int): ListenableFuture<*> {
-        remote.decreaseDeviceVolume(flags)
-        return Futures.immediateVoidFuture()
-    }
+    override fun handleDecreaseDeviceVolume(flags: Int): ListenableFuture<*> =
+        stepDeviceVolume(-1, flags)
 
     override fun handleSetDeviceMuted(muted: Boolean, flags: Int): ListenableFuture<*> {
         remote.setDeviceMuted(muted, flags)
